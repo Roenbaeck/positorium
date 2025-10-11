@@ -213,8 +213,6 @@ function highlightTraqula(src) {
 
 // Get DOM elements  
 const scriptEditor = document.getElementById('script');
-// Track whether the last key pressed inserted a newline so we can bump the caret by one char
-let justInsertedNewline = false;
 // Debounce timer for highlighting
 let highlightTimer = null;
 function scheduleHighlight(delay = 50) {
@@ -243,10 +241,6 @@ function updateHighlight() {
     preCaretRange.selectNodeContents(scriptEditor);
     preCaretRange.setEnd(range.startContainer, range.startOffset);
     startOffset = preCaretRange.toString().length;
-  }
-  // Reset the newline flag if it was set
-  if (justInsertedNewline) {
-    justInsertedNewline = false;
   }
   scriptEditor.innerHTML = highlightedCode;
   // Restore selection
@@ -306,7 +300,6 @@ scriptEditor.addEventListener('keydown', function(e) {
   // Handle plain Enter to prevent div/br insertion
   if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) {
     e.preventDefault();
-    justInsertedNewline = true;
     document.execCommand('insertLineBreak');
   }
   
@@ -333,16 +326,6 @@ scriptEditor.addEventListener('cut', function() {
   // Let the cut finish, then rehighlight
   setTimeout(() => scheduleHighlight(0), 0);
 });
-
-// Initialize highlighting
-setTimeout(() => {
-  updateHighlight();
-  setStatus('Editor loaded with syntax highlighting');
-  
-  // Initialize status view with welcome message
-  const initTime = new Date().toLocaleTimeString();
-  els.statusOut.textContent = `[${initTime}] Bareclad Query Console initialized\n[${initTime}] Editor loaded with syntax highlighting\n`;
-}, 100);
 
 // Save query on page unload
 window.addEventListener('beforeunload', () => {
