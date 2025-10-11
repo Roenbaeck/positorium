@@ -7,8 +7,7 @@
 <link rel="stylesheet" href="bareclad.css" />
 </head>
 <body>
-<!-- Prism.js for syntax highlighting (works with file:// protocol) -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.30.0/components/prism-core.min.js"></script>
+<!-- Inline regex-based syntax highlighting (no external deps) -->
 <header>
   <img class="svg" src="Traqula.svg"/>
   Bareclad Query Console
@@ -169,25 +168,62 @@ document.addEventListener('DOMContentLoaded', () => {
   window.addEventListener('resize', ()=>{ /* keep within bounds */ setEditorHeight(els.editorPane.getBoundingClientRect().height); });
 });
 
-// Define Traqula language for Prism.js
-Prism.languages.traqula = {
-  'comment': /\/\*[\s\S]*?\*\//,
-  'keyword': /\b(?:add|role|posit|search|return|where|and|limit|as|of)\b/i,
-  'constant': /@[A-Z]+/,
-  'time': /'[0-9:\-\s]+'/,
-  'string': /"(?:[^"\\]|\\.)*"/,
-  'number': /-?\d+(?:\.\d+)?%?/,
-  'variable-insert': /\+[a-zA-Z][a-zA-Z0-9_]*/,
-  'variable': /\b[a-zA-Z][a-zA-Z0-9_]*\b/,
-  'operator': /[+|<>=!]+/,
-  'wildcard': /\*/,
-  'punctuation': /[[\]{}(),;]/
-};
+// Lightweight Traqula tokenizer/highlighter
+const TRAQ_TOKENS = [
+  { name: 'comment', re: /\/\*[\s\S]*?\*\//y },
+  { name: 'string', re: /"(?:[^"\\]|\\.)*"/y },
+  { name: 'time', re: /'[0-9:\-\s]+'/y },
+  { name: 'variable-insert', re: /\+[A-Za-z][A-Za-z0-9_]*/y },
+  { name: 'keyword', re: /\b(?:add|role|posit|search|return|where|and|limit|as|of)\b/iy },
+  { name: 'constant', re: /@[A-Z]+/y },
+  { name: 'number', re: /-?\d+(?:\.\d+)?%?/y },
+  { name: 'wildcard', re: /\*/y },
+  { name: 'punctuation', re: /[\[\]{}(),;]/y },
+  { name: 'operator', re: /[+|<>=!]+/y },
+  { name: 'variable', re: /\b[a-zA-Z][a-zA-Z0-9_]*\b/y }
+];
+
+function highlightTraqula(src) {
+  let pos = 0;
+  const out = [];
+  const n = src.length;
+  while (pos < n) {
+    let matched = false;
+    for (let i = 0; i < TRAQ_TOKENS.length; i++) {
+      const { name, re } = TRAQ_TOKENS[i];
+      re.lastIndex = pos;
+      const m = re.exec(src);
+      if (m && m.index === pos) {
+        const text = m[0];
+        out.push('<span class="token ' + name + '">' + escapeHtml(text) + '</span>');
+        pos += text.length;
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) {
+      // Emit single character (includes whitespace)
+      const ch = src.charAt(pos);
+      out.push(escapeHtml(ch));
+      pos += 1;
+    }
+  }
+  return out.join('');
+}
 
 // Get DOM elements  
 const scriptEditor = document.getElementById('script');
 // Track whether the last key pressed inserted a newline so we can bump the caret by one char
 let justInsertedNewline = false;
+// Debounce timer for highlighting
+let highlightTimer = null;
+function scheduleHighlight(delay = 50) {
+  if (highlightTimer) clearTimeout(highlightTimer);
+  highlightTimer = setTimeout(() => {
+    highlightTimer = null;
+    updateHighlight();
+  }, delay);
+}
 
 // Function to update syntax highlighting
 function updateHighlight() {
@@ -197,7 +233,7 @@ function updateHighlight() {
   // Using textContent messes up whitespace
   // const code = scriptEditor.textContent;
   const code = scriptEditor.innerText;
-  const highlightedCode = Prism.highlight(code, Prism.languages.traqula, 'traqula');
+  const highlightedCode = highlightTraqula(code);
   // Save selection
   const selection = window.getSelection();
   const range = selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
@@ -208,10 +244,14 @@ function updateHighlight() {
     preCaretRange.setEnd(range.startContainer, range.startOffset);
     startOffset = preCaretRange.toString().length;
   }
-  // If the last action was pressing Enter, the DOM has gained a newline at the caret.
-  // Advance by one so the caret lands after the inserted newline when restored.
+  // If the last action was pressing Enter, only advance by one if the caret is
+  // currently positioned before a newline character in the plain text mapping.
+  // This prevents overshooting one character into the next line when the caret
+  // is already after the inserted newline.
   if (justInsertedNewline) {
-    startOffset += 1;
+    if (code.charAt(startOffset) === '\n') {
+      startOffset += 1;
+    }
     justInsertedNewline = false;
   }
   scriptEditor.innerHTML = highlightedCode;
@@ -256,6 +296,7 @@ const observer = new MutationObserver((mutationList) => {
   let structuralChange = false;
   
   for (const mutation of mutationList) {
+      /*
     if (mutation.type === 'childList') {
       structuralChange = true;
       // Check for <div><br></div> elements that cause double newlines
@@ -271,13 +312,13 @@ const observer = new MutationObserver((mutationList) => {
         }
       }
       needsHighlight = true;
-    } else if (mutation.type === 'characterData') {
+    } else */ if (mutation.type === 'characterData') {
       needsHighlight = true;
     }
   }
   
   if (needsHighlight) {
-    updateHighlight();
+    scheduleHighlight();
   }
 });
 observer.observe(scriptEditor, { childList: true, subtree: true, characterData: true });
