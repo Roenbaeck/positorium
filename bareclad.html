@@ -244,14 +244,8 @@ function updateHighlight() {
     preCaretRange.setEnd(range.startContainer, range.startOffset);
     startOffset = preCaretRange.toString().length;
   }
-  // If the last action was pressing Enter, only advance by one if the caret is
-  // currently positioned before a newline character in the plain text mapping.
-  // This prevents overshooting one character into the next line when the caret
-  // is already after the inserted newline.
+  // Reset the newline flag if it was set
   if (justInsertedNewline) {
-    if (code.charAt(startOffset) === '\n') {
-      startOffset += 1;
-    }
     justInsertedNewline = false;
   }
   scriptEditor.innerHTML = highlightedCode;
@@ -284,7 +278,7 @@ function updateHighlight() {
   }
   
   // Reconnect observer after updating
-  observer.observe(scriptEditor, { childList: true, subtree: true, characterData: true });
+  observer.observe(scriptEditor, { subtree: true, characterData: true });
   
   localStorage.setItem('bareclad-query', code);
 }
@@ -293,35 +287,17 @@ function updateHighlight() {
 // Use MutationObserver to detect and fix structural changes (like div/br) and trigger highlighting
 const observer = new MutationObserver((mutationList) => {
   let needsHighlight = false;
-  let structuralChange = false;
-  
   for (const mutation of mutationList) {
-      /*
-    if (mutation.type === 'childList') {
-      structuralChange = true;
-      // Check for <div><br></div> elements that cause double newlines
-      for (const node of mutation.addedNodes) {
-        if (node.nodeType === Node.ELEMENT_NODE && node.tagName === 'DIV') {
-          const children = Array.from(node.childNodes);
-          const hasOnlyBr = children.length === 1 && children[0].tagName === 'BR';
-          if (hasOnlyBr) {
-            // Replace <div><br></div> with just <br>
-            const br = document.createElement('br');
-            node.parentNode.replaceChild(br, node);
-          }
-        }
-      }
+    if (mutation.type === 'characterData') {
       needsHighlight = true;
-    } else */ if (mutation.type === 'characterData') {
-      needsHighlight = true;
+      break;
     }
   }
-  
   if (needsHighlight) {
     scheduleHighlight();
   }
 });
-observer.observe(scriptEditor, { childList: true, subtree: true, characterData: true });
+observer.observe(scriptEditor, { subtree: true, characterData: true });
 
 scriptEditor.addEventListener('keydown', function(e) {
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
@@ -330,8 +306,8 @@ scriptEditor.addEventListener('keydown', function(e) {
   // Handle plain Enter to prevent div/br insertion
   if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) {
     e.preventDefault();
-    document.execCommand('insertLineBreak');
     justInsertedNewline = true;
+    document.execCommand('insertLineBreak');
   }
   
   // Handle tab key for indentation
@@ -344,9 +320,18 @@ scriptEditor.addEventListener('keydown', function(e) {
 // Handle paste to insert plain text and prevent HTML formatting issues
 scriptEditor.addEventListener('paste', function(e) {
   e.preventDefault();
-  const text = e.clipboardData.getData('text/plain');
-  // Insert text directly without any HTML formatting
+  const raw = e.clipboardData.getData('text/plain');
+  // Normalize all line endings to LF to avoid double spacing (Windows CRLF -> LF)
+  const text = raw.replace(/\r\n?|\u2028|\u2029/g, '\n');
   document.execCommand('insertText', false, text);
+  // Rehighlight promptly after paste
+  scheduleHighlight(0);
+});
+
+// Also rehighlight after cuts that change structure
+scriptEditor.addEventListener('cut', function() {
+  // Let the cut finish, then rehighlight
+  setTimeout(() => scheduleHighlight(0), 0);
 });
 
 // Initialize highlighting
