@@ -1,0 +1,19 @@
+add role name;
+add posit +p [{(+i1, name)}, "Polygon", '2000'],
+          +p [{(+i2, name)}, "Square", '2004'],
+          +p [{(+i3, name)}, "Triangle", '2003'];
+
+/* should not match anything, since id is a recall and there is no previous insert into a variable id */
+/* maybe even throw an error here? */
+search [{(id, name)}, n, t]
+return id, n, t;
+
+/* should match two rows, since here id is an insert and the variable created */
+search [{(+id, name)}, +n, +t]
+where t < '2004'
+return id, n, t;
+
+/* should match same two rows, since id is a recall and the variable should hold the two identities */
+/* from the previous search */
+search [{(id, name)}, +n2, +t2]
+return id, n2, t2;

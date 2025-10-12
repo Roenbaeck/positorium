@@ -11,9 +11,9 @@ fn per_search_limits() {
     let engine = Engine::new(&db);
     engine.execute("add role name; add role h; add posit [{(+h1, h)}, 1, @NOW]; add posit [{(+h2, h)}, 2, @NOW]; add posit [{(+h3, h)}, 3, @NOW]; add posit [{(+a, name)}, \"Alice\", @NOW]; add posit [{(+b, name)}, \"Bob\", @NOW]; add posit [{(+c, name)}, \"Carol\", @NOW];");
     let script = r#"
-search +p [{(h, name)}, +n, +t]
+search +p [{(*, name)}, +n, +t]
 return
-    p, h, n, t
+    p, n, t
 limit 2;
 
 search [{(*, name)}, +n2, +t2]

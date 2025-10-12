@@ -1,13 +1,13 @@
 add role  wife, husband, name;
 
-add posit [{(+idw, wife), (+idh, husband)}, "married", '2004-06-19'], /* first married */
-          [{(idw, wife), (idh, husband)}, "divorced", '2020-12-04'], /* then divorced */
-          [{(idw, wife), (idh, husband)}, "married", '2024-03-17'], /* then remarried */
-          [{(idh, name)}, "Archie Bald", '1972-08-20'], /* husband's given name at birth */
-          [{(idh, name)}, "Archie Trix", '2004-09-21'], /* took wife's surname after marriage */
-          [{(idh, name)}, "Archie Bald", '2021-01-19'], /* reverted to birth name after divorce */
-          [{(idw, name)}, "Bella Trix", '1972-12-13'], /* wife's given name at birth */
-          [{(idw, name)}, "Bella Bald", '2024-05-29']; /* took husband's surname after remarrying him */
+add posit [{(+wife_id, wife), (+husband_id, husband)}, "married", '2004-06-19'], /* first married */
+          [{(wife_id, wife), (husband_id, husband)}, "divorced", '2020-12-04'], /* then divorced */
+          [{(wife_id, wife), (husband_id, husband)}, "married", '2024-03-17'], /* then remarried */
+          [{(husband_id, name)}, "Archie Bald", '1972-08-20'], /* husband's given name at birth */
+          [{(husband_id, name)}, "Archie Trix", '2004-09-21'], /* took wife's surname after marriage */
+          [{(husband_id, name)}, "Archie Bald", '2021-01-19'], /* reverted to birth name after divorce */
+          [{(wife_id, name)}, "Bella Trix", '1972-12-13'], /* wife's given name at birth */
+          [{(wife_id, name)}, "Bella Bald", '2024-05-29']; /* took husband's surname after remarrying him */
 
 /* sanity check, give me all names stored for divorced couples (at any point in time) */
 search    [{(+w, wife), (+h, husband)}, "divorced", *], 

@@ -1,0 +1,12 @@
+add role name, sides;
+add posit +p [{(+i1, name)}, "Polygon", '2000'],
+          +p [{(+i2, name)}, "Square", '2004'],
+          +p [{(+i2, sides)}, 4, '2024'],
+          +p [{(+i3, name)}, "Triangle", '2003'],
+          +p [{(+i3, sides)}, 3, '2023'];
+
+/* should match one row */
+search [{(+id, name)}, +n, +tn],
+       [{(id, sides)}, +s, +ts],
+where tn < '2004'
+return id, n, tn, s, ts;

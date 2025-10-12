@@ -973,6 +973,8 @@ impl<'en> Engine<'en> {
         let mut variable_kinds: HashMap<String, VarKind> = HashMap::new();
         // Track whether any clause in this search failed (no candidates after constraints)
         let mut any_clause_failed: bool = false;
+        // Track identity variables inserted (+var) in earlier patterns of this search (for recall readiness checks)
+        let seen_inserted_id_vars: std::collections::HashSet<String> = std::collections::HashSet::new();
         // (LIMIT handled externally by a wrapping sink)
         for clause in command.into_inner() {
             match clause.as_rule() {
@@ -1002,6 +1004,8 @@ impl<'en> Engine<'en> {
                                 // Track optional per-clause 'as of' time
                                 let mut _as_of_time: Option<Time> = None;
                                 let mut _as_of_var: Option<String> = None;
+                                // Track identity variables inserted in this pattern (to expose recall-ready after the pattern completes)
+                                let mut inserted_id_vars_this_pattern: Vec<String> = Vec::new();
                                 for component in structure.into_inner() {
                                     match component.as_rule() {
                                         Rule::insert => {
@@ -1037,6 +1041,7 @@ impl<'en> Engine<'en> {
                                                                 .as_str();
                                                             local_variables.push(local_variable);
                                                             local_variable_unions.push(None);
+                                                            inserted_id_vars_this_pattern.push(local_variable.to_string());
                                                             match variables
                                                                 .entry(local_variable.to_string())
                                                             {
@@ -1448,6 +1453,21 @@ impl<'en> Engine<'en> {
                                             }
                                         }
                                         // (as-of moved to after local identity constraints)
+                                        // Pre-check: error on unbound recall identity variables (non-union). Unions are optional filters.
+                                        if !local_variables.is_empty() {
+                                            for (i, token) in local_variables.iter().enumerate() {
+                                                if *token == "*" { continue; }
+                                                if local_variable_unions.get(i).and_then(|u| u.as_ref()).is_some() { continue; }
+                                                let is_insert = token.starts_with('+');
+                                                if !is_insert {
+                                                    let key = *token; // recall name as-is
+                                                    if !(variables.contains_key(key) || seen_inserted_id_vars.contains(key)) {
+                                                        *exec_error = Some(crate::error::BarecladError::Execution(format!("Variable '{}' is used as a recall but is not bound in a prior command", key)));
+                                                        return;
+                                                    }
+                                                }
+                                            }
+                                        }
                                         // Apply local identity variable constraints to filter candidates (e.g., (w, name) restricts to bound wife)
                                         if !local_variables.is_empty() && !cands.is_empty() {
                                             let lk = self
@@ -1558,93 +1578,8 @@ impl<'en> Engine<'en> {
                                                 }
                                             }
                                         }
-                                        // Bind local variables from appearance roles (e.g., +w with role "wife")
-                                        if !local_variables.is_empty() {
-                                            for id in cands.iter() {
-                                                let appset: Arc<crate::construct::AppearanceSet> = {
-                                                    let lk = self
-                                                        .database
-                                                        .posit_thing_to_appearance_set_lookup();
-                                                    let guard = lk.lock().unwrap();
-                                                    Arc::clone(guard.get(&id).unwrap())
-                                                };
-                                                for (i, token) in local_variables.iter().enumerate()
-                                                {
-                                                    if *token == "*" {
-                                                        continue;
-                                                    }
-                                                    let vname =
-                                                        token.strip_prefix('+').unwrap_or(token);
-                                                    let role_name = roles[i];
-                                                    if let Some(bound) = appset
-                                                        .appearances()
-                                                        .iter()
-                                                        .find(|a| a.role().name() == role_name)
-                                                        .map(|a| a.thing())
-                                                    {
-                                                        // recall variables intersect as join filters; inserts also intersect
-                                                        if let Some(Some(union_names)) =
-                                                            local_variable_unions.get(i)
-                                                        {
-                                                            for member in union_names {
-                                                                let key = member.to_string();
-                                                                match variables.entry(key.clone()) {
-                                                                    Entry::Vacant(entry) => {
-                                                                        let mut rs =
-                                                                            ResultSet::new();
-                                                                        rs.insert(bound);
-                                                                        entry.insert(rs);
-                                                                    }
-                                                                    Entry::Occupied(mut entry) => {
-                                                                        let rs = entry.get_mut();
-                                                                        if rs.mode
-                                                                            == ResultSetMode::Empty
-                                                                        {
-                                                                            rs.insert(bound);
-                                                                        } else {
-                                                                            let mut narrowed =
-                                                                                ResultSet::new();
-                                                                            narrowed.insert(bound);
-                                                                            rs.intersect_with(
-                                                                                &narrowed,
-                                                                            );
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                        } else {
-                                                            let key = vname.to_string();
-                                                            match variables.entry(key.clone()) {
-                                                                Entry::Vacant(entry) => {
-                                                                    // Bind when not present (insert or recall)
-                                                                    let mut rs = ResultSet::new();
-                                                                    rs.insert(bound);
-                                                                    entry.insert(rs);
-                                                                }
-                                                                Entry::Occupied(mut entry) => {
-                                                                    let rs = entry.get_mut();
-                                                                    if rs.mode
-                                                                        == ResultSetMode::Empty
-                                                                    {
-                                                                        // Bind empty recall var
-                                                                        rs.insert(bound);
-                                                                    } else {
-                                                                        // Intersect existing with this bound only for inserted variables
-                                                                        let mut narrowed =
-                                                                            ResultSet::new();
-                                                                        narrowed.insert(bound);
-                                                                        rs.intersect_with(
-                                                                            &narrowed,
-                                                                        );
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            // All identity variables are handled generically; no role-specific special-cases here.
-                                        }
+                                        // Do not bind identity variables into the global `variables` map here.
+                                        // Identity compatibility between patterns is enforced during binding enumeration/merge below.
                                         // No role-specific special-case filters; recall variables act as join filters generically.
                                         // ---------------- Binding enumeration (multiplicity preservation) ----------------
                                         if !cands.is_empty() {
@@ -1676,42 +1611,21 @@ impl<'en> Engine<'en> {
                                                             .find(|a| a.role().name() == role_name)
                                                             .map(|a| a.thing())
                                                         {
-                                                            if let Some(Some(union_names)) =
-                                                                local_variable_unions.get(i)
-                                                            {
-                                                                // For a union, branch the maps: each union member may independently match this thing.
-                                                                let mut branched: Vec<
-                                                                    HashMap<String, Thing>,
-                                                                > = Vec::with_capacity(
-                                                                    pending_maps.len()
-                                                                        * union_names.len(),
-                                                                );
+                                                            if let Some(Some(union_names)) = local_variable_unions.get(i) {
+                                                                // For unions, branch for each member; identity compatibility will filter later.
+                                                                let mut branched: Vec<HashMap<String, Thing>> = Vec::with_capacity(pending_maps.len() * union_names.len());
                                                                 for uname in union_names.iter() {
-                                                                    for existing in
-                                                                        pending_maps.iter()
-                                                                    {
-                                                                        let mut cloned =
-                                                                            existing.clone();
-                                                                        cloned.insert(
-                                                                            uname.clone(),
-                                                                            thing,
-                                                                        );
+                                                                    for existing in pending_maps.iter() {
+                                                                        let mut cloned = existing.clone();
+                                                                        cloned.insert(uname.clone(), thing);
                                                                         branched.push(cloned);
                                                                     }
                                                                 }
                                                                 pending_maps = branched;
                                                             } else {
-                                                                // Skip synthetic union token like "w|h"; only insert real variable names
-                                                                if token.contains('|') {
-                                                                    continue;
-                                                                }
-                                                                let vname = token
-                                                                    .strip_prefix('+')
-                                                                    .unwrap_or(token)
-                                                                    .to_string();
-                                                                for m in pending_maps.iter_mut() {
-                                                                    m.insert(vname.clone(), thing);
-                                                                }
+                                                                if token.contains('|') { continue; }
+                                                                let vname = token.strip_prefix('+').unwrap_or(token).to_string();
+                                                                for m in pending_maps.iter_mut() { m.insert(vname.clone(), thing); }
                                                             }
                                                         }
                                                     }
@@ -1794,13 +1708,8 @@ impl<'en> Engine<'en> {
                                                         // Identity compatibility
                                                         let mut ok = true;
                                                         for (k, v) in id_map.iter() {
-                                                            if let Some(prev) =
-                                                                existing.identities.get(k)
-                                                            {
-                                                                if prev != v {
-                                                                    ok = false;
-                                                                    break;
-                                                                }
+                                                            if let Some(prev) = existing.identities.get(k) {
+                                                                if prev != v { ok = false; break; }
                                                             }
                                                         }
                                                         if !ok {
@@ -2374,6 +2283,8 @@ impl<'en> Engine<'en> {
     /// This provides the foundation for a multi-result JSON protocol.
     pub fn execute_collect_multi(&self, traqula: &str) -> Result<Vec<CollectedResultSet>, crate::error::BarecladError> {
         let mut variables: Variables = Variables::default();
+        // Track long-lived identity variables introduced via add posit (+var in insert positions)
+        let mut stable_vars: std::collections::HashSet<String> = std::collections::HashSet::new();
         // Parse once
         let parse_result = TraqulaParser::parse(Rule::traqula, traqula.trim());
         let traqula = match parse_result {
@@ -2391,10 +2302,19 @@ impl<'en> Engine<'en> {
             }
         };
         let mut results: Vec<CollectedResultSet> = Vec::new();
+        // Variables to preserve across searches: from add_posit and from the last completed search
+        let mut preserve_vars: std::collections::HashSet<String> = std::collections::HashSet::new();
         for command in traqula {
             match command.as_rule() {
                 Rule::add_role => self.add_role(command),
-                Rule::add_posit => self.add_posit(command, &mut variables),
+                Rule::add_posit => {
+                    // Detect variables created by this add_posit (new insert variables)
+                    let before: std::collections::HashSet<String> = variables.keys().cloned().collect();
+                    self.add_posit(command, &mut variables);
+                    for k in variables.keys() {
+                        if !before.contains(k) { stable_vars.insert(k.clone()); preserve_vars.insert(k.clone()); }
+                    }
+                }
                 Rule::search => {
                     struct LocalSink { rows: Vec<Vec<String>>, types: Vec<Vec<String>>, limit: Option<usize>, limited: bool }
                     impl RowSink for LocalSink { fn push(&mut self, row: Vec<String>, types: Vec<String>) -> SinkFlow { if let Some(l)=self.limit { if self.rows.len() >= l { self.limited=true; return SinkFlow::Stop; }} self.rows.push(row); self.types.push(types); if let Some(l)=self.limit { if self.rows.len() >= l { self.limited=true; return SinkFlow::Stop; }} SinkFlow::Continue } }
@@ -2403,15 +2323,22 @@ impl<'en> Engine<'en> {
                     let raw_search_string = command.as_str().trim().to_string();
                     sink.limit = { let mut l=None; let cloned=command.clone(); for c in cloned.into_inner(){ if c.as_rule()==Rule::limit_clause { for p in c.into_inner(){ if let Ok(v)=p.as_str().parse::<usize>() { l=Some(v);} } } } l };
                     let mut local_return_columns: Option<Vec<String>> = None;
+                    // Track baseline variable states to identify variables introduced by this search
+                    let baseline_keys: std::collections::HashSet<String> = variables.keys().cloned().collect();
+                    let baseline_empty: std::collections::HashSet<String> = variables.iter().filter_map(|(k,v)| if v.mode==ResultSetMode::Empty { Some(k.clone()) } else { None }).collect();
                     let mut err=None; self.search(command, &mut variables, &mut sink, &mut local_return_columns, &mut err); if let Some(e)=err { return Err(e); }
                     let cols = local_return_columns.unwrap_or_default();
                     let row_count = sink.rows.len();
                     let limited = sink.limited;
                     results.push(CollectedResultSet { columns: cols, rows: sink.rows, row_types: sink.types, row_count, limited, search: Some(raw_search_string) });
-                    // Clear transient bindings between searches to allow independent reuse.
-                    // Preserve only stable ids created via add posit pattern variables (idw, idh).
-                    let preserve: std::collections::HashSet<&str> = ["idw","idh"].into_iter().collect();
-                    variables.retain(|k,_| preserve.contains(k.as_str()));
+                    // Update preserved variables with those that became non-empty during this search
+                    for (k, v) in variables.iter() {
+                        if !baseline_keys.contains(k) || (baseline_empty.contains(k) && v.mode != ResultSetMode::Empty) {
+                            preserve_vars.insert(k.clone());
+                        }
+                    }
+                    // Clear transient bindings; retain only preserved (+add_posit and newly introduced in this search)
+                    variables.retain(|k,_| preserve_vars.contains(k));
                 }
                 Rule::EOI => (),
                 _ => (),
@@ -2424,6 +2351,10 @@ impl<'en> Engine<'en> {
     /// Maintains standard variable scoping semantics across searches.
     pub fn execute_stream_multi<C: MultiStreamCallbacks>(&self, traqula: &str, callbacks: &mut C) -> Result<(), crate::error::BarecladError> {
         let mut variables: Variables = Variables::default();
+        // Track long-lived identity variables introduced via add posit (+var in insert positions)
+        let mut stable_vars: std::collections::HashSet<String> = std::collections::HashSet::new();
+        // Also preserve variables introduced/bound during the most recent search
+        let mut preserve_vars: std::collections::HashSet<String> = std::collections::HashSet::new();
         let parse_result = TraqulaParser::parse(Rule::traqula, traqula.trim());
         let pairs = match parse_result {
             Ok(p) => p,
@@ -2442,7 +2373,14 @@ impl<'en> Engine<'en> {
         let mut set_index = 0usize;
         for command in pairs { match command.as_rule() {
             Rule::add_role => self.add_role(command),
-            Rule::add_posit => self.add_posit(command, &mut variables),
+            Rule::add_posit => {
+                // Detect variables created by this add_posit (new insert variables)
+                let before: std::collections::HashSet<String> = variables.keys().cloned().collect();
+                self.add_posit(command, &mut variables);
+                for k in variables.keys() {
+                    if !before.contains(k) { stable_vars.insert(k.clone()); preserve_vars.insert(k.clone()); }
+                }
+            },
             Rule::search => {
                 // Extract limit for this search
                 let search_text_full = command.as_str().trim().to_string();
@@ -2466,6 +2404,9 @@ impl<'en> Engine<'en> {
                 }
                 let mut sink = CountingSetSink { inner: SetSink { cb: callbacks, idx: set_index, started:false, search_text: &search_text_full }, limit, count:0, limited:false };
                 let mut return_columns: Option<Vec<String>> = None; // ignored here beyond meta
+                // Track baseline variable states before search
+                let baseline_keys: std::collections::HashSet<String> = variables.keys().cloned().collect();
+                let baseline_empty: std::collections::HashSet<String> = variables.iter().filter_map(|(k,v)| if v.mode==ResultSetMode::Empty { Some(k.clone()) } else { None }).collect();
                 let mut err=None;
                 self.search(command, &mut variables, &mut sink, &mut return_columns, &mut err);
                 if let Some(e)=err { return Err(e); }
@@ -2473,13 +2414,13 @@ impl<'en> Engine<'en> {
                 callbacks.on_result_set_end(set_index, finished_count, limited_flag);
                 // Mirror collect_multi semantics: clear transient identity/value/time bindings between searches
                 // to avoid unintended intersection constraints leaking across independent searches.
-                // Preserve only long-lived identity variables that originate from add posit patterns (idw, idh).
-                // Note: within a single search, Empty bindings are treated as effectively unbound for constraint checks.
-                {
-                    use std::collections::HashSet;
-                    let preserve: HashSet<&str> = ["idw","idh"].into_iter().collect();
-                    variables.retain(|k,_| preserve.contains(k.as_str()));
+                // Preserve variables introduced by add posit as well as those newly bound during this search.
+                for (k, v) in variables.iter() {
+                    if !baseline_keys.contains(k) || (baseline_empty.contains(k) && v.mode != ResultSetMode::Empty) {
+                        preserve_vars.insert(k.clone());
+                    }
                 }
+                variables.retain(|k,_| preserve_vars.contains(k));
                 set_index +=1;
             }
             Rule::EOI => (),
