@@ -153,7 +153,7 @@ impl ResultSet {
             ResultSetMode::Multi => {
                 if bitmap.is_empty() { return; }
                 let multi = self.multi.as_mut().unwrap();
-                for t in bitmap.iter() { multi.insert(t); }
+                *multi |= bitmap;
             }
         }
     }
@@ -922,7 +922,7 @@ impl<'en> Engine<'en> {
         // Track variables referenced in this search command to guide projection
         let mut active_vars: std::collections::HashSet<String> = std::collections::HashSet::new();
         // Track candidate posits per bound time variable name (e.g., t, tw, birth_t)
-        let mut time_var_candidates: HashMap<String, RoaringTreemap> = HashMap::new();
+    // time_var_candidates removed: time variable constraints are enforced during binding/projection without cloning candidate bitmaps per variable.
     // value_var_candidates removed (late pruning only during filtering stage)
         // Parsed where conditions on time variables: var -> (comparator, Time)
         let mut where_time: Vec<(String, String, Time)> = Vec::new();
@@ -1274,26 +1274,24 @@ impl<'en> Engine<'en> {
                                 // Minimal evaluation: compute candidates by role intersection and bind variables
                                 if !roles.is_empty() {
                                     info!(target:"bareclad::stream", event="pattern_start", pattern_index=diag_pattern_id, roles=?roles, local_vars=?local_variables, unions=?local_variable_unions.iter().map(|u| u.as_ref().map(|v| v.join("|"))).collect::<Vec<_>>(), as_of_literal=%_as_of_time.as_ref().map(|t|format!("{}",t)).unwrap_or_default());
-                                    // Intersect role bitmaps
+                                    // Intersect role bitmaps starting from the smallest posting list
+                                    let rk = self.database.role_keeper();
+                                    let rk_guard = rk.lock().unwrap();
+                                    let role_things: Vec<_> = roles.iter().map(|rn| rk_guard.get(rn).role()).collect();
+                                    let lk = self.database.role_to_posit_thing_lookup();
+                                    let lk_guard = lk.lock().unwrap();
+                                    let mut order: Vec<usize> = (0..role_things.len()).collect();
+                                    order.sort_unstable_by_key(|i| lk_guard.lookup(&role_things[*i]).len());
                                     let mut candidates: Option<RoaringTreemap> = None;
-                                    for role_name in &roles {
-                                        let role_thing = {
-                                            let rk = self.database.role_keeper();
-                                            let rk_guard = rk.lock().unwrap();
-                                            rk_guard.get(role_name).role()
-                                        };
-                                        let bm_clone = {
-                                            let lk = self.database.role_to_posit_thing_lookup();
-                                            let guard = lk.lock().unwrap();
-                                            guard.lookup(&role_thing).clone()
-                                        };
-                                        candidates = Some(match candidates {
-                                            None => bm_clone,
-                                            Some(mut acc) => {
-                                                acc &= &bm_clone;
-                                                acc
-                                            }
-                                        });
+                                    for (pos, idx) in order.into_iter().enumerate() {
+                                        let bm_ref = lk_guard.lookup(&role_things[idx]);
+                                        if pos == 0 {
+                                            if bm_ref.is_empty() { candidates = Some(RoaringTreemap::new()); break; }
+                                            candidates = Some(bm_ref.clone());
+                                        } else if let Some(ref mut acc) = candidates {
+                                            if acc.is_empty() { break; }
+                                            *acc &= bm_ref;
+                                        }
                                     }
                                     if let Some(cands_initial) = candidates {
                                         info!(target:"bareclad::stream", event="candidates_initial", count=cands_initial.len(), roles=?roles, time_literal=%_time.as_ref().map(|t|format!("{}",t)).unwrap_or_default(), as_of_literal=%_as_of_time.as_ref().map(|t|format!("{}",t)).unwrap_or_default());
@@ -1557,12 +1555,8 @@ impl<'en> Engine<'en> {
                                         // (legacy single-role candidate capture removed)
                                         // If the appearing value used a variable (e.g., +n or n), capture its candidates
                                         if let Some(vname) = _value_as_variable { active_vars.insert(vname.to_string()); }
-                                        // If the time slot used a variable, capture its candidate posits under that variable name
-                                        if let Some(varname) = _time_as_variable {
-                                            time_var_candidates
-                                                .insert(varname.to_string(), cands.clone());
-                                            active_vars.insert(varname.to_string());
-                                        }
+                                        // If the time slot used a variable, just mark it active; per-binding time resolution happens later
+                                        if let Some(varname) = _time_as_variable { active_vars.insert(varname.to_string()); }
                                         // Bind outer posit variable (e.g., +p)
                                         if let Some(var) = &variable {
                                             let name = var.strip_prefix('+').unwrap_or(var);
