@@ -40,9 +40,10 @@ jsondata = "0.8.1"
 # so regular expressions don't have to be recompiled 
 lazy_static = "1.5"
 # cryptographic hashing for tamper-evident ledger (fast and secure)
-blake3 = "1"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+blake3 = "1.8.2"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.20", features = ["fmt", "env-filter"] }
+
 
 # ---- THESE MAY BE USED LATER -----
 #jql = "3.0.4"
