@@ -7,15 +7,15 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug executable 'bareclad'",
+            "name": "Debug executable 'positorium'",
             "cargo": {
                 "args": [
                     "build",
-                    "--bin=bareclad",
-                    "--package=bareclad"
+                    "--bin=positorium",
+                    "--package=positorium"
                 ],
                 "filter": {
-                    "name": "bareclad",
+                    "name": "positorium",
                     "kind": "bin"
                 }
             },
@@ -25,16 +25,16 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug unit tests in executable 'bareclad'",
+            "name": "Debug unit tests in executable 'positorium'",
             "cargo": {
                 "args": [
                     "test",
                     "--no-run",
-                    "--bin=bareclad",
-                    "--package=bareclad"
+                    "--bin=positorium",
+                    "--package=positorium"
                 ],
                 "filter": {
-                    "name": "bareclad",
+                    "name": "positorium",
                     "kind": "bin"
                 }
             },

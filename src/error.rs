@@ -2,7 +2,7 @@
 use thiserror::Error;
 
 #[derive(Error, Debug)]
-pub enum BarecladError {
+pub enum DatabaseError {
     #[error("Config error: {0}")] 
     Config(String),
     #[error("Persistence error: {0}")] 
@@ -19,9 +19,9 @@ pub enum BarecladError {
     Lock(String),
 }
 
-pub type Result<T> = std::result::Result<T, BarecladError>;
+pub type Result<T> = std::result::Result<T, DatabaseError>;
 
 // Helper conversions
-impl From<rusqlite::Error> for BarecladError {
+impl From<rusqlite::Error> for DatabaseError {
     fn from(e: rusqlite::Error) -> Self { Self::Persistence(e.to_string()) }
 }

@@ -1,7 +1,7 @@
-<img src="https://raw.githubusercontent.com/Roenbaeck/bareclad/master/Traqula.svg" alt="Traqula Language Reference" width="200">
+<img src="./Traqula.svg" alt="Traqula Language Reference" width="200">
 <p/>
 
-Welcome to the Traqula Study Guide! This guide is designed to be self-contained—no external files required. It will help you learn Traqula, Bareclad's domain-specific language for managing and querying transitional data. We'll start with the basics and build up to advanced concepts, using plenty of working examples. By the end, you'll be able to write your own Traqula scripts.
+Welcome to the Traqula Study Guide! This guide is designed to be self-contained—no external files required. It will help you learn Traqula, Positorium's domain-specific language for managing and querying transitional data. We'll start with the basics and build up to advanced concepts, using plenty of working examples. By the end, you'll be able to write your own Traqula scripts.
 
 ---
 
@@ -49,7 +49,7 @@ Posits don't replace old data; they add layers. If Alice changes her name, you a
 
 ## Lesson 2: Getting Started – Running Traqula Scripts
 
-To follow along, start the Bareclad server (see README.md). Use the web console at `http://localhost:8080` or send scripts via API.
+To follow along, start the Positorium server (see README.md). Use the web console at `http://localhost:8080` or send scripts via API.
 
 Scripts are sequences of commands separated by semicolons. Variables persist across commands.
 

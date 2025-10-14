@@ -1,4 +1,4 @@
-//! Core construct definitions for the Bareclad database engine.
+//! Core construct definitions for the Positorium database engine.
 //!
 //! This module defines the fundamental building blocks used throughout the
 //! engine. Most types follow a "keeper" pattern: keepers own canonical
@@ -18,8 +18,8 @@
 //! Create a role, a thing, an appearance, an appearance set and finally a
 //! posit with a string value and time.
 //! ```
-//! use bareclad::construct::{Database, PersistenceMode};
-//! use bareclad::datatype::Time;
+//! use positorium::construct::{Database, PersistenceMode};
+//! use positorium::datatype::Time;
 //! // Pure in-memory (no SQLite persistence)
 //! let db = Database::new(PersistenceMode::InMemory).unwrap();
 //! let (role, _) = db.create_role("person".to_string(), false);
@@ -33,7 +33,7 @@
 use crate::datatype::{DataType, Time};
 use crate::persist::Persistor;
 use tracing::{warn};
-use crate::error::BarecladError;
+use crate::error::DatabaseError;
 use bimap::BiMap;
 use core::hash::{BuildHasher, BuildHasherDefault, Hasher};
 use roaring::RoaringTreemap;
@@ -559,7 +559,7 @@ pub struct Database {
 }
 
 impl Database {
-    pub fn new(mode: PersistenceMode) -> Result<Database, BarecladError> {
+    pub fn new(mode: PersistenceMode) -> Result<Database, DatabaseError> {
         let persistor = match mode {
             PersistenceMode::InMemory => Persistor::new_no_persistence(),
             PersistenceMode::File(path) => Persistor::new_from_file(&path)?,

@@ -1,7 +1,7 @@
-# Bareclad AI Coding Guidelines
+# Positorium AI Coding Guidelines
 
 ## Architecture Overview
-Bareclad is a database engine implementing Transitional Modeling concepts for handling conflicting, unreliable, and varying information over time. The core data model consists of:
+Positorium is a database engine implementing Transitional Modeling concepts for handling conflicting, unreliable, and varying information over time. The core data model consists of:
 
 - Thing: opaque u64 identity
 - Role: named semantic placeholder (e.g., "wife", "name")
@@ -19,16 +19,16 @@ All constructs follow a keeper pattern for canonical storage and deduplication u
 - `traqula.rs`: Pest-based parser and execution engine for the Traqula DSL.
 - `traqula.pest`: Grammar definition for the query language.
 - `interface.rs`: Minimal thread-per-query interface with cooperative cancellation and optional streaming of results.
-- `error.rs`: Domain-specific error types (`BarecladError`) and conversions.
+- `error.rs`: Domain-specific error types (`PositoriumError`) and conversions.
 - `server.rs`: HTTP server implementation using Axum for REST API and web console.
 - `benches/benchmark.rs`: Criterion-based performance benchmarks.
 - `traqula-vscode/`: Syntax highlighting extension for Traqula (keep grammar in sync with `traqula.pest`).
-- `bareclad.html` & `bareclad.css`: Web-based query console for interactive Traqula execution.
+- `positorium.html` & `positorium.css`: Web-based query console for interactive Traqula execution.
 
 ## Development Workflow
 - Build: use `cargo build` (Rust edition 2024).
-- Run: prefer `cargo run` (binary reads `bareclad.json` and starts an HTTP server on the configured interface and port, serving the web console and REST API).
-- Config (`bareclad.json`):
+- Run: prefer `cargo run` (binary reads `positorium.json` and starts an HTTP server on the configured interface and port, serving the web console and REST API).
+- Config (`positorium.json`):
 	- `database_file_and_path`: SQLite file path (or create if missing).
 	- `enable_persistence`: `true|false` to enable/disable file-based persistence at runtime. When false, no writes occur.
 	- `recreate_database_on_startup`: `true|false` to remove the DB file at startup.
@@ -87,7 +87,7 @@ When adding a new `DataType` implementation:
 	- Engine cancellation is coarse (between commands); long-running commands may not be interruptible yet.
 
 ## Error Handling
-Domain-specific error types (`BarecladError`) are defined in `error.rs` with variants for config, persistence, data corruption, parse, execution, invariant, and lock errors. Conversions from `rusqlite::Error` and others are provided. Use `anyhow` for custom error handling in new code where appropriate.
+Domain-specific error types (`PositoriumError`) are defined in `error.rs` with variants for config, persistence, data corruption, parse, execution, invariant, and lock errors. Conversions from `rusqlite::Error` and others are provided. Use `anyhow` for custom error handling in new code where appropriate.
 
 ## Testing and Benchmarks
 - Doctests exist in several modules (run with `cargo test`).

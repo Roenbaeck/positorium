@@ -1,5 +1,5 @@
-use bareclad::construct::{Database, PersistenceMode};
-use bareclad::traqula::Engine;
+use positorium::construct::{Database, PersistenceMode};
+use positorium::traqula::Engine;
 
 // Regression: reusing +w,+h across searches should preserve bindings (proper intersection),
 // not toggle them away. Second search must still yield rows.

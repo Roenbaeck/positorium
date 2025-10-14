@@ -171,36 +171,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bareclad"
-version = "0.1.4"
-dependencies = [
- "axum",
- "bigdecimal",
- "bimap",
- "blake3",
- "chrono",
- "config",
- "criterion",
- "futures-util",
- "jsondata",
- "lazy_static",
- "pest",
- "pest_derive",
- "regex",
- "roaring",
- "rusqlite",
- "seahash",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
- "tokio-stream",
- "tower-http",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "base64"
 version = "0.21.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1198,6 +1168,36 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51bae2ac328883f7acdfea3d66a7c35751187f870bc81f94563733a154d7a670"
 dependencies = [
  "plotters-backend",
+]
+
+[[package]]
+name = "positorium"
+version = "0.1.4"
+dependencies = [
+ "axum",
+ "bigdecimal",
+ "bimap",
+ "blake3",
+ "chrono",
+ "config",
+ "criterion",
+ "futures-util",
+ "jsondata",
+ "lazy_static",
+ "pest",
+ "pest_derive",
+ "regex",
+ "roaring",
+ "rusqlite",
+ "seahash",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-stream",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

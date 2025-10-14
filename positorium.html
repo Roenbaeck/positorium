@@ -2,15 +2,15 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Bareclad Query Console</title>
+<title>Positorium Query Console</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="stylesheet" href="bareclad.css" />
+<link rel="stylesheet" href="positorium.css" />
 </head>
 <body>
 <!-- Inline regex-based syntax highlighting (no external deps) -->
 <header>
   <img class="svg" src="Traqula.svg"/>
-  Bareclad Query Console
+  Positorium Query Console
 </header>
 <main>
   <div id="splitContainer">
@@ -59,7 +59,7 @@
   </div>
 </main>
 <footer>
-  <span>Bareclad local console (dev)</span>
+  <span>Positorium local console (dev)</span>
   <span>Drag splitter to resize editor/results • Tabs to switch view • Status tab shows logs</span>
 </footer>
 <script>
@@ -92,7 +92,7 @@ const els = {
 // Event listeners for hover highlighting on dropdown
 document.addEventListener('DOMContentLoaded', () => {
   // Load saved query from localStorage
-  const savedQuery = localStorage.getItem('bareclad-query');
+  const savedQuery = localStorage.getItem('positorium-query');
   if (savedQuery) {
     scriptEditor.textContent = savedQuery;
   }
@@ -104,7 +104,7 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Initialize status view with welcome message
     const initTime = new Date().toLocaleTimeString();
-    els.statusOut.textContent = `[${initTime}] Bareclad Query Console initialized\n[${initTime}] Editor loaded with syntax highlighting\n`;
+  els.statusOut.textContent = `[${initTime}] Positorium Query Console initialized\n[${initTime}] Editor loaded with syntax highlighting\n`;
   }, 100);
 
   // Button event listeners
@@ -286,7 +286,7 @@ function updateHighlight() {
   // Reconnect observer after updating
   observer.observe(scriptEditor, { subtree: true, characterData: true });
   
-  localStorage.setItem('bareclad-query', code);
+  localStorage.setItem('positorium-query', code);
 }
 
 // Setup event listeners for the editor
@@ -360,7 +360,7 @@ scriptEditor.addEventListener('cut', function() {
 
 // Save query on page unload
 window.addEventListener('beforeunload', () => {
-  localStorage.setItem('bareclad-query', scriptEditor.innerText);
+  localStorage.setItem('positorium-query', scriptEditor.innerText);
 });
 
 // No Monaco initialization needed - using Prism.js instead

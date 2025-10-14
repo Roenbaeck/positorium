@@ -1,26 +1,26 @@
-<img src="https://raw.githubusercontent.com/Roenbaeck/bareclad/master/bareclad.svg" width="250">
+<img src="./positorium.svg" width="333">
 <p/>
 
-Bareclad is an experimental database engine based on Transitional Modeling, designed to capture conflicting, unreliable, and varying information over time. It blends ideas from relational, graph, columnar, and key–value stores.
+Positorium is an experimental database engine based on Transitional Modeling, designed to capture conflicting, unreliable, and varying information over time. It blends ideas from relational, graph, columnar, and key–value stores.
 
-- [The Philosophical Foundations of Bareclad](THEORY.md)
+- [The Philosophical Foundations of Positorium](THEORY.md)
 - [Paper: Modeling Conflicting, Unreliable, and Varying Information](https://www.researchgate.net/publication/329352497_Modeling_Conflicting_Unreliable_and_Varying_Information)
 
-## Why Bareclad?
+## Why Positorium?
 
-Most databases assume a single, consistent truth. In reality, facts are messy: they conflict across sources, change over time, and sometimes carry uncertainty. Bareclad treats this as a first‑class concern:
+Most databases assume a single, consistent truth. In reality, facts are messy: they conflict across sources, change over time, and sometimes carry uncertainty. Positorium treats this as a first‑class concern:
 
 - Contradictions are preserved, not overwritten (assertions can be affirmed or negated with certainty).
 - Time is built into every posit, so “what was true when” is natural to ask.
 - Set‑based evaluation with roaring bitmaps keeps pattern matching fast without exploding joins.
 
-This makes Bareclad well‑suited for master data management, regulated domains, investigations/intel, and any workflow where evidence accumulates and is revised.
+This makes Positorium well‑suited for master data management, regulated domains, investigations/intel, and any workflow where evidence accumulates and is revised.
 
 <br/>
 
 ## Traqula DSL
 
-Traqula is Bareclad's domain-specific language for defining roles, positing facts with time, and querying data through pattern matching. It supports variables that persist across commands, allowing complex multi-step operations.
+Traqula is Positorium's domain-specific language for defining roles, positing facts with time, and querying data through pattern matching. It supports variables that persist across commands, allowing complex multi-step operations.
 
 For the complete language reference, examples, and details on posits, variables, and search patterns, see [TRAQULA.md](TRAQULA.md).
 
@@ -34,17 +34,17 @@ Build:
 cargo build
 ```
 
-Run the binary; it will read configuration from bareclad.json and execute the Traqula script at traqula/example.traqula:
+Run the binary; it will read configuration from positorium.json and execute the Traqula script at traqula/example.traqula:
 
 ```sh
-target/debug/bareclad
+target/debug/positorium
 ```
 
-Config (bareclad.json):
+Config (positorium.json):
 
 ```json
 {
-	"database_file_and_path": "bareclad.db",
+	"database_file_and_path": "positorium.db",
 	"recreate_database_on_startup": true,
 	"traqula_file_to_run_on_startup": "traqula/adds.traqula"
 }
@@ -55,31 +55,31 @@ Config (bareclad.json):
 The engine now uses an explicit persistence mode enum:
 
 ```rust
-use bareclad::construct::{Database, PersistenceMode};
+use positorium::construct::{Database, PersistenceMode};
 
 // Ephemeral: nothing is written, all data lost when process exits
 let db = Database::new(PersistenceMode::InMemory);
 
 // File-backed persistence (creates or reuses SQLite file)
-let db = Database::new(PersistenceMode::File("bareclad.db".to_string()));
+let db = Database::new(PersistenceMode::File("positorium.db".to_string()));
 
 // Derive from config style flags
 let enable = true; // imagine read from config
-let mode = PersistenceMode::from_config(enable, "bareclad.db");
+let mode = PersistenceMode::from_config(enable, "positorium.db");
 let db2 = Database::new(mode);
 ```
 
-When running the provided binary, the `enable_persistence` flag in `bareclad.json` selects between these modes internally.
+When running the provided binary, the `enable_persistence` flag in `positorium.json` selects between these modes internally.
 
 ## Integrity Ledger
 
-When running in file‑backed persistence mode, Bareclad records a compact integrity signal alongside persisted posits: a rolling hash over each persisted row. This ledger is always maintained for file‑backed databases and is intended as a lightweight way to spot accidental edits or simple corruption during local inspection.
+When running in file‑backed persistence mode, Positorium records a compact integrity signal alongside persisted posits: a rolling hash over each persisted row. This ledger is always maintained for file‑backed databases and is intended as a lightweight way to spot accidental edits or simple corruption during local inspection.
 
 Note: this is not a full audit or tamper‑proof trail. It provides a quick, low‑overhead check but does not protect against an attacker with write access who can recompute the chain or against external threats without anchoring. See the `persist` module for implementation details if you need stronger guarantees.
 
 ## Client / Server Architecture
 
-Bareclad can run as a library or an HTTP server. The server layer (Axum + Tokio) exposes a JSON endpoint:
+Positorium can run as a library or an HTTP server. The server layer (Axum + Tokio) exposes a JSON endpoint:
 
 `POST /v1/query`
 
@@ -110,20 +110,20 @@ You can run the server directly with the binary or use the convenience scripts p
 
 Windows (PowerShell):
 ```powershell
-. .\scripts\bareclad.ps1                  # dot-source to load functions
-Start-Bareclad -LogProfile normal -Tail   # run and stream logs live
-Stop-Bareclad                             # stop
-Restart-Bareclad -LogProfile verbose      # restart with different profile
+. .\scripts\positorium.ps1                  # dot-source to load functions
+Start-Positorium -LogProfile normal -Tail   # run and stream logs live
+Stop-Positorium                             # stop
+Restart-Positorium -LogProfile verbose      # restart with different profile
 ```
 
 macOS / Linux (bash):
 ```bash
-chmod +x scripts/bareclad.sh            # first time
-./scripts/bareclad.sh start --profile normal --tail   # foreground (logs to console)
-./scripts/bareclad.sh stop
-./scripts/bareclad.sh restart --profile verbose --force-rebuild
-./scripts/bareclad.sh start --log 'warn,bareclad=info'  # custom RUST_LOG filter
-./scripts/bareclad.sh tail               # follow log file if started in background
+chmod +x scripts/positorium.sh            # first time
+./scripts/positorium.sh start --profile normal --tail   # foreground (logs to console)
+./scripts/positorium.sh stop
+./scripts/positorium.sh restart --profile verbose --force-rebuild
+./scripts/positorium.sh start --log 'warn,positorium=info'  # custom RUST_LOG filter
+./scripts/positorium.sh tail               # follow log file if started in background
 ```
 
 Both scripts support a common set of logging profiles mapped to `RUST_LOG`:
@@ -132,20 +132,20 @@ LogProfile | RUST_LOG
 :--|:--
 quiet | `error`
 normal | `info`
-verbose | `debug,bareclad=info`
+verbose | `debug,positorium=info`
 trace | `trace`
 
-You can override the profile with an explicit `--log` / `-Log` argument (EnvFilter syntax) such as `warn,axum=info,bareclad=debug`.
+You can override the profile with an explicit `--log` / `-Log` argument (EnvFilter syntax) such as `warn,axum=info,positorium=debug`.
 
-The bash script maintains a PID file at `.bareclad.pid` and writes background logs to `bareclad.out`; use `--tail` (bash) or `-Tail` (PowerShell) to stream logs directly instead.
+The bash script maintains a PID file at `.positorium.pid` and writes background logs to `positorium.out`; use `--tail` (bash) or `-Tail` (PowerShell) to stream logs directly instead.
 
 Logging uses `tracing` with `RUST_LOG` filtering.
 
-### Web UI (bareclad.html)
+### Web UI (positorium.html)
 
-A minimal static HTML client (`bareclad.html`) demonstrates submitting scripts to the server endpoint and rendering results. Open it in a browser (or host it) and point the form to your server's `/v1/query` URL.
+A minimal static HTML client (`positorium.html`) demonstrates submitting scripts to the server endpoint and rendering results. Open it in a browser (or host it) and point the form to your server's `/v1/query` URL.
 
-<img src="https://github.com/Roenbaeck/bareclad/blob/master/bareclad_web_app.png?raw=true">
+<img src="./positorium_web_app.png">
 
 ## Updated Status and Roadmap
 
@@ -173,7 +173,7 @@ Planned/next:
 
 ## Long-term Goals
 
-These are aspirational features that align with the full vision of Transitional Modeling, extending Bareclad beyond its current experimental state:
+These are aspirational features that align with the full vision of Transitional Modeling, extending Positorium beyond its current experimental state:
 
 * **Advanced Query Capabilities**: Implement all theoretical query types from Transitional Modeling, including probabilistic searches (e.g., "find facts with at least 75% certainty"), audit trails (e.g., "show all corrections between dates"), and log-like queries (e.g., "all model changes by a specific identity").
 * **Constraint and Schema Management**: Add support for subjective, evolving constraints and classifications that can be applied late, enabling "eventual conformance" for data integrity without rigid upfront schemas.

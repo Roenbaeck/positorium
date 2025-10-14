@@ -1,8 +1,8 @@
 [package]
-name = "bareclad"
+name = "positorium"
 version = "0.1.4"
 edition = "2024"
-authors = ["Lars Rönnbäck <lars@bareclad.com>"]
+authors = ["Lars Rönnbäck <lars@positorium.com>"]
 
 [dependencies]
 # chrono provides various data types for time

@@ -1,5 +1,5 @@
-use bareclad::construct::{Database, PersistenceMode};
-use bareclad::traqula::Engine;
+use positorium::construct::{Database, PersistenceMode};
+use positorium::traqula::Engine;
 
 // Diagnostic: ensure the married snapshot search by itself yields 5 rows (names) when not preceded by divorced search.
 #[test]

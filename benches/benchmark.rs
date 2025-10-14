@@ -1,4 +1,4 @@
-use bareclad::traqula::ResultSet;
+use positorium::traqula::ResultSet;
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::time::Instant;
 

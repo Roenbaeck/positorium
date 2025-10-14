@@ -34,8 +34,8 @@
 //!
 //! # Example (executing Traqula)
 //! ```
-//! use bareclad::construct::{Database, PersistenceMode};
-//! use bareclad::traqula::Engine;
+//! use positorium::construct::{Database, PersistenceMode};
+//! use positorium::traqula::Engine;
 //! let db = Database::new(PersistenceMode::InMemory).unwrap();
 //! let engine = Engine::new(&db);
 //! engine.execute("add role person; add posit [{(+a, person)}, \"Alice\", @NOW];");
@@ -46,6 +46,7 @@
 //! Debug logging is gated behind `cfg(debug_assertions)` where appropriate.
 use crate::construct::{Database, OtherHasher, Thing};
 use crate::datatype::{Certainty, Decimal, JSON, Time};
+use crate::error::DatabaseError;
 use chrono::NaiveDateTime; // needed for defensive datetime validation in parse_time
 // (regex-based time parsing removed in favor of direct parsing)
 use chrono::NaiveDate;
@@ -563,7 +564,7 @@ impl<'en> Engine<'en> {
 
     /// Execute a single-search script in streaming fashion using the provided RowSink.
     /// Returns (columns, limited, row_count) or an error. If the script has zero or multiple search commands an error is returned.
-    pub fn execute_stream_single<S: RowSink>(&self, traqula: &str, sink: &mut S) -> Result<(Vec<String>, bool, usize), crate::error::BarecladError> {
+    pub fn execute_stream_single<S: RowSink>(&self, traqula: &str, sink: &mut S) -> Result<(Vec<String>, bool, usize), crate::error::DatabaseError> {
         let mut variables: Variables = Variables::default();
         let parse_result = TraqulaParser::parse(Rule::traqula, traqula.trim());
         let pairs = match parse_result {
@@ -577,11 +578,11 @@ impl<'en> Engine<'en> {
                         msg.push_str(&format!("\nExpected one of: {}", expected.join(", ")));
                     }
                 }
-                return Err(crate::error::BarecladError::Parse { message: msg, line: None, col: None });
+                return Err(crate::error::DatabaseError::Parse { message: msg, line: None, col: None });
             }
         };
         let search_count = pairs.clone().filter(|p| p.as_rule()==Rule::search).count();
-        if search_count != 1 { return Err(crate::error::BarecladError::Execution(format!("execute_stream_single expects exactly one search, found {}", search_count))); }
+    if search_count != 1 { return Err(crate::error::DatabaseError::Execution(format!("execute_stream_single expects exactly one search, found {}", search_count))); }
         let mut return_columns: Option<Vec<String>> = None; // will be populated when return clause processed
         let mut total_rows = 0usize; let mut limited=false;
         for command in pairs { match command.as_rule() { Rule::add_role => self.add_role(command), Rule::add_posit => self.add_posit(command, &mut variables), Rule::search => {
@@ -614,9 +615,9 @@ impl<'en> Engine<'en> {
         for role in command.into_inner() {
             let name = role.as_str().trim();
             let (_r, existed) = self.database.create_role(name.to_string(), false);
-            if !existed { added +=1; info!(target: "bareclad::traqula", event="add_role", role=name, "role added"); } else { info!(target: "bareclad::traqula", event="add_role", role=name, existed=true, "role already existed"); }
+            if !existed { added +=1; info!(target: "positorium::traqula", event="add_role", role=name, "role added"); } else { info!(target: "positorium::traqula", event="add_role", role=name, existed=true, "role already existed"); }
         }
-        if added>0 { info!(target: "bareclad::traqula", event="add_role_batch", added, "roles batch added"); }
+    if added>0 { info!(target: "positorium::traqula", event="add_role_batch", added, "roles batch added"); }
     }
     /// Handle an `add posit` command producing one or more posits.
     fn add_posit(&self, command: Pair<Rule>, variables: &mut Variables) {
@@ -871,7 +872,7 @@ impl<'en> Engine<'en> {
                     }
                     if !posits.is_empty() {
                         // summarize roles_ord (roles after reordering) if available
-                        info!(target: "bareclad::traqula", event="add_posit", created=posits.len(), roles=%roles_ord.join(","), value_kind=%if value_as_json.is_some(){"json"} else if value_as_string.is_some(){"string"} else if value_as_time.is_some(){"time"} else if value_as_certainty.is_some(){"certainty"} else if value_as_decimal.is_some(){"decimal"} else if value_as_i64.is_some(){"i64"} else {"unknown"}, "posits created");
+                        info!(target: "positorium::traqula", event="add_posit", created=posits.len(), roles=%roles_ord.join(","), value_kind=%if value_as_json.is_some(){"json"} else if value_as_string.is_some(){"string"} else if value_as_time.is_some(){"time"} else if value_as_certainty.is_some(){"certainty"} else if value_as_decimal.is_some(){"decimal"} else if value_as_i64.is_some(){"i64"} else {"unknown"}, "posits created");
                     }
                 }
                 _ => println!("Unknown structure: {:?}", structure),
@@ -895,7 +896,7 @@ impl<'en> Engine<'en> {
             }
         }
     }
-    fn search(&self, command: Pair<Rule>, variables: &mut Variables, sink: &mut dyn RowSink, return_columns: &mut Option<Vec<String>>, exec_error: &mut Option<crate::error::BarecladError>) {
+    fn search(&self, command: Pair<Rule>, variables: &mut Variables, sink: &mut dyn RowSink, return_columns: &mut Option<Vec<String>>, exec_error: &mut Option<crate::error::DatabaseError>) {
         // Helper numeric comparison
         fn cmp_numeric(lhs: f64, rhs: f64, op: &str) -> bool {
             match op {
@@ -1273,7 +1274,7 @@ impl<'en> Engine<'en> {
                                 }
                                 // Minimal evaluation: compute candidates by role intersection and bind variables
                                 if !roles.is_empty() {
-                                    info!(target:"bareclad::stream", event="pattern_start", pattern_index=diag_pattern_id, roles=?roles, local_vars=?local_variables, unions=?local_variable_unions.iter().map(|u| u.as_ref().map(|v| v.join("|"))).collect::<Vec<_>>(), as_of_literal=%_as_of_time.as_ref().map(|t|format!("{}",t)).unwrap_or_default());
+                                    info!(target:"positorium::stream", event="pattern_start", pattern_index=diag_pattern_id, roles=?roles, local_vars=?local_variables, unions=?local_variable_unions.iter().map(|u| u.as_ref().map(|v| v.join("|"))).collect::<Vec<_>>(), as_of_literal=%_as_of_time.as_ref().map(|t|format!("{}",t)).unwrap_or_default());
                                     // Intersect role bitmaps starting from the smallest posting list
                                     let rk = self.database.role_keeper();
                                     let rk_guard = rk.lock().unwrap();
@@ -1294,7 +1295,7 @@ impl<'en> Engine<'en> {
                                         }
                                     }
                                     if let Some(cands_initial) = candidates {
-                                        info!(target:"bareclad::stream", event="candidates_initial", count=cands_initial.len(), roles=?roles, time_literal=%_time.as_ref().map(|t|format!("{}",t)).unwrap_or_default(), as_of_literal=%_as_of_time.as_ref().map(|t|format!("{}",t)).unwrap_or_default());
+                                        info!(target:"positorium::stream", event="candidates_initial", count=cands_initial.len(), roles=?roles, time_literal=%_time.as_ref().map(|t|format!("{}",t)).unwrap_or_default(), as_of_literal=%_as_of_time.as_ref().map(|t|format!("{}",t)).unwrap_or_default());
                                         // Optional time filter for any role when a literal/constant time is provided
                                         let mut cands = cands_initial;
                                         if let Some(ref t) = _time {
@@ -1309,7 +1310,7 @@ impl<'en> Engine<'en> {
                                                 }
                                             }
                                             cands = filtered;
-                                            info!(target:"bareclad::stream", event="time_filter", remaining=cands.len());
+                                            info!(target:"positorium::stream", event="time_filter", remaining=cands.len());
                                             if cands.is_empty() {
                                                 any_clause_failed = true;
                                             }
@@ -1364,7 +1365,7 @@ impl<'en> Engine<'en> {
                                                     }
                                                 }
                                                 cands = reduced;
-                                                info!(target:"bareclad::stream", event="snapshot_reduced", remaining=cands.len(), as_of=%format!("{}", as_of));
+                                                info!(target:"positorium::stream", event="snapshot_reduced", remaining=cands.len(), as_of=%format!("{}", as_of));
                                                 if cands.is_empty() {
                                                     any_clause_failed = true;
                                                 }
@@ -1445,7 +1446,7 @@ impl<'en> Engine<'en> {
                                                 }
                                             }
                                             cands = filtered;
-                                            info!(target:"bareclad::stream", event="value_filter", remaining=cands.len());
+                                            info!(target:"positorium::stream", event="value_filter", remaining=cands.len());
                                             if cands.is_empty() {
                                                 any_clause_failed = true;
                                             }
@@ -1460,7 +1461,7 @@ impl<'en> Engine<'en> {
                                                 if !is_insert {
                                                     let key = *token; // recall name as-is
                                                     if !(variables.contains_key(key) || seen_inserted_id_vars.contains(key)) {
-                                                        *exec_error = Some(crate::error::BarecladError::Execution(format!("Variable '{}' is used as a recall but is not bound in a prior command", key)));
+                                                        *exec_error = Some(DatabaseError::Execution(format!("Variable '{}' is used as a recall but is not bound in a prior command", key)));
                                                         return;
                                                     }
                                                 }
@@ -1550,7 +1551,7 @@ impl<'en> Engine<'en> {
                                                 any_clause_failed = true;
                                             }
                                         }
-                                        info!(target:"bareclad::stream", event="pattern_end", pattern_index=diag_pattern_id, final_candidates=cands.len(), any_clause_failed=any_clause_failed, enumeration_started=enumeration_started);
+                                        info!(target:"positorium::stream", event="pattern_end", pattern_index=diag_pattern_id, final_candidates=cands.len(), any_clause_failed=any_clause_failed, enumeration_started=enumeration_started);
                                         // Remember candidate posits for projection when returning values/times
                                         // (legacy single-role candidate capture removed)
                                         // If the appearing value used a variable (e.g., +n or n), capture its candidates
@@ -1626,7 +1627,7 @@ impl<'en> Engine<'en> {
                                                     for id_map in pending_maps.into_iter() {
                                                         candidate_info.push((pid, id_map));
                                                     }
-                                                    info!(target:"bareclad::stream", event="enumeration_candidate_info", entries=candidate_info.len(), enumeration_started=?enumeration_started);
+                                                    info!(target:"positorium::stream", event="enumeration_candidate_info", entries=candidate_info.len(), enumeration_started=?enumeration_started);
                                                 }
                                             }
                                             // Names for value/time/posit variables (strip plus)
@@ -1663,7 +1664,7 @@ impl<'en> Engine<'en> {
                                                     bindings.push(b);
                                                 }
                                                 enumeration_started = true;
-                                                info!(target:"bareclad::stream", event="enumeration_seed", seeded_bindings=bindings.len());
+                                                info!(target:"positorium::stream", event="enumeration_seed", seeded_bindings=bindings.len());
                                             } else {
                                                 let mut new_bindings: Vec<Binding> = Vec::new();
                                                 // Guards and caches for per-binding snapshot reduction when using variable as-of
@@ -1695,7 +1696,7 @@ impl<'en> Engine<'en> {
                                                                 }
                                                             }
                                                         }
-                                                        info!(target:"bareclad::stream", event="snapshot_reduced_per_binding", aset_count=cache.len());
+                                                        info!(target:"positorium::stream", event="snapshot_reduced_per_binding", aset_count=cache.len());
                                                         Some(cache)
                                                     } else { None };
                                                     for (pid, id_map) in candidate_info.iter() {
@@ -1783,7 +1784,7 @@ impl<'en> Engine<'en> {
                                                 if bindings.is_empty() {
                                                     any_clause_failed = true;
                                                 }
-                                                info!(target:"bareclad::stream", event="enumeration_merge", merged_bindings=bindings.len(), any_clause_failed=any_clause_failed);
+                                                info!(target:"positorium::stream", event="enumeration_merge", merged_bindings=bindings.len(), any_clause_failed=any_clause_failed);
                                             }
                                         }
                                     }
@@ -1882,13 +1883,13 @@ impl<'en> Engine<'en> {
                         return;
                     }
                     if enumeration_started {
-                        info!(target:"bareclad::stream", event="projection_start", bindings=bindings.len(), return_cols=?return_columns.as_ref().unwrap_or(&Vec::new()));
+                        info!(target:"positorium::stream", event="projection_start", bindings=bindings.len(), return_cols=?return_columns.as_ref().unwrap_or(&Vec::new()));
                         // (debug logging removed)
                         // Validate variable references in value predicates
                         if exec_error.is_none() {
                             for (lhs, _op, _rhs) in &where_value {
                                 if !variable_kinds.contains_key(lhs) {
-                                    *exec_error = Some(crate::error::BarecladError::Execution(format!("Unknown variable in predicate: {}", lhs)));
+                                    *exec_error = Some(DatabaseError::Execution(format!("Unknown variable in predicate: {}", lhs)));
                                     break;
                                 }
                             }
@@ -1954,10 +1955,10 @@ impl<'en> Engine<'en> {
                             let aset_guard = aset_lookup.lock().unwrap();
                             bindings.retain(|b| {
                                 for (l, op, r) in &where_value_var {
-                                    let (lpid, lkind) = if let Some(t) = b.value_slots.get(l) { *t } else { if exec_error.is_none() { *exec_error = Some(crate::error::BarecladError::Execution(format!("Unknown variable in predicate: {}", l))); } return false; };
-                                    let (rpid, rkind) = if let Some(t) = b.value_slots.get(r) { *t } else { if exec_error.is_none() { *exec_error = Some(crate::error::BarecladError::Execution(format!("Unknown variable in predicate: {}", r))); } return false; };
+                                    let (lpid, lkind) = if let Some(t) = b.value_slots.get(l) { *t } else { if exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Unknown variable in predicate: {}", l))); } return false; };
+                                    let (rpid, rkind) = if let Some(t) = b.value_slots.get(r) { *t } else { if exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Unknown variable in predicate: {}", r))); } return false; };
                                     if lkind == VarKind::Time || rkind == VarKind::Time { continue; } // handled by where_time_var stage
-                                    if lkind != VarKind::Value || rkind != VarKind::Value { if exec_error.is_none() { *exec_error = Some(crate::error::BarecladError::Execution(format!("Non-value variable used in value predicate: {} or {}", l, r))); } return false; }
+                                    if lkind != VarKind::Value || rkind != VarKind::Value { if exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Non-value variable used in value predicate: {} or {}", l, r))); } return false; }
                                     let l_roles = if let Some(app) = aset_guard.get(&lpid) { app.roles() } else { return false; };
                                     let r_roles = if let Some(app) = aset_guard.get(&rpid) { app.roles() } else { return false; };
                                     let l_allowed = tp_guard.lookup(&l_roles).clone();
@@ -1979,15 +1980,15 @@ impl<'en> Engine<'en> {
                                     let (l_text, l_type) = if let Some(v)=l_val { v } else { return false; };
                                     let (r_text, r_type) = if let Some(v)=r_val { v } else { return false; };
                                     let pass = if ordering {
-                                        if (l_type=="Certainty") ^ (r_type=="Certainty") { if exec_error.is_none() { *exec_error = Some(crate::error::BarecladError::Execution(format!("Ordering comparison requires both sides to be certainties or percent sign (%) certainty mismatch: {} {} {}", l, op, r))); } false }
+                                        if (l_type=="Certainty") ^ (r_type=="Certainty") { if exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Ordering comparison requires both sides to be certainties or percent sign (%) certainty mismatch: {} {} {}", l, op, r))); } false }
                                         else if l_type=="Certainty" && r_type=="Certainty" {
                                             let to_pct = |s:&str| if s=="1" {100} else if s=="-1" {-100} else if s=="0" {0} else if s.starts_with("0.") || s.starts_with("-0.") { (s.parse::<f64>().unwrap_or(0.0)*100.0) as i32 } else {0};
                                             cmp_numeric(to_pct(&l_text) as f64, to_pct(&r_text) as f64, op)
                                         } else if (l_type=="i64" || l_type=="Decimal") && (r_type=="i64" || r_type=="Decimal") {
                                             use bigdecimal::BigDecimal; use std::str::FromStr; let lbd=BigDecimal::from_str(&l_text).unwrap_or_else(|_| BigDecimal::from(0)); let rbd=BigDecimal::from_str(&r_text).unwrap_or_else(|_| BigDecimal::from(0)); cmp_bigdecimal(&lbd,&rbd,op)
-                                        } else { if exec_error.is_none() { *exec_error = Some(crate::error::BarecladError::Execution(format!("Ordering comparison not allowed for value variables: {}({}) {} {}({})", l, l_type, op, r, r_type))); } false }
+                                        } else { if exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Ordering comparison not allowed for value variables: {}({}) {} {}({})", l, l_type, op, r, r_type))); } false }
                                     } else { // equality
-                                        if op != "=" && op != "==" { if exec_error.is_none() { *exec_error = Some(crate::error::BarecladError::Execution(format!("Unsupported comparison operator '{}' for value variables", op))); } false }
+                                        if op != "=" && op != "==" { if exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Unsupported comparison operator '{}' for value variables", op))); } false }
                                         else if l_type=="Certainty" && r_type=="Certainty" { l_text==r_text }
                                         else if (l_type=="i64"||l_type=="Decimal") && (r_type=="i64"||r_type=="Decimal") { let lf=l_text.parse::<f64>().unwrap_or(0.0); let rf=r_text.parse::<f64>().unwrap_or(0.0); (lf-rf).abs()<1e-9 }
                                         else if l_type=="String" && r_type=="String" { l_text==r_text }
@@ -2008,8 +2009,8 @@ impl<'en> Engine<'en> {
                             bindings.retain(|b| {
                                 for (lhs, op, rhs) in &where_value {
                                     // locate lhs posit/value
-                                    let (pid, vkind) = if let Some(tup) = b.value_slots.get(lhs) { *tup } else { if exec_error.is_none() { *exec_error = Some(crate::error::BarecladError::Execution(format!("Unknown variable in predicate: {}", lhs))); } return false; };
-                                    if vkind != VarKind::Value { if exec_error.is_none() { *exec_error = Some(crate::error::BarecladError::Execution(format!("Non-value variable used in value predicate: {}", lhs))); } return false; }
+                                    let (pid, vkind) = if let Some(tup) = b.value_slots.get(lhs) { *tup } else { if exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Unknown variable in predicate: {}", lhs))); } return false; };
+                                    if vkind != VarKind::Value { if exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Non-value variable used in value predicate: {}", lhs))); } return false; }
                                     // Determine allowed types for this posit
                                     // We need appearance set to determine role datatypes; reuse logic from projection path.
                                     let aset_lookup = self.database.posit_thing_to_appearance_set_lookup();
@@ -2026,9 +2027,9 @@ impl<'en> Engine<'en> {
                                                     if !numeric_allowed {
                                                         // If this variable is a certainty, produce the more helpful percent sign guidance.
                                                         if allowed.contains("Certainty") {
-                                                            if exec_error.is_none() { *exec_error = Some(crate::error::BarecladError::Execution(format!("Ordering comparison requires a percent sign (%) for certainty variable '{}' (e.g. 75%)", lhs))); }
+                                                            if exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Ordering comparison requires a percent sign (%) for certainty variable '{}' (e.g. 75%)", lhs))); }
                                                         } else {
-                                                            if exec_error.is_none() { *exec_error = Some(crate::error::BarecladError::Execution(format!("Ordering comparison not allowed: variable '{}' of non-numeric type used with '{}'", lhs, op))); }
+                                                            if exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Ordering comparison not allowed: variable '{}' of non-numeric type used with '{}'", lhs, op))); }
                                                         }
                                                         return false;
                                                     }
@@ -2051,19 +2052,19 @@ impl<'en> Engine<'en> {
                                     let ordering = matches!(op.as_str(), "<"|"<="|">"|">=");
                                     if ordering {
                                         if matches!(rhs, RhsValueKind::Int(_) | RhsValueKind::Decimal(_)) && (lhs_val == "1" || lhs_val == "-1" || lhs_val == "0" || lhs_val.starts_with("0.") || lhs_val.starts_with("-0.")) {
-                                            if exec_error.is_none() { *exec_error = Some(crate::error::BarecladError::Execution(format!("Ordering comparison requires a percent sign (%) for certainty variable '{}' (e.g. 75%)", lhs))); }
+                                            if exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Ordering comparison requires a percent sign (%) for certainty variable '{}' (e.g. 75%)", lhs))); }
                                             return false;
                                         }
                                     }
                                     // Comparison dispatch
                                     let pass = match rhs {
                                         RhsValueKind::Int(r) => {
-                                            if let Ok(l) = lhs_val.parse::<i64>() { cmp_numeric(l as f64, *r as f64, op) } else { if ["<","<=",">",">="].contains(&op.as_str()) && exec_error.is_none() { *exec_error = Some(crate::error::BarecladError::Execution(format!("Type mismatch for ordering: value '{}' not comparable to int literal {}", lhs_val, r))); } false }
+                                            if let Ok(l) = lhs_val.parse::<i64>() { cmp_numeric(l as f64, *r as f64, op) } else { if ["<","<=",">",">="].contains(&op.as_str()) && exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Type mismatch for ordering: value '{}' not comparable to int literal {}", lhs_val, r))); } false }
                                         }
                                         RhsValueKind::Cert(rpct) => {
                                             // lhs_val is display (e.g., 0.75, -0.25, 1, -1, 0)
                                             let l_pct_opt = if lhs_val == "1" { Some(100) } else if lhs_val == "-1" { Some(-100) } else if lhs_val == "0" { Some(0) } else if lhs_val.starts_with("0.") || lhs_val.starts_with("-0.") { lhs_val.parse::<f64>().ok().map(|f| (f*100.0) as i32) } else { None };
-                                            if let Some(lpct) = l_pct_opt { cmp_numeric(lpct as f64, *rpct as f64, op) } else { if ["<","<=",">",">="].contains(&op.as_str()) && exec_error.is_none() { *exec_error = Some(crate::error::BarecladError::Execution(format!("Type mismatch for ordering: value '{}' not comparable to certainty literal {}%", lhs_val, rpct))); } false }
+                                            if let Some(lpct) = l_pct_opt { cmp_numeric(lpct as f64, *rpct as f64, op) } else { if ["<","<=",">",">="].contains(&op.as_str()) && exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Type mismatch for ordering: value '{}' not comparable to certainty literal {}%", lhs_val, rpct))); } false }
                                         }
                                         RhsValueKind::Decimal(rraw) => {
                                             // compare as BigDecimal via string parse fallback to f64
@@ -2073,11 +2074,11 @@ impl<'en> Engine<'en> {
                                             cmp_bigdecimal(&lbd, &rbd, op)
                                         }
                                         RhsValueKind::String(rstr) => {
-                                            if ["<","<=",">",">="].contains(&op.as_str()) { if exec_error.is_none() { *exec_error = Some(crate::error::BarecladError::Execution(format!("Ordering comparison not allowed for string literal: {} {} '{}'", lhs, op, rstr))); } return false; }
+                                            if ["<","<=",">",">="].contains(&op.as_str()) { if exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Ordering comparison not allowed for string literal: {} {} '{}'", lhs, op, rstr))); } return false; }
                                             if op == "=" || op == "==" { lhs_val == *rstr } else { false }
                                         }
                                         RhsValueKind::Const(rconst) => {
-                                            if ["<","<=",">",">="].contains(&op.as_str()) { if exec_error.is_none() { *exec_error = Some(crate::error::BarecladError::Execution(format!("Ordering comparison not allowed for constant literal: {} {} '{}'", lhs, op, rconst))); } return false; }
+                                            if ["<","<=",">",">="].contains(&op.as_str()) { if exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Ordering comparison not allowed for constant literal: {} {} '{}'", lhs, op, rconst))); } return false; }
                                             if op == "=" || op == "==" { lhs_val == *rconst } else { false }
                                         }
                                     };
@@ -2100,11 +2101,11 @@ impl<'en> Engine<'en> {
                         // Column-level inference removed; we now collect a per-row types vector.
                         // Emission handled after full clause scan; see post-clause block.
                         if !enumeration_started {
-                            info!(target:"bareclad::stream", event="projection_skipped", reason="no_enumeration", any_clause_failed=any_clause_failed);
+                            info!(target:"positorium::stream", event="projection_skipped", reason="no_enumeration", any_clause_failed=any_clause_failed);
                             return;
                         }
                         for b in bindings.iter() {
-                            info!(target:"bareclad::stream", event="row_binding_iter", identities=b.identities.len(), value_slots=b.value_slots.len(), posit_vars=b.posit_vars.len());
+                            info!(target:"positorium::stream", event="row_binding_iter", identities=b.identities.len(), value_slots=b.value_slots.len(), posit_vars=b.posit_vars.len());
                             let mut row: Vec<String> = Vec::with_capacity(returns.len());
                             let mut types_row: Vec<String> = Vec::with_capacity(returns.len());
                             let mut row_ok = true;
@@ -2118,7 +2119,7 @@ impl<'en> Engine<'en> {
                                             row.push(format!("{}", pid));
                                             types_row.push("Thing".into());
                                         } else {
-                                            info!(target:"bareclad::stream", event="row_skip", reason="missing_identity", var=%rv);
+                                            info!(target:"positorium::stream", event="row_skip", reason="missing_identity", var=%rv);
                                             row_ok = false;
                                             break;
                                         }
@@ -2149,23 +2150,23 @@ impl<'en> Engine<'en> {
                                                     row.push(cell);
                                                     if types_row.len() < row.len() { types_row.push("Unknown".into()); }
                                                 } else {
-                                                    info!(target:"bareclad::stream", event="row_skip", reason="no_capture", var=%rv);
+                                                    info!(target:"positorium::stream", event="row_skip", reason="no_capture", var=%rv);
                                                     row_ok = false;
                                                     break;
                                                 }
                                             } else { // aset_guard.get(pid) None
-                                                info!(target:"bareclad::stream", event="row_skip", reason="missing_aset", pid=*pid, var=%rv);
+                                                info!(target:"positorium::stream", event="row_skip", reason="missing_aset", pid=*pid, var=%rv);
                                                 row_ok = false;
                                                 break;
                                             }
                                         } else { // b.value_slots.get(rv) None
-                                            info!(target:"bareclad::stream", event="row_skip", reason="missing_value_slot", var=%rv);
+                                            info!(target:"positorium::stream", event="row_skip", reason="missing_value_slot", var=%rv);
                                             row_ok = false;
                                             break;
                                         }
                                     } // Value | Time
                                     _ => {
-                                        info!(target:"bareclad::stream", event="row_skip", reason="unknown_kind", var=%rv);
+                                        info!(target:"positorium::stream", event="row_skip", reason="unknown_kind", var=%rv);
                                         row_ok = false;
                                         break;
                                     }
@@ -2175,7 +2176,7 @@ impl<'en> Engine<'en> {
                                 if let SinkFlow::Stop = sink.push(row, types_row) { break; }
                             }
                         }
-                        info!(target:"bareclad::stream", event="projection_complete");
+                        info!(target:"positorium::stream", event="projection_complete");
                         return;
                     }
                 } // end Rule::return_clause branch
@@ -2229,7 +2230,7 @@ impl<'en> Engine<'en> {
 
     /// Execute a script and collect printed row outputs (one Vec<String> per returned row).
     /// This is a stop-gap until the search pipeline is refactored to emit structured rows directly.
-    pub fn execute_collect(&self, traqula: &str) -> Result<CollectedResult, crate::error::BarecladError> {
+    pub fn execute_collect(&self, traqula: &str) -> Result<CollectedResult, DatabaseError> {
         let mut variables: Variables = Variables::default();
         struct CollectSink { rows: Vec<Vec<String>>, types: Vec<Vec<String>>, limit: Option<usize>, limited: bool }
         impl RowSink for CollectSink { fn push(&mut self, row: Vec<String>, types: Vec<String>) -> SinkFlow { if let Some(l) = self.limit { if self.rows.len() >= l { self.limited = true; return SinkFlow::Stop; } } self.rows.push(row); self.types.push(types); if let Some(l)=self.limit { if self.rows.len() >= l { self.limited = true; return SinkFlow::Stop; } } SinkFlow::Continue } }
@@ -2248,7 +2249,7 @@ impl<'en> Engine<'en> {
                         msg.push_str(&format!("\nExpected one of: {}", expected.join(", ")));
                     }
                 }
-                return Err(crate::error::BarecladError::Parse { message: msg, line: None, col: None });
+                return Err(DatabaseError::Parse { message: msg, line: None, col: None });
             }
         };
         let mut search_count = 0usize;
@@ -2275,7 +2276,7 @@ impl<'en> Engine<'en> {
 
     /// Execute a script and collect separate result sets for each search command.
     /// This provides the foundation for a multi-result JSON protocol.
-    pub fn execute_collect_multi(&self, traqula: &str) -> Result<Vec<CollectedResultSet>, crate::error::BarecladError> {
+    pub fn execute_collect_multi(&self, traqula: &str) -> Result<Vec<CollectedResultSet>, DatabaseError> {
         let mut variables: Variables = Variables::default();
         // Track long-lived identity variables introduced via add posit (+var in insert positions)
         let mut stable_vars: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -2292,7 +2293,7 @@ impl<'en> Engine<'en> {
                         msg.push_str(&format!("\nExpected one of: {}", expected.join(", ")));
                     }
                 }
-                return Err(crate::error::BarecladError::Parse { message: msg, line: None, col: None });
+                return Err(DatabaseError::Parse { message: msg, line: None, col: None });
             }
         };
         let mut results: Vec<CollectedResultSet> = Vec::new();
@@ -2343,7 +2344,7 @@ impl<'en> Engine<'en> {
 
     /// Execute a script containing multiple searches (>=1) and stream each result set with framing callbacks.
     /// Maintains standard variable scoping semantics across searches.
-    pub fn execute_stream_multi<C: MultiStreamCallbacks>(&self, traqula: &str, callbacks: &mut C) -> Result<(), crate::error::BarecladError> {
+    pub fn execute_stream_multi<C: MultiStreamCallbacks>(&self, traqula: &str, callbacks: &mut C) -> Result<(), DatabaseError> {
         let mut variables: Variables = Variables::default();
         // Track long-lived identity variables introduced via add posit (+var in insert positions)
         let mut stable_vars: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -2361,7 +2362,7 @@ impl<'en> Engine<'en> {
                         msg.push_str(&format!("\nExpected one of: {}", expected.join(", ")));
                     }
                 }
-                return Err(crate::error::BarecladError::Parse { message: msg, line: None, col: None });
+                return Err(DatabaseError::Parse { message: msg, line: None, col: None });
             }
         };
         let mut set_index = 0usize;
@@ -2382,7 +2383,7 @@ impl<'en> Engine<'en> {
                 // Per-set sink bridging to callbacks
                 struct SetSink<'a, C: MultiStreamCallbacks> { cb: &'a mut C, idx: usize, started: bool, search_text: &'a str }
                 impl<'a, C: MultiStreamCallbacks> RowSink for SetSink<'a, C> {
-                    fn on_meta(&mut self, columns: &[String]) -> SinkFlow { self.started=true; info!(target:"bareclad::stream", event="set_meta", set_index=self.idx, cols=?columns, search=?self.search_text); self.cb.on_result_set_start(self.idx, columns, self.search_text); SinkFlow::Continue }
+                    fn on_meta(&mut self, columns: &[String]) -> SinkFlow { self.started=true; info!(target:"positorium::stream", event="set_meta", set_index=self.idx, cols=?columns, search=?self.search_text); self.cb.on_result_set_start(self.idx, columns, self.search_text); SinkFlow::Continue }
                     fn push(&mut self, row: Vec<String>, types: Vec<String>) -> SinkFlow { if self.cb.on_row(self.idx, row, types) { SinkFlow::Continue } else { SinkFlow::Stop } }
                 }
                 struct CountingSetSink<'a, C: MultiStreamCallbacks> { inner: SetSink<'a, C>, limit: Option<usize>, count: usize, limited: bool }

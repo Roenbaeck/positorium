@@ -1,7 +1,7 @@
 {
     "listen_interface": "127.0.0.1",
     "listen_port": 8080,
-    "database_file_and_path": "bareclad.db",
+    "database_file_and_path": "positorium.db",
     "recreate_database_on_startup": true,
     "traqula_file_to_run_on_startup": "traqula/empty.traqula"
 }

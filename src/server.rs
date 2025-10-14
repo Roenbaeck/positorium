@@ -71,7 +71,7 @@ pub fn router(interface: Arc<QueryInterface>) -> Router {
                     .filter(|t| *t == "search")
                     .count();
                 if search_count == 1 {
-                    info!(target: "bareclad::server", event="stream_start", "starting streaming execution");
+                    info!(target: "positorium::server", event="stream_start", "starting streaming execution");
                     let (tx, rx) = tokio::sync::mpsc::channel::<String>(64);
                     tokio::task::spawn_blocking(move || {
                         let engine = Engine::new(iface.database());
@@ -94,13 +94,13 @@ pub fn router(interface: Arc<QueryInterface>) -> Router {
                                 sink.limited = limited; sink.rows = row_count; // ensure final values
                                 let end = serde_json::json!({"event":"end","row_count": row_count, "limited": limited});
                                 let _ = tx.blocking_send(format!("data: {}\n\n", end));
-                                info!(target: "bareclad::server", event="stream_complete", rows=row_count, limited=limited, "streaming execution finished");
+                                info!(target: "positorium::server", event="stream_complete", rows=row_count, limited=limited, "streaming execution finished");
                             }
                             Err(e) => {
                                 let err = serde_json::json!({"event":"error","error": format!("{}", e)});
                                 let _ = tx.blocking_send(format!("data: {}\n\n", err));
                                 let _ = tx.blocking_send("data: {\"event\":\"end\"}\n\n".to_string());
-                                warn!(target: "bareclad::server", error=%e, event="stream_error", "streaming execution error");
+                                warn!(target: "positorium::server", error=%e, event="stream_error", "streaming execution error");
                             }
                         }
                     });
@@ -115,7 +115,7 @@ pub fn router(interface: Arc<QueryInterface>) -> Router {
                         .unwrap();
                     return Ok::<_, (StatusCode, &'static str)>((StatusCode::OK, response));
                 } else if search_count > 1 {
-                    info!(target: "bareclad::server", event="stream_start_multi", searches=search_count, "starting multi-search streaming execution");
+                    info!(target: "positorium::server", event="stream_start_multi", searches=search_count, "starting multi-search streaming execution");
                     let (tx, rx) = tokio::sync::mpsc::channel::<String>(128);
                     tokio::task::spawn_blocking(move || {
                         let engine = Engine::new(iface.database());
@@ -127,8 +127,8 @@ pub fn router(interface: Arc<QueryInterface>) -> Router {
                         }
                         let mut cb = MultiCb { tx: tx.clone(), total_rows: 0 };
                         match engine.execute_stream_multi(&script, &mut cb) {
-                            Ok(()) => { let end=serde_json::json!({"event":"multi_end","total_rows": cb.total_rows}); let _=tx.blocking_send(format!("data: {}\n\n", end)); let _=tx.blocking_send("data: {\"event\":\"end\"}\n\n".to_string()); info!(target: "bareclad::server", event="stream_complete_multi", total_rows=cb.total_rows, "multi-search streaming finished"); },
-                            Err(e) => { let err=serde_json::json!({"event":"error","error": format!("{}", e)}); let _=tx.blocking_send(format!("data: {}\n\n", err)); let _=tx.blocking_send("data: {\"event\":\"multi_end\"}\n\n".to_string()); let _=tx.blocking_send("data: {\"event\":\"end\"}\n\n".to_string()); warn!(target: "bareclad::server", error=%e, event="stream_error_multi", "multi-search streaming error"); }
+                            Ok(()) => { let end=serde_json::json!({"event":"multi_end","total_rows": cb.total_rows}); let _=tx.blocking_send(format!("data: {}\n\n", end)); let _=tx.blocking_send("data: {\"event\":\"end\"}\n\n".to_string()); info!(target: "positorium::server", event="stream_complete_multi", total_rows=cb.total_rows, "multi-search streaming finished"); },
+                            Err(e) => { let err=serde_json::json!({"event":"error","error": format!("{}", e)}); let _=tx.blocking_send(format!("data: {}\n\n", err)); let _=tx.blocking_send("data: {\"event\":\"multi_end\"}\n\n".to_string()); let _=tx.blocking_send("data: {\"event\":\"end\"}\n\n".to_string()); warn!(target: "positorium::server", error=%e, event="stream_error_multi", "multi-search streaming error"); }
                         }
                     });
                     let rx_stream = tokio_stream::wrappers::ReceiverStream::new(rx)
@@ -175,7 +175,7 @@ pub fn router(interface: Arc<QueryInterface>) -> Router {
                     (StatusCode::OK, serde_json::to_string(&body).unwrap())
                 }
                 Err(e) => {
-                    let is_parse = matches!(e, crate::error::BarecladError::Parse { .. });
+                    let is_parse = matches!(e, crate::error::DatabaseError::Parse { .. });
                     let status = if is_parse { StatusCode::BAD_REQUEST } else { StatusCode::INTERNAL_SERVER_ERROR };
                     let msg = format!("{e}");
                     warn!(%msg, code=%status.as_u16(), "query error");

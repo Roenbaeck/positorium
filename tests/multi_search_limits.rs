@@ -1,5 +1,5 @@
-use bareclad::construct::{Database, PersistenceMode};
-use bareclad::traqula::Engine;
+use positorium::construct::{Database, PersistenceMode};
+use positorium::traqula::Engine;
 
 // Verifies that each search command applies its own LIMIT independently.
 // Script under test:

@@ -1,6 +1,6 @@
-//! Bareclad – a lightweight experimental implementation of Transitional Modeling concepts.
+//! Positorium – a lightweight experimental implementation of Transitional Modeling concepts.
 //!
-//! Bareclad centers on the *posit* concept: a proposition of the form
+//! Positorium centers on the *posit* concept: a proposition of the form
 //! `(AppearanceSet, Value, Time)`, where:
 //! * A [`construct::Thing`] is an opaque identity (a simple `u64`).
 //! * A [`construct::Role`] names a semantic placeholder a thing can occupy.
@@ -36,7 +36,7 @@
 //!
 //! ## Quick Start
 //! ```
-//! use bareclad::{construct::{Database, PersistenceMode}, traqula::Engine};
+//! use positorium::{construct::{Database, PersistenceMode}, traqula::Engine};
 //! let db = Database::new(PersistenceMode::InMemory).unwrap();
 //! let engine = Engine::new(&db);
 //! engine.execute("add role person; add posit [{(+a, person)}, \"Alice\", @NOW];");

@@ -1,4 +1,4 @@
-# The Philosophical Foundations of Bareclad
+# The Philosophical Foundations of Positorium
 
 ## What Needs to Be Agreed Upon
 
@@ -78,4 +78,4 @@ It can also answer novel questions:
 -   Which individuals have contradicted themselves?
 -   When was a particular constraint in place?
 
-Bareclad is the realization of such a database, written in Rust, bringing the power of Transitional Modeling to life.
+Positorium is the realization of such a database, written in Rust, bringing the power of Transitional Modeling to life.

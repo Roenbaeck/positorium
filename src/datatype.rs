@@ -12,7 +12,7 @@
 //! ```
 //! use rusqlite::types::{ValueRef, ToSql, ToSqlOutput};
 //! use std::fmt;
-//! use bareclad::datatype::DataType;
+//! use positorium::datatype::DataType;
 //! #[derive(Eq, PartialEq, Hash)]
 //! struct MyCount(i64);
 //! impl fmt::Display for MyCount { fn fmt(&self, f:&mut fmt::Formatter)->fmt::Result { write!(f, "{}", self.0) } }
@@ -89,10 +89,10 @@ impl DataType for Certainty {
     const DATA_TYPE: &'static str = "Certainty";
     fn convert(value: &ValueRef) -> Certainty {
         let raw_i64 = value.as_i64().unwrap_or_else(|e| {
-            panic!("[bareclad][restore] Expected integer for Certainty, got error: {e:?}")
+            panic!("[positorium][restore] Expected integer for Certainty, got error: {e:?}")
         });
         let alpha = i8::try_from(raw_i64).unwrap_or_else(|e| {
-            panic!("[bareclad][restore] Certainty value out of i8 range (raw={raw_i64}) -> {e:?}")
+            panic!("[positorium][restore] Certainty value out of i8 range (raw={raw_i64}) -> {e:?}")
         });
         Certainty { alpha }
     }
@@ -103,7 +103,7 @@ impl DataType for String {
     fn convert(value: &ValueRef) -> String {
         match value.as_str() {
             Ok(s) => s.to_string(),
-            Err(e) => panic!("[bareclad][restore] Failed to read persisted String value: {e:?}"),
+            Err(e) => panic!("[positorium][restore] Failed to read persisted String value: {e:?}"),
         }
     }
 }
@@ -112,10 +112,10 @@ impl DataType for NaiveDateTime {
     const DATA_TYPE: &'static str = "NaiveDateTime";
     fn convert(value: &ValueRef) -> NaiveDateTime {
         let raw = value.as_str().unwrap_or_else(|e| {
-            panic!("[bareclad][restore] NaiveDateTime not stored as text: {e:?}")
+            panic!("[positorium][restore] NaiveDateTime not stored as text: {e:?}")
         });
         NaiveDateTime::from_str(raw).unwrap_or_else(|e| {
-            panic!("[bareclad][restore] Failed to parse NaiveDateTime from '{raw}': {e:?}")
+            panic!("[positorium][restore] Failed to parse NaiveDateTime from '{raw}': {e:?}")
         })
     }
 }
@@ -125,9 +125,9 @@ impl DataType for NaiveDate {
     fn convert(value: &ValueRef) -> NaiveDate {
         let raw = value
             .as_str()
-            .unwrap_or_else(|e| panic!("[bareclad][restore] NaiveDate not stored as text: {e:?}"));
+            .unwrap_or_else(|e| panic!("[positorium][restore] NaiveDate not stored as text: {e:?}"));
         NaiveDate::from_str(raw).unwrap_or_else(|e| {
-            panic!("[bareclad][restore] Failed to parse NaiveDate from '{raw}': {e:?}")
+            panic!("[positorium][restore] Failed to parse NaiveDate from '{raw}': {e:?}")
         })
     }
 }
@@ -137,7 +137,7 @@ impl DataType for i64 {
     fn convert(value: &ValueRef) -> i64 {
         value
             .as_i64()
-            .unwrap_or_else(|e| panic!("[bareclad][restore] Failed to read i64 value: {e:?}"))
+            .unwrap_or_else(|e| panic!("[positorium][restore] Failed to read i64 value: {e:?}"))
     }
 }
 impl DataType for Decimal {
@@ -146,10 +146,10 @@ impl DataType for Decimal {
     fn convert(value: &ValueRef) -> Decimal {
         let raw = value
             .as_str()
-            .unwrap_or_else(|e| panic!("[bareclad][restore] Decimal not stored as text: {e:?}"));
+            .unwrap_or_else(|e| panic!("[positorium][restore] Decimal not stored as text: {e:?}"));
         match BigDecimal::from_str(raw) {
             Ok(d) => Decimal(d),
-            Err(e) => panic!("[bareclad][restore] Failed to parse Decimal from '{raw}': {e:?}"),
+            Err(e) => panic!("[positorium][restore] Failed to parse Decimal from '{raw}': {e:?}"),
         }
     }
 }
@@ -159,10 +159,10 @@ impl DataType for JSON {
     fn convert(value: &ValueRef) -> JSON {
         let raw = value
             .as_str()
-            .unwrap_or_else(|e| panic!("[bareclad][restore] JSON not stored as text: {e:?}"));
+            .unwrap_or_else(|e| panic!("[positorium][restore] JSON not stored as text: {e:?}"));
         match Json::from_str(raw) {
             Ok(j) => JSON(j),
-            Err(e) => panic!("[bareclad][restore] Failed to parse JSON from '{raw}': {e:?}"),
+            Err(e) => panic!("[positorium][restore] Failed to parse JSON from '{raw}': {e:?}"),
         }
     }
 }
@@ -172,12 +172,12 @@ impl DataType for Time {
     fn convert(value: &ValueRef) -> Time {
         let raw = value
             .as_str()
-            .unwrap_or_else(|e| panic!("[bareclad][restore] Time not stored as text: {e:?}"));
+            .unwrap_or_else(|e| panic!("[positorium][restore] Time not stored as text: {e:?}"));
         // Try persisted canonical formats first, then fall back to script literals.
         match Time::parse_persisted(raw) {
             Some(t) => t,
             None => parse_time(raw).unwrap_or_else(|| {
-                panic!("[bareclad][restore] Failed to parse Time literal '{raw}' from persistence (no recognized format)")
+                panic!("[positorium][restore] Failed to parse Time literal '{raw}' from persistence (no recognized format)")
             }),
         }
     }
@@ -256,7 +256,7 @@ The master will certainly lose.
 ///
 /// # Example
 /// ```
-/// use bareclad::datatype::Certainty;
+/// use positorium::datatype::Certainty;
 /// let a = Certainty::new(0.30); // +30%
 /// let b = Certainty::new(-0.20); // -20%
 /// // By the non-contradictory inequality (#negatives + sum(alpha) <= 1),
@@ -299,14 +299,14 @@ impl Certainty {
     ///
     /// Donna's example: +0.25 and -0.75 yields 0.5, which is ≤ 1.
     /// ```
-    /// use bareclad::datatype::Certainty;
+    /// use positorium::datatype::Certainty;
     /// let s1 = [Certainty::new(0.25), Certainty::new(-0.75)];
     /// assert!(Certainty::consistent(&s1));
     /// ```
     ///
     /// Twenty 95% negative assertions remain non-contradictory, but the 21st does not.
     /// ```
-    /// use bareclad::datatype::Certainty;
+    /// use positorium::datatype::Certainty;
     /// let twenty = vec![Certainty::new(-0.95); 20];
     /// assert!(Certainty::consistent(&twenty));
     /// let twenty_one = vec![Certainty::new(-0.95); 21];
@@ -546,7 +546,7 @@ impl Time {
             Ok(dt) => Time {
                 moment: TimeType::DateTime(dt),
             },
-            Err(e) => panic!("[bareclad][time] Failed to parse datetime '{d}': {e}"),
+            Err(e) => panic!("[positorium][time] Failed to parse datetime '{d}': {e}"),
         }
     }
     /// Creates a `Time` from an existing `NaiveDateTime` (internal helper to avoid double parsing)

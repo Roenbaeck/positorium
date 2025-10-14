@@ -1,5 +1,5 @@
-use bareclad::construct::{Database, PersistenceMode};
-use bareclad::traqula::Engine;
+use positorium::construct::{Database, PersistenceMode};
+use positorium::traqula::Engine;
 
 fn setup() -> Engine<'static> {
     // Create a static DB for test scope (lifetime workaround: leak Box)
