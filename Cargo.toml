@@ -3,6 +3,7 @@ name = "positorium"
 version = "0.1.4"
 edition = "2024"
 authors = ["Lars Rönnbäck <lars@positorium.com>"]
+license = "MIT OR Apache-2.0"
 
 [dependencies]
 # chrono provides various data types for time
