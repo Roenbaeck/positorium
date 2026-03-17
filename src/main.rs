@@ -2,6 +2,8 @@
 
 // =========== TESTING BELOW ===========
 
+#![allow(unused_imports)]
+#[cfg(feature = "cli")]
 use config::*;
 use std::collections::HashMap;
 use std::fs::{read_to_string, remove_file};
@@ -12,6 +14,7 @@ use positorium::traqula::Engine;
 use positorium::error::{DatabaseError, Result};
 use std::sync::Arc;
 
+#[cfg(feature = "cli")]
 #[tokio::main]
 async fn main() {
     let _ = tracing_subscriber::fmt()
@@ -23,6 +26,12 @@ async fn main() {
     }
 }
 
+#[cfg(not(feature = "cli"))]
+fn main() {
+    println!("Positorium CLI is disabled. Enable the 'cli' feature to use it.");
+}
+
+#[cfg(feature = "cli")]
 async fn real_main() -> Result<()> {
     let settings = Config::builder()
         .add_source(File::with_name("positorium.json"))
@@ -88,9 +97,12 @@ async fn real_main() -> Result<()> {
         }
     }
     // Minimal informational output (always show integrity ledger head if available)
-    if let Ok(p) = db.persistor.lock() {
-        if let Some((head, count)) = p.current_superhash() {
-            println!("Integrity ledger head: {} ({} posits)", head, count);
+    #[cfg(feature = "persistence")]
+    {
+        if let Ok(p) = db.persistor.lock() {
+            if let Some((head, count)) = p.current_superhash() {
+                println!("Integrity ledger head: {} ({} posits)", head, count);
+            }
         }
     }
     // Derive listen interface & port (optional in config)

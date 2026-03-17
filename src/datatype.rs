@@ -10,16 +10,21 @@
 //! To add a new logical value type implement the trait for your type and make
 //! sure it satisfies the required bounds. Example (toy wrapper around `i64`):
 //! ```
+//! # #[cfg(feature = "persistence")]
+//! # {
 //! use rusqlite::types::{ValueRef, ToSql, ToSqlOutput};
+//! # }
 //! use std::fmt;
 //! use positorium::datatype::DataType;
 //! #[derive(Eq, PartialEq, Hash)]
 //! struct MyCount(i64);
 //! impl fmt::Display for MyCount { fn fmt(&self, f:&mut fmt::Formatter)->fmt::Result { write!(f, "{}", self.0) } }
+//! #[cfg(feature = "persistence")]
 //! impl ToSql for MyCount { fn to_sql(&self)->rusqlite::Result<ToSqlOutput<'_>> { Ok(ToSqlOutput::from(self.0)) } }
 //! impl DataType for MyCount {
 //!     const UID: u8 = 250; // choose a free id
 //!     const DATA_TYPE: &'static str = "MyCount";
+//!     #[cfg(feature = "persistence")]
 //!     fn convert(v:&ValueRef)->Self { MyCount(v.as_i64().unwrap()) }
 //! }
 //! assert_eq!(MyCount(3).data_type(), "MyCount");
@@ -39,6 +44,7 @@
 //! Adding a new [`DataType`] also requires updating restoration logic in
 //! `persist.rs` (see MAINTENANCE comments there).
 // used for persistence
+#[cfg(feature = "persistence")]
 use rusqlite::types::{FromSql, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
 
 // used for timestamps in the database
@@ -66,6 +72,7 @@ use crate::traqula::parse_time;
 /// Implementors must provide a stable numeric `UID` and textual name
 /// `DATA_TYPE`. These are persisted so changing them breaks backward
 /// compatibility.
+#[cfg(feature = "persistence")]
 pub trait DataType: fmt::Display + Eq + Hash + Send + Sync + ToSql {
     /// Stable numeric identifier for catalog persistence.
     const UID: u8;
@@ -83,10 +90,27 @@ pub trait DataType: fmt::Display + Eq + Hash + Send + Sync + ToSql {
     }
 }
 
+#[cfg(not(feature = "persistence"))]
+pub trait DataType: fmt::Display + Eq + Hash + Send + Sync {
+    /// Stable numeric identifier for catalog persistence.
+    const UID: u8;
+    /// Stable human readable name stored in persistence.
+    const DATA_TYPE: &'static str;
+    /// Returns the textual data type name.
+    fn data_type(&self) -> &'static str {
+        Self::DATA_TYPE
+    }
+    /// Returns the numeric identifier.
+    fn identifier(&self) -> u8 {
+        Self::UID
+    }
+}
+
 // ------------- Data Types --------------
 impl DataType for Certainty {
     const UID: u8 = 1;
     const DATA_TYPE: &'static str = "Certainty";
+    #[cfg(feature = "persistence")]
     fn convert(value: &ValueRef) -> Certainty {
         let raw_i64 = value.as_i64().unwrap_or_else(|e| {
             panic!("[positorium][restore] Expected integer for Certainty, got error: {e:?}")
@@ -100,6 +124,7 @@ impl DataType for Certainty {
 impl DataType for String {
     const UID: u8 = 2;
     const DATA_TYPE: &'static str = "String";
+    #[cfg(feature = "persistence")]
     fn convert(value: &ValueRef) -> String {
         match value.as_str() {
             Ok(s) => s.to_string(),
@@ -110,6 +135,7 @@ impl DataType for String {
 impl DataType for NaiveDateTime {
     const UID: u8 = 3;
     const DATA_TYPE: &'static str = "NaiveDateTime";
+    #[cfg(feature = "persistence")]
     fn convert(value: &ValueRef) -> NaiveDateTime {
         let raw = value.as_str().unwrap_or_else(|e| {
             panic!("[positorium][restore] NaiveDateTime not stored as text: {e:?}")
@@ -122,6 +148,7 @@ impl DataType for NaiveDateTime {
 impl DataType for NaiveDate {
     const UID: u8 = 4;
     const DATA_TYPE: &'static str = "NaiveDate";
+    #[cfg(feature = "persistence")]
     fn convert(value: &ValueRef) -> NaiveDate {
         let raw = value
             .as_str()
@@ -134,6 +161,7 @@ impl DataType for NaiveDate {
 impl DataType for i64 {
     const UID: u8 = 5;
     const DATA_TYPE: &'static str = "i64";
+    #[cfg(feature = "persistence")]
     fn convert(value: &ValueRef) -> i64 {
         value
             .as_i64()
@@ -143,6 +171,7 @@ impl DataType for i64 {
 impl DataType for Decimal {
     const UID: u8 = 6;
     const DATA_TYPE: &'static str = "Decimal";
+    #[cfg(feature = "persistence")]
     fn convert(value: &ValueRef) -> Decimal {
         let raw = value
             .as_str()
@@ -156,6 +185,7 @@ impl DataType for Decimal {
 impl DataType for JSON {
     const UID: u8 = 7;
     const DATA_TYPE: &'static str = "JSON";
+    #[cfg(feature = "persistence")]
     fn convert(value: &ValueRef) -> JSON {
         let raw = value
             .as_str()
@@ -169,6 +199,7 @@ impl DataType for JSON {
 impl DataType for Time {
     const UID: u8 = 8;
     const DATA_TYPE: &'static str = "Time";
+    #[cfg(feature = "persistence")]
     fn convert(value: &ValueRef) -> Time {
         let raw = value
             .as_str()
@@ -196,11 +227,13 @@ impl JSON {
         }
     }
 }
+#[cfg(feature = "persistence")]
 impl ToSql for JSON {
     fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
         Ok(ToSqlOutput::from(self.0.to_string()))
     }
 }
+#[cfg(feature = "persistence")]
 impl FromSql for JSON {
     fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
         rusqlite::Result::Ok(JSON(Json::from_str(value.as_str().unwrap()).unwrap()))
@@ -361,11 +394,13 @@ impl<'a> From<&'a Certainty> for f64 {
         r.alpha as f64 / 100f64
     }
 }
+#[cfg(feature = "persistence")]
 impl ToSql for Certainty {
     fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
         Ok(ToSqlOutput::from(self.alpha))
     }
 }
+#[cfg(feature = "persistence")]
 impl FromSql for Certainty {
     fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
         rusqlite::Result::Ok(Certainty {
@@ -391,6 +426,7 @@ impl fmt::Display for Decimal {
         write!(f, "{}", self.0)
     }
 }
+#[cfg(feature = "persistence")]
 impl FromSql for Decimal {
     fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
         rusqlite::Result::Ok(Decimal(
@@ -398,6 +434,7 @@ impl FromSql for Decimal {
         ))
     }
 }
+#[cfg(feature = "persistence")]
 impl ToSql for Decimal {
     fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
         Ok(ToSqlOutput::from(self.0.to_string()))
@@ -622,6 +659,7 @@ impl fmt::Display for Time {
         }
     }
 }
+#[cfg(feature = "persistence")]
 impl ToSql for Time {
     fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
         Ok(ToSqlOutput::from(self.to_string()))

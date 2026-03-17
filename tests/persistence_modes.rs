@@ -9,10 +9,12 @@ fn in_memory_mode_allows_basic_operations() {
     let (appearance, _) = db.create_apperance(*thing, role);
     let (_aset, _) = db.create_appearance_set(vec![appearance]);
     // No ledger head should exist (no persistence)
+    #[cfg(feature = "persistence")]
     assert!(db.persistor.lock().unwrap().current_superhash().is_none());
 }
 
 #[test]
+#[cfg(feature = "persistence")]
 fn file_mode_persists_and_has_ledger() {
     // Use a temp path; reuse the same file to ensure ledger creation
     let path = "test_positorium_temp.db".to_string();

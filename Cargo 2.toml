@@ -1,0 +1,65 @@
+[package]
+name = "positorium"
+version = "0.1.4"
+edition = "2024"
+authors = ["Lars Rönnbäck <lars@positorium.com>"]
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+# chrono provides various data types for time
+chrono = "0.4.38"
+# bimap is a bidirectional hashmap, so lookups can be done both from left and right
+bimap = "0.6.3"
+# typemap holds one value per type of key, useful for Posit<V,T>
+# pest is a parser used when parsing Traqula
+pest = "2.8"
+pest_derive = "2.8"
+# config lets you read a separate config file 
+config = "0.15.18"
+# the "standard" regular expression package
+regex = "1.10"
+thiserror = "2.0"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+axum = { version = "0.8.6", features = ["ws"] }
+tokio-stream = "0.1"
+futures-util = "0.3"
+tower-http = { version = "0.6", features = ["cors"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# since every posit is a thing in itself we can use bitsets to "join" them
+# the "roaring bitmaps" seem to have the best ergonomics 
+roaring = "0.11"
+# we will use a fast hashing algo for hashmaps and hashsets where keys are not Things
+seahash = "4.1.0"
+# rusqlite for the persistence layer
+rusqlite = { version = "0.37", features = ["chrono", "bundled"] }
+# Connection pool for SQLite
+# for decimal numbers of arbitrary size
+bigdecimal = "0.4"
+# for JSON data type
+jsondata = "0.8.1"
+# so regular expressions don't have to be recompiled 
+lazy_static = "1.5"
+# cryptographic hashing for tamper-evident ledger (fast and secure)
+blake3 = "1.8.2"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.20", features = ["fmt", "env-filter"] }
+
+
+# ---- THESE MAY BE USED LATER -----
+#jql = "3.0.4"
+#serde = "1.0.130"
+#serde_json = "1.0.72"
+#chumsky = "0.7"
+# https://play.rust-lang.org/?version=nightly&mode=debug&edition=2021&gist=e93f05c877b6dda664a60cf8015e3d8d
+#crossbeam = "0.8.1"
+
+# logos is a lexer used when parsing Traqula
+#logos = "0.12"
+
+[dev-dependencies]
+criterion = "0.7"
+
+[[bench]]
+name = "benchmark"
+harness = false

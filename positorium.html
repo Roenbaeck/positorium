@@ -28,6 +28,7 @@
           <label>Timeout <input type="number" id="timeout" min="0" step="100" placeholder="ms"></label>
           <label><input type="checkbox" id="autoScroll" checked> Auto-scroll to latest</label>
           <label><input type="checkbox" id="streamMode"> Stream results</label>
+          <label><input type="checkbox" id="wasmMode"> Local WASM</label>
         </div>
         <div id="statusBar"></div>
         <progress id="progress" max="100" value="0"></progress>
@@ -74,6 +75,7 @@ const els = {
   jsonOut: document.getElementById('jsonOut'),
   autoScroll: document.getElementById('autoScroll'),
   streamMode: document.getElementById('streamMode'),
+  wasmMode: document.getElementById('wasmMode'),
   timeout: document.getElementById('timeout'),
   perf: document.getElementById('perf'),
   progress: document.getElementById('progress'),
@@ -410,6 +412,43 @@ function setStatus(msg, cls='') {
     }
   }
 }
+let wasmEngine = null;
+async function runWasm(script, started) {
+  try {
+    if (!wasmEngine) {
+      setStatus('Initializing WASM engine...');
+      const pkg = await import('./pkg/positorium.js');
+      const { WasmEngine } = pkg;
+      await pkg.default();
+      wasmEngine = new WasmEngine();
+    }
+    const output = wasmEngine.execute(script);
+    els.progress.value = 80;
+    
+    // Simple text-to-table parser for WasmEngine.execute output
+    const lines = output.trim().split('\n');
+    let columns = [];
+    let rows = [];
+    if (lines.length > 0) {
+      columns = lines[0].split('\t');
+      // Skip separator line if present (contains dashes)
+      const startRow = (lines.length > 1 && lines[1].includes('---')) ? 2 : 1;
+      for (let i = startRow; i < lines.length; i++) {
+        if (lines[i].startsWith('... (limited)')) continue;
+        rows.push(lines[i].split('\t'));
+      }
+    }
+
+    buildTable(columns, rows, []);
+    const ms = (performance.now() - started).toFixed(2);
+    els.perf.textContent = `WASM local | execution ${ms} ms | rows ${rows.length}`;
+    els.jsonOut.textContent = output;
+    setStatus('OK');
+  } catch (e) {
+    setStatus('WASM error: ' + e, 'err');
+    console.error(e);
+  }
+}
 function escapeHtml(s) { return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c])); }
 function buildTable(columns, rows, rowTypes) {
   els.tableHead.innerHTML = '';
@@ -505,6 +544,7 @@ async function runQuery() {
   const script = scriptEditor.innerText;
   console.log('script:', script);
   const doStream = els.streamMode.checked;
+  const doWasm = els.wasmMode.checked;
   const payload = { script: script, stream: doStream };
   const timeoutMs = parseInt(els.timeout.value || '0',10);
   els.runBtn.disabled = true; setStatus('Running...'); els.progress.style.visibility='visible'; els.progress.value=15;
@@ -512,7 +552,9 @@ async function runQuery() {
   if (controller) setTimeout(()=>controller.abort(), timeoutMs);
   const started = performance.now();
   try {
-    if (doStream) {
+    if (doWasm) {
+      await runWasm(script, started);
+    } else if (doStream) {
       await runStream(endpoint, payload, started, controller);
     } else {
       const res = await fetch(endpoint, {

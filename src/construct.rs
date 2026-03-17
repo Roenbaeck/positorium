@@ -31,6 +31,7 @@
 //! assert_eq!(posit.value(), &"Alice".to_string());
 //! ```
 use crate::datatype::{DataType, Time};
+#[cfg(feature = "persistence")]
 use crate::persist::Persistor;
 use tracing::{warn};
 use crate::error::DatabaseError;
@@ -517,18 +518,19 @@ pub enum PersistenceMode {
     /// Ephemeral engine: nothing is written, all data lost when dropped.
     InMemory,
     /// File-backed persistence using a SQLite database at the provided path.
+    #[cfg(feature = "persistence")]
     File(String),
 }
 
 impl PersistenceMode {
     /// Helper to derive a persistence mode from a flag + path string.
     /// If `enable` is false, returns InMemory regardless of path contents.
-    pub fn from_config(enable: bool, path: impl Into<String>) -> Self {
+    pub fn from_config(enable: bool, _path: impl Into<String>) -> Self {
+        #[cfg(feature = "persistence")]
         if enable {
-            PersistenceMode::File(path.into())
-        } else {
-            PersistenceMode::InMemory
+            return PersistenceMode::File(_path.into());
         }
+        PersistenceMode::InMemory
     }
 }
 
@@ -555,11 +557,13 @@ pub struct Database {
     /// Type-erased index: posit thing -> its time (for generic time filtering)
     pub posit_time_lookup: Arc<Mutex<HashMap<Thing, Time, ThingHasher>>>,
     // responsible for the the persistence layer
+    #[cfg(feature = "persistence")]
     pub persistor: Arc<Mutex<Persistor>>,
 }
 
 impl Database {
     pub fn new(mode: PersistenceMode) -> Result<Database, DatabaseError> {
+        #[cfg(feature = "persistence")]
         let persistor = match mode {
             PersistenceMode::InMemory => Persistor::new_no_persistence(),
             PersistenceMode::File(path) => Persistor::new_from_file(&path)?,
@@ -579,6 +583,7 @@ impl Database {
         let posit_thing_to_appearance_set_lookup: HashMap<Thing, Arc<AppearanceSet>, ThingHasher> =
             HashMap::default();
         let posit_time_lookup: HashMap<Thing, Time, ThingHasher> = HashMap::default();
+        #[cfg(feature = "persistence")]
         let persistor = persistor;
 
         // Create the database so that we can prime it before returning it
@@ -602,14 +607,18 @@ impl Database {
             )),
             role_name_to_data_type_lookup: Arc::new(Mutex::new(role_name_to_data_type_lookup)),
             posit_time_lookup: Arc::new(Mutex::new(posit_time_lookup)),
+            #[cfg(feature = "persistence")]
             persistor: Arc::new(Mutex::new(persistor)),
         };
 
         // Restore the existing database
-    if let Err(e) = database.persistor.lock().unwrap().restore_things(&database) { warn!(?e, "restore_things failed"); }
-    if let Err(e) = database.persistor.lock().unwrap().restore_roles(&database) { warn!(?e, "restore_roles failed"); }
-    if let Err(e) = database.persistor.lock().unwrap().restore_posits(&database) { warn!(?e, "restore_posits failed"); }
-    if let Err(e) = database.persistor.lock().unwrap().verify_integrity() { warn!(?e, "verify_integrity reported issue"); }
+    #[cfg(feature = "persistence")]
+    {
+        if let Err(e) = database.persistor.lock().unwrap().restore_things(&database) { warn!(?e, "restore_things failed"); }
+        if let Err(e) = database.persistor.lock().unwrap().restore_roles(&database) { warn!(?e, "restore_roles failed"); }
+        if let Err(e) = database.persistor.lock().unwrap().restore_posits(&database) { warn!(?e, "restore_posits failed"); }
+        if let Err(e) = database.persistor.lock().unwrap().verify_integrity() { warn!(?e, "verify_integrity reported issue"); }
+    }
 
         // Reserve some roles that will be necessary for implementing features
         // commonly found in many other (including non-tradtional) databases.
@@ -674,6 +683,7 @@ impl Database {
     }
     pub fn create_thing(&self) -> Arc<Thing> {
         let thing = self.thing_generator.lock().unwrap().generate();
+        #[cfg(feature = "persistence")]
         if let Err(e) = self.persistor.lock().unwrap().persist_thing(&thing) { warn!(?e, "persist_thing failed"); }
         Arc::new(thing)
     }
@@ -687,8 +697,11 @@ impl Database {
         let (kept_role, previously_kept) =
             self.keep_role(Role::new(role_thing, role_name, reserved));
         if !previously_kept {
-            if let Err(e) = self.persistor.lock().unwrap().persist_thing(&kept_role.role()) { warn!(?e, "persist_thing(role) failed"); }
-            if let Err(e) = self.persistor.lock().unwrap().persist_role(&kept_role) { warn!(?e, "persist_role failed"); }
+            #[cfg(feature = "persistence")]
+            {
+                if let Err(e) = self.persistor.lock().unwrap().persist_thing(&kept_role.role()) { warn!(?e, "persist_thing(role) failed"); }
+                if let Err(e) = self.persistor.lock().unwrap().persist_role(&kept_role) { warn!(?e, "persist_role failed"); }
+            }
         } else {
             self.thing_generator.lock().unwrap().release(role_thing);
         }
@@ -777,8 +790,11 @@ impl Database {
         let (kept_posit, previously_kept) =
             self.keep_posit(Posit::new(posit_thing, appearance_set, value, time));
         if !previously_kept {
-            if let Err(e) = self.persistor.lock().unwrap().persist_thing(&kept_posit.posit()) { warn!(?e, "persist_thing(posit) failed"); }
-            if let Err(e) = self.persistor.lock().unwrap().persist_posit(&kept_posit) { warn!(?e, "persist_posit failed"); }
+            #[cfg(feature = "persistence")]
+            {
+                if let Err(e) = self.persistor.lock().unwrap().persist_thing(&kept_posit.posit()) { warn!(?e, "persist_thing(posit) failed"); }
+                if let Err(e) = self.persistor.lock().unwrap().persist_posit(&kept_posit) { warn!(?e, "persist_posit failed"); }
+            }
         } else {
             self.thing_generator.lock().unwrap().release(posit_thing);
         }

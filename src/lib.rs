@@ -63,7 +63,11 @@
 pub mod construct;
 pub mod datatype;
 pub mod interface;
+#[cfg(feature = "persistence")]
 pub mod persist;
 pub mod traqula;
 pub mod error;
+#[cfg(feature = "server")]
 pub mod server;
+#[cfg(feature = "wasm")]
+pub mod wasm;
