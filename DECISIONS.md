@@ -40,6 +40,46 @@ storage interfaces, error propagation, and single-owner execution.
 
 ---
 
+## Established Value Philosophy
+
+**Status:** Accepted on 2026-08-20
+
+Positorium uses a WYSIWYG value model. A value's user-visible literal is logical
+data; an internal datatype or codec is not. The engine may inspect a literal and
+select the most compact lossless encoding, including different encodings for
+small and large numbers, provided retrieval reconstructs the entered value as
+defined by the lexical-fidelity contract.
+
+Keep these layers separate:
+
+1. **Literal representation:** the user-visible value and its expressed
+  precision, scale, spelling, or structure.
+2. **Semantic interpretation:** nominal and possible-value meanings used by
+  comparison operators where the literal family supports them.
+3. **Physical codec:** an invisible, versioned storage optimization that may
+  change without changing proposition identity or query behavior.
+4. **Constraint:** an optional, subjective rule describing what values are
+  expected or permitted in a modeling context. Constraints, not datatypes,
+  express conformance.
+
+The governing round-trip law is:
+
+```text
+render(decode(encode(literal))) = literal
+```
+
+Physical codec tags, integer widths, compression choices, and codec versions are
+excluded from proposition identity. Re-encoding or compacting a value must not
+create a new posit. User-facing Traqula does not expose casts, storage types, or
+datatype declarations merely to constrain data.
+
+Still unresolved: whether lexical fidelity is byte-for-byte for the complete
+value token (including leading zeros, explicit signs, JSON whitespace/key order,
+and escape choices) or preserves only agreed meaningful presentation metadata.
+Whitespace and comments outside the value token are not part of the value.
+
+---
+
 ## Core Model
 
 ### D001: Role Identity And Names
@@ -93,7 +133,7 @@ identical propositions different.
 
 **Options:**
 
-- A. Proposition equality is exactly `(AppearanceSet, TypedValue, Time)`. The
+- A. Proposition equality is exactly `(AppearanceSet, LiteralValue, Time)`. The
   canonical posit Thing is assigned to that proposition and excluded from
   equality and ordering.
 - B. Every append creates a distinct posit, even when all proposition fields are
@@ -105,25 +145,23 @@ assertion posits should represent repeated observation, provenance, or evidence.
 
 **Questions to settle:**
 
-- Are `10` as Integer and `10.0` as Decimal different propositions?
-- Does canonical JSON equality use a canonical binary/text representation or the
-  datatype's structural equality?
+- Which portions of the entered value token belong to `LiteralValue` identity?
+- Are JSON whitespace, key order, and escape spelling proposition-significant?
 - Is an unasserted duplicate add completely invisible?
 
-**Suggestion:** A. Make the datatype part of the proposition, so `10` as Integer
-and `10.0` as Decimal are different propositions (comparison-level coercion is
-D017's concern, not identity). For JSON, define one canonical text form (sorted
-keys, minimal whitespace) used for equality, hashing, and persistence — today
-JSON hashes its `Display` output, which invites drift. A duplicate add returns
-the canonical posit and is otherwise invisible. Accepting A also requires fixing
-`Posit`'s derived `Ord`, which currently includes the identity field that
-`PartialEq` excludes (see TODO.md).
+**Suggestion:** A. `10` and `10.0` are different propositions because the literal
+preserves expressed precision, not because the engine assigned different storage
+types. Decide separately whether non-precision spelling such as `10`, `010`, and
+`+10`, or structurally equivalent JSON spellings, is also identity-bearing. A
+duplicate literal returns the canonical posit and is otherwise invisible.
+Accepting A also requires fixing `Posit`'s derived `Ord`, which currently includes
+the identity field that `PartialEq` excludes (see TODO.md).
 
 **Response:**
 
 - Choice:
-- Cross-datatype equality policy:
-- JSON equality policy:
+- Lexical-fidelity boundary:
+- JSON literal identity policy:
 - Reasoning:
 - Accepted on:
 
@@ -649,43 +687,69 @@ assert contrary evidence.
 - Reasoning:
 - Accepted on:
 
-### D017: Typed Comparison And Coercion
+### D017: Literal Interpretation And Comparison
 
 **Status:** Unresolved  
-**Blocks:** Predicates, posit equality, typed results
+**Blocks:** Predicates, posit equality, value results
 
 **Options:**
 
-- A. Datatypes remain distinct. Permit only explicitly listed lossless coercions,
-  such as Integer to Decimal for comparison, using exact arithmetic.
-- B. All numeric values share one logical equality domain.
-- C. No implicit cross-datatype comparisons.
+- A. Literal families provide hidden semantic interpretations and explicitly
+  supported relations. Queries use those relations without exposing storage
+  datatypes or casts.
+- B. Compare only identical literal representations and leave all semantic
+  comparison to future constraint policies.
+- C. Treat every literal as text for comparison.
 - D. Another rule described in the response.
 
-**Recommendation:** A. This allows useful numeric queries without making persisted
-proposition identity ambiguous. Comparison equality need not imply posit equality.
+**Recommendation:** A. This preserves the WYSIWYG literal while allowing useful
+queries. Semantic comparison never changes literal or proposition identity.
+
+**Agreed operator semantics:**
+
+- `a = b` means nominal equality under a relation supported by the two literal
+  families. It may match values with different expressed precision, such as `6`
+  and `6.00`, without making those values identical propositions.
+- `a ?= b` means compatible with: the possible-value sets declared by the two
+  literal values intersect. It never uses a hidden epsilon or implementation-defined
+  tolerance. For two exact singleton values, compatibility reduces to nominal
+  equality.
+- Exact literal identity remains a separate relation. It compares all
+  identity-bearing presentation information; its Traqula syntax is still to be
+  chosen.
+- A literal family that cannot define compatible possible values must reject
+  `?=` or expose an explicit semantic relation rather than guessing.
+- Failed or unsupported interpretation is not an implicit string conversion.
+  Decide whether it is a predicate non-match or a query error, especially when a
+  role contains heterogeneous unconstrained values.
 
 **Questions to settle:**
 
 - Are strings ordered, or equality-only?
 - Is JSON structural equality supported?
-- Are datatype casts part of beta Traqula?
+- Does a constraint refine the possible-value interpretation used by `?=` or only
+  report conformance?
+- Does unsupported comparison yield false/unknown or fail the query?
 
-**Suggestion:** A. Coercion table: i64 ⇄ Decimal only, computed exactly via
-BigDecimal. Strings: equality only for beta (defer collation/ordering). JSON:
-structural equality, no ordering. No cast syntax in beta. The current evaluator
-compares numeric where-clause operands through `f64` with a `1e-9` epsilon
-(`cmp_numeric` in traqula.rs), which must be replaced with exact typed
-comparison to honor this decision (see TODO.md).
+**Suggestion:** A. Numeric literals compare nominally using an exact arbitrary-
+precision representation, regardless of whether a physical codec used a varint,
+fixed integer, or scaled coefficient. Strings use equality only for beta (defer
+collation/ordering). JSON nominal equality may be structural while exact literal
+identity remains presentation-sensitive. No user-visible cast syntax is needed.
+The current evaluator's `f64` conversion and `1e-9` epsilon must be removed.
 
 **Response:**
 
-- Choice:
-- Lossless coercion table:
+- Choice: Partial decision: `=` is nominal equality and `?=` is compatible with.
+- Supported cross-family semantic relations:
 - String ordering policy:
 - JSON comparison policy:
-- Cast syntax/policy:
-- Reasoning:
+- Constraint/interpretation interaction:
+- Unsupported-comparison behavior:
+- Exact literal identity syntax:
+- Reasoning: Preserve precision in proposition identity while allowing useful
+  value-level matching. Compatibility is denotational overlap, not approximate
+  equality with an arbitrary tolerance.
 - Accepted on:
 
 ### D018: Result Cardinality And Ordering
@@ -960,35 +1024,36 @@ a format change (see TODO.md).
 - Reasoning:
 - Accepted on:
 
-### D026: Datatype Registry And Codecs
+### D026: Value Codec Registry
 
 **Status:** Unresolved  
-**Blocks:** Typed value bytes, custom datatypes, migration
+**Blocks:** Lossless value bytes, replay, migration
 
 **Options:**
 
-- A. Beta supports a closed registry of built-in datatype UIDs and versioned
-  codecs. Unknown UIDs fail replay. Custom types are deferred.
-- B. Custom datatypes register a stable UUID/name and codec version in the catalog.
-- C. Persist all custom values through one generic byte/string datatype.
+- A. Beta supports a closed registry of hidden, versioned physical codecs. Every
+  codec losslessly reconstructs a logical literal; unknown required codecs fail
+  replay. User-facing datatypes and custom type declarations do not exist.
+- B. Use one raw UTF-8 literal codec for beta and add compact codecs later.
+- C. Allow plugins to register custom physical codecs before beta.
 - D. Another rule described in the response.
 
-**Recommendation:** A for beta. A plugin codec ABI and long-term format commitment
-would significantly increase the compatibility surface.
+**Recommendation:** A, with a raw literal fallback. A plugin codec ABI would
+significantly increase the compatibility surface and should be deferred.
 
-**Suggestion:** A. Registry: the `UID`/`DATA_TYPE` consts in datatype.rs plus a
-persisted catalog record validated on replay (today: Certainty=1, String=2,
-NaiveDateTime=3, NaiveDate=4, i64=5, Decimal=6, JSON=7, Time=8). Decide whether
-NaiveDate/NaiveDateTime remain value datatypes — they hold UIDs but have no
-restore arm, so such posits currently vanish on restart (see TODO.md). Unknown
-UID during replay is a hard failure; custom datatypes are deferred.
+**Suggestion:** A. Replace the current `DataType::UID` registry with storage-format
+codec identifiers. Codec choice is never part of posit equality or user-facing
+results and may change during migration or compaction. Preserve the literal's
+family and exact presentation independently of codec choice. Unknown required
+codec identifiers are a hard replay failure; custom codecs are deferred.
 
 **Response:**
 
 - Choice:
-- Built-in UID registry location:
+- Built-in codec registry location:
 - Codec versioning policy:
-- Custom datatype policy:
+- Raw literal fallback policy:
+- Custom codec policy:
 - Reasoning:
 - Accepted on:
 
@@ -1034,9 +1099,9 @@ removed together with the `rusqlite` dependency.
 
 **Options:**
 
-- A. Only high-level database, command, query, typed result, and storage configuration
-  APIs are beta-public. Keepers, lookups, parser internals, and physical storage
-  types are private or explicitly unstable.
+- A. Only high-level database, command, query, lossless literal result, and storage
+  configuration APIs are beta-public. Keepers, lookups, parser internals, and
+  physical storage types are private or explicitly unstable.
 - B. Keep the current internals public and apply semantic versioning to them.
 - C. Do not promise any Rust API stability during beta.
 
@@ -1044,8 +1109,8 @@ removed together with the `rusqlite` dependency.
 breaking users.
 
 **Suggestion:** A. Stable: a narrowed `Database` (construction + command/query
-entry points), the Traqula execution API, typed results, storage configuration,
-and the error type. Explicitly unstable or private: keepers, lookups,
+entry points), the Traqula execution API, lossless literal results, storage
+configuration, and the error type. Explicitly unstable or private: keepers, lookups,
 `ThingGenerator`, parser internals, and `Persistor` — all currently `pub` fields
 on `Database`. Fold the `create_apperance` → `create_appearance` rename into the
 same narrowing so the deprecation happens once.
@@ -1145,7 +1210,7 @@ Update this table as decisions are accepted.
 | D014 | Exact and open appearance matching | Unresolved | |
 | D015 | Query algebra required for beta | Unresolved | |
 | D016 | Negation and open-world semantics | Unresolved | |
-| D017 | Typed comparison and coercion | Unresolved | |
+| D017 | Literal interpretation and comparison | Unresolved | `=` nominal; `?=` compatible |
 | D018 | Result cardinality and ordering | Unresolved | |
 | D019 | Role and parameter syntax | Unresolved | |
 | D020 | Durable Thing allocation | Unresolved | |
@@ -1154,7 +1219,7 @@ Update this table as decisions are accepted.
 | D023 | Physical file set and consistency | Unresolved | |
 | D024 | Record framing and integrity | Unresolved | |
 | D025 | Recovery and corruption | Unresolved | |
-| D026 | Datatype registry and codecs | Unresolved | |
+| D026 | Value codec registry | Unresolved | |
 | D027 | Format evolution and migration | Unresolved | |
 | D028 | Stable Rust API surface | Unresolved | |
 | D029 | HTTP beta trust boundary | Unresolved | |

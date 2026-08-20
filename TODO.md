@@ -85,7 +85,7 @@ decision options are accepted.
 - [ ] **Specify the core model independently of Traqula and persistence.**
         - Define identity, equality, canonicalization, and ordering for every construct.
         - Formalize an appearance set as a finite partial function from Role to Thing,
-            and a posit proposition as `(AppearanceSet, TypedValue, Time)` with a
+            and a posit proposition as `(AppearanceSet, LiteralValue, Time)` with a
             separately assigned Thing identity.
         - Define role equality by immutable role identity while enforcing one
             canonical catalog name per role and one role per canonical name.
@@ -102,6 +102,18 @@ decision options are accepted.
             and symmetric collections require reified relation/membership identities.
         - Add canonical modeling examples for aliases, tags, memberships, and n-ary
             relations with repeated participant roles.
+- [ ] **Implement the WYSIWYG literal-value contract.**
+        - Preserve the user-visible literal and its expressed precision, scale,
+            spelling, or structure independently of its physical encoding.
+        - Specify the lexical-fidelity boundary: decide whether leading zeros,
+            explicit signs, JSON whitespace/key order, and escape spelling are
+            identity-bearing within a value token.
+        - Require `render(decode(encode(literal))) = literal` for every codec and
+            exclude codec choice, integer width, and compression from posit identity.
+        - Keep user-facing datatypes and casts out of the core model. Use constraints
+            to express contextual conformance requirements.
+        - Separate exact literal identity, nominal equality (`=`), and compatible
+            possible-value overlap (`?=`).
 - [ ] **Formalize temporal precision and ordering.**
         - Represent year, year-month, date, and datetime precision without discarding
             the uncertainty it conveys; prefer interval/granule semantics over
@@ -146,12 +158,12 @@ decision options are accepted.
 
 ## P0: Traqula Query Algebra
 
-Keep the posit-shaped notation, but define Traqula over a small typed algebra before
+Keep the posit-shaped notation, but define Traqula over a small semantic algebra before
 freezing its surface syntax. Every shorthand must have an equivalent expansion in
 this algebra.
 
-- [ ] **Define typed variable domains and declarative unification.**
-        - Distinguish Thing, Role, Posit, AppearanceSet, `Value<T>`, and Time variables
+- [ ] **Define structural variable domains and declarative unification.**
+    - Distinguish Thing, Role, Posit, AppearanceSet, Value, and Time variables
             and reject reuse of one variable across incompatible domains.
         - Use one unification rule for query variables: the first occurrence binds and
             repeated occurrences constrain, independent of pattern order.
@@ -174,19 +186,23 @@ this algebra.
         - Define grouping for snapshot reduction by the complete stored appearance
             set, even when the query pattern is open.
 - [ ] **Implement the beta query-algebra nucleus.**
-        - Provide typed scans, natural joins, selection, projection, union, safe
+    - Provide scans, natural joins, selection, projection, union, safe
             anti-join/`NOT EXISTS`, grouping/maximum, distinctness, ordering, and limit.
         - Define `NOT EXISTS` as absence of recorded evidence under an open-world
             model; it must never mean that the matched proposition is false.
         - Add OPTIONAL/left join only if beta use cases require it; its absence does
             not block the core snapshot algebra.
-- [ ] **Specify typed value comparison and result cells.**
-        - Preserve datatype identity in every projected cell across Rust, HTTP, SSE,
-            and WASM interfaces.
-        - Define exact coercion rules. Compare integers and decimals without conversion
-            through binary floating point, and do not infer JSON equality from display
-            text unless canonical JSON is the declared representation.
-        - Make unsupported ordering and cross-type comparisons explicit errors.
+- [ ] **Specify literal comparison and lossless result cells.**
+        - Return the entered literal representation consistently across Rust, HTTP,
+            SSE, and WASM; internal codec IDs are not user-facing result metadata.
+        - Define `=` as nominal equality under supported semantic interpretation and
+            `?=` as intersection of declared possible-value sets, never a hidden
+            epsilon or implementation-defined tolerance.
+        - Keep exact literal identity as a separate relation and choose its syntax.
+        - Compare numeric interpretations with exact arithmetic regardless of physical
+            integer/decimal codec, and define JSON nominal versus literal equality.
+        - Define whether unsupported semantic comparison is false/unknown or a query
+            error when unconstrained values are heterogeneous.
 - [ ] **Specify result cardinality and ordering.**
         - Choose and document set or bag semantics for joins and projection, with an
             explicit `DISTINCT` operation if bags are retained.
@@ -209,15 +225,17 @@ compact sequential writes and deterministic posit replay.
 - [ ] **Separate the engine from the storage implementation.**
         - Define a narrow append/replay/flush storage interface that returns all
             durability and corruption errors to the caller.
-        - Remove `rusqlite` types and conversion methods from the public `DataType`
-            contract.
+        - Replace the public `DataType` persistence contract with a storage-neutral
+            `LiteralValue`, semantic interpreter capabilities, and private codecs.
+        - Remove `rusqlite` types, storage UIDs, and conversion methods from the
+            logical value and query interfaces.
 - [ ] **Write the storage format specification before implementing it.**
         - Give every file a magic value, format version, byte order, and feature flags.
-    - Give the database and every member file the same immutable store UUID so a
-        role catalog, posit log, snapshot, or index from another store is rejected.
+        - Give the database and every member file the same immutable store UUID so a
+            role catalog, posit log, snapshot, or index from another store is rejected.
         - Give every record a type, version, sequence number, length, and checksum.
-        - Define stable binary encodings for identities, appearance sets, datatype
-            identifiers, values, and all time precisions.
+        - Define stable binary encodings for identities, appearance sets, hidden codec
+            identifiers, lossless literal payloads, and all time precisions.
         - Never use Rust memory layouts or `Display` output as persisted encodings.
 - [ ] **Store roles in a separate append-only catalog.**
         - Persist role identity, name, reserved status, and record version.
@@ -226,11 +244,14 @@ compact sequential writes and deterministic posit replay.
             reference and validate during replay.
         - Make a catalog entry durable before committing a posit that references it;
             an unused durable role is acceptable, but a dangling role reference is not.
-        - Define how datatype metadata and custom datatype codecs are registered and
-            versioned, whether in this catalog or another explicit catalog.
+        - Define where the closed registry of built-in physical codec identifiers and
+            versions lives; defer plugin/custom codecs beyond beta.
 - [ ] **Define the posit log record model.**
         - Persist posit identity, sorted appearances as `(thing, role)` identities,
-            datatype identifier, typed value bytes, and appearance time.
+            hidden value codec identifier, lossless literal payload, and appearance
+            time.
+        - Permit different physical codecs for small and large values without making
+            codec selection observable or proposition-significant.
         - Treat append sequence as physical storage order only, never as appearance
             time, assertion time, truth, preference, or a conflict tie-breaker.
         - Log canonical constructs rather than API calls. Re-adding an existing posit
@@ -253,7 +274,7 @@ compact sequential writes and deterministic posit replay.
 - [ ] **Implement deterministic recovery.**
         - Ignore or safely truncate only a torn, uncommitted tail record.
         - Refuse to serve on checksum failure or corruption in committed history.
-        - Reject unknown mandatory record versions and unknown datatypes rather than
+        - Reject unknown mandatory record versions and unknown required codecs rather than
             silently skipping data.
         - Rebuild the identity generator, keepers, and all indexes identically on
             every replay.
@@ -306,19 +327,23 @@ compact sequential writes and deterministic posit replay.
         - Correct public naming mistakes such as `create_apperance` through a planned
             deprecation rather than an unannounced break.
 - [ ] **Unify structured results.**
-        - Use one typed result model for Rust, HTTP, streaming, and WASM instead of
-            mixing structured rows with tab-separated text.
-- [ ] **Stabilize datatype identifiers and codecs.**
-        - Record the built-in UID registry and add checks that prevent reuse.
-        - Define how datatype codec versions are migrated and how unsupported custom
-            datatypes fail during replay.
+        - Use one lossless literal result model for Rust, HTTP, streaming, and WASM
+            instead of mixing normalized values, datatype names, and tab-separated text.
+- [ ] **Stabilize physical codec identifiers.**
+        - Record the hidden built-in codec registry and add checks that prevent ID reuse.
+        - Require every codec to reconstruct the same logical literal regardless of
+            storage optimization, migration, or compaction.
+        - Define codec migration and hard-failure behavior for unsupported codec IDs.
 
 ## P1: Beta Validation
 
 - [ ] **Storage contract tests.**
-        - Round-trip every datatype and temporal precision across restart.
+        - Round-trip every literal family, presentation edge case, and temporal
+            precision exactly across restart and across every applicable codec.
+        - Verify that physically different encodings of one literal have identical
+            proposition identity and query behavior.
         - Test empty files, duplicate records, unsupported versions, malformed
-            lengths, checksum failures, and unknown datatypes.
+            lengths, checksum failures, and unknown codecs.
         - Simulate truncation at every byte boundary near the log tail and verify that
             only uncommitted tail data can be discarded.
         - Verify role-catalog-before-posit ordering and SQLite import fidelity.
@@ -328,10 +353,11 @@ compact sequential writes and deterministic posit replay.
             result ordering where promised.
         - Cover exact versus open appearance-set matching, complete set/Role binding,
             variable-domain errors, lexical scope, pattern reordering, safe negation,
-            typed coercion, DISTINCT, and ordered LIMIT behavior.
+            literal identity, nominal `=`, compatible `?=`, DISTINCT, and ordered
+            LIMIT behavior.
 - [ ] **Core equality/property tests.**
         - Verify the `Eq`/`Hash` and `Eq`/`Ord` laws for Role, Appearance,
-            AppearanceSet, typed values, Time, and Posit.
+            AppearanceSet, literal values, Time, and Posit.
         - Verify that replay and import preserve proposition identity independently of
             record order and that no store-local identity collisions survive remapping.
 - [ ] **Concurrency and failure tests.**
@@ -373,9 +399,11 @@ compact sequential writes and deterministic posit replay.
 - [ ] **Write beta documentation.**
         - Update `TRAQULA.md` to distinguish history, ordinary snapshots, assertions,
             and assertion-resolution policies.
-        - Document exact/open set matching, typed query variables, posit identity
+        - Document exact/open set matching, structural query-variable domains, posit identity
             binding, script versus search scope, open-world negation, and result
             cardinality/order.
+        - Explain the WYSIWYG value model, hidden physical codecs, exact retrieval,
+            nominal `=`, compatible `?=`, and constraints as the conformance mechanism.
         - Correct examples that use a four-slot posit pattern, describe identity
             unions as role unions, or confuse a leading posit binder with an appearing
             Thing binder.

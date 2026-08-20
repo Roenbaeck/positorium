@@ -16,6 +16,40 @@ This is almost all we need, but it only expresses properties of an individual. W
 
 The solution is to use a structure where the first position contains a set of `(identity, role)` pairs. This resolves the ambiguity. For example: `[{(J42, girlfriend), (B43, boyfriend)}, "official", '2019']`. The second position is a value, and the third is the temporal determinator. We can consolidate properties into this format as well: `[{(J42, nickname)}, "Jen", '1988']`. The only difference is the number of pairs in the set. In Transitional Modeling, these structures are called **posits**.
 
+## What Values Preserve
+
+Positorium follows a WYSIWYG value philosophy: how a value was expressed can be
+part of the information. `10` and `10.00` have the same nominal numeric value,
+but the additional decimal places may communicate meaningful precision. They
+are therefore preserved as different literal values and can belong to different
+posits.
+
+This does not require users to declare database datatypes. Positorium may store a
+small integer, a large integer, or a scaled number using different compact binary
+encodings, but those physical choices are hidden. Retrieving a value must
+reconstruct its entered representation according to the value contract, and
+changing its physical encoding must not change the posit or its query behavior.
+
+Different questions require different relations between values:
+
+- **Literal identity** asks whether the information-bearing representations are
+	the same, including expressed precision.
+- **Nominal equality** asks whether they denote the same central value, so `10`
+	and `10.00` compare nominally equal.
+- **Compatibility** asks whether their represented possible-value sets overlap.
+	This is deliberate uncertainty reasoning, not an arbitrary floating-point
+	tolerance.
+
+Traqula's intended beta semantics use `=` for nominal equality and `?=` for
+compatibility. Exact literal-identity syntax and the boundary of lexical fidelity
+(for example, treatment of leading zeros and JSON whitespace) remain to be
+finalized before beta.
+
+If a model needs to require a particular kind of value, precision, unit, range,
+or cardinality, that requirement is a **constraint**, not a datatype declaration.
+Constraints can be subjective and temporal like other modeled information; the
+underlying posit remains faithfully recorded even when it does not conform.
+
 ## What Can Be Disagreed Upon
 
 Even if you understand what a posit is saying, it doesn’t mean you believe it. Many different opinions can be held about a single statement. To talk about posits themselves, we must give them identities. Let’s say `P1` is the identity for `[{(J42, girlfriend), (B43, boyfriend)}, "official", '2019']` and `P2` is for `[{(J42, nickname)}, "Jen", '1988']`. These identities allow us to create meta-posits.
