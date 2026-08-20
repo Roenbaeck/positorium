@@ -21,6 +21,65 @@ Beta does not mean an Internet-facing, production-ready service. Authentication,
 replication, distributed execution, and container packaging are outside this
 milestone unless they become necessary for a concrete deployment.
 
+## P0: Defects Found In Review (2026-08-20)
+
+Concrete issues observed in the current code while annotating DECISIONS.md.
+Several make existing roadmap items concrete; fix them regardless of which
+decision options are accepted.
+
+- [ ] **Equality/ordering law violations in core constructs.**
+        - `Role::Hash` hashes `name.to_uppercase()` and includes `reserved`, while
+            `PartialEq` compares `name` case-sensitively only (src/construct.rs). Equal
+            roles that differ in `reserved` hash differently, breaking `Eq`/`Hash`.
+        - `Posit` derives `Ord`/`PartialOrd` over all fields including the identity
+            `posit: Thing`, which the manual `PartialEq` excludes (src/construct.rs).
+        - `TimeType` derives `Ord` but hand-implements `PartialOrd`; the two disagree
+            (derived variant order versus cross-precision comparison), so sorting and
+            `<` give different answers. `partial_cmp` also returns `Equal` for values
+            `PartialEq` considers unequal, e.g. `Year(2024)` versus any date in 2024
+            (src/datatype.rs). Relevant to D007/D008.
+- [ ] **Value parsing/formatting bugs.**
+        - `Certainty` `Display` omits zero padding: alpha 5 renders as `0.5` instead
+            of `0.05` (and `-0.5` for `-0.05`) (src/datatype.rs).
+        - `parse_certainty("1%")` yields 100%: after stripping `%`, values with
+            absolute value <= 1 are treated as fractions (src/traqula.rs).
+        - `Time` `Display` for year-month lacks zero padding (`2024-5`), so the
+            persisted canonical text differs from the accepted `YYYY-MM` input form
+            (src/datatype.rs).
+- [ ] **Silent data loss and partial state on restore.**
+        - `restore_posits` silently skips unknown value types and has no arms for
+            `NaiveDateTime`/`NaiveDate` although both implement `DataType` (UIDs 3/4),
+            so such posits vanish on restart (src/persist.rs). Relevant to D025/D026.
+        - `Database::new` only logs warnings when `restore_things`/`restore_roles`/
+            `restore_posits`/`verify_integrity` fail and continues with partial state
+            (src/construct.rs).
+        - `verify_integrity` rewrites `LedgerHead` as a side effect of verification;
+            `current_superhash` unwraps connection/query errors (src/persist.rs).
+- [ ] **Panic paths reachable from scripts.**
+        - `RoleKeeper::get` unwraps an unknown role name; `add posit` with an unadded
+            role panics (src/construct.rs, src/traqula.rs).
+        - `Database::create_appearance_set` unwraps `AppearanceSet::new`, panicking on
+            a duplicate role in one appearance set (src/construct.rs).
+        - `Lookup::lookup` and `ThingLookup::lookup` unwrap missing keys
+            (src/construct.rs).
+- [ ] **Where-clause numerics go through binary floating point.**
+        - `cmp_numeric` compares via `f64` with a `1e-9` epsilon equality
+            (src/traqula.rs), contradicting the intended exact typed comparison (D017).
+- [ ] **`@NOW` is evaluated per occurrence.**
+        - `parse_time_constant` constructs `Time::new()` at every parse site, so two
+            `@NOW`s in one script differ (src/traqula.rs). Align with D011 once decided.
+- [ ] **Server/interface gaps.**
+        - `timeout_ms` is accepted and ignored (`let _timeout`, src/server.rs);
+            `QueryOptions::timeout` is only checked for zero before start
+            (src/interface.rs).
+        - CORS default is `allow_origin(Any)` (src/server.rs); tighten for the
+            trusted/local beta posture (D029).
+- [ ] **Repository hygiene.**
+        - Stray `Cargo 2.toml` at the repository root is a stale copy of an older
+            manifest; delete it.
+        - `.github/copilot-instructions.md` refers to `PositoriumError`, but the
+            error type is `DatabaseError` (src/error.rs); update the instructions.
+
 ## P0: Semantic Contracts
 
 - [ ] **Specify the core model independently of Traqula and persistence.**
