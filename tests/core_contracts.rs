@@ -80,7 +80,7 @@ fn snapshots_preserve_incomparable_and_equal_time_conflicts() {
     let engine = Engine::new(&db);
     let result = engine
         .execute_collect(
-            "add role state; add posit [{(+subject, state)}, \"broad\", '2024']; add posit [{(subject, state)}, \"specific-a\", '2024-05-06']; add posit [{(subject, state)}, \"specific-b\", '2024-05-06']; search [{(*, state)}, +value, *] as of @EOT return value;",
+            "add role state; add posit [{(+subject, state)}, \"broad\", '2024']; add posit [{(subject, state)}, \"specific-a\", '2024-05-06']; add posit [{(subject, state)}, \"specific-b\", '2024-05-06']; search [{(*, state), ...}, ?value, *] as of @EOT return ?value;",
         )
         .expect("snapshot query");
 

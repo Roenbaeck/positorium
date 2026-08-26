@@ -45,26 +45,26 @@ add posit [{(+sentinel, witness)}, "Sentinel Drone S9", '2025-06-18 22:21'],
           [{(sentinel, confidence)}, 65%, '2025-06-18 22:21'];
 
 /* Query 1: Latest mission status snapshot */
-search +m [{(*, mission)}, +mission_name, *],
-          [{(m, status)}, +latest_status, +status_time] as of @NOW
-where mission_name == "Chrono Museum Infiltration"
-return mission_name, latest_status, status_time;
+search [{(?m, mission), ...}, ?mission_name, *],
+       [{(?m, status), ...}, ?latest_status, ?status_time] as of @NOW
+where ?mission_name = "Chrono Museum Infiltration"
+return ?mission_name, ?latest_status, ?status_time;
 
 /* Query 2: Witness reports with at least 80% confidence */
-search +w [{(*, witness)}, +w_name, *],
-          [{(w, sighting)}, +report, +report_time],
-          [{(w, confidence)}, +confidence, *]
-where confidence >= 80%
-return w_name, report, confidence, report_time;
+search [{(?w, witness), ...}, ?w_name, *],
+       [{(?w, sighting), ...}, ?report, ?report_time],
+       [{(?w, confidence), ...}, ?confidence, *]
+where ?confidence >= 80%
+return ?w_name, ?report, ?confidence, ?report_time;
 
 /* Query 3: Mission status timeline up to vault breach */
-search +m [{(*, mission)}, "Chrono Museum Infiltration", *],
-          [{(m, status)}, +status, +t]
-where t <= '2025-06-18 22:12:00'
-return status, t;
+search [{(?m, mission), ...}, "Chrono Museum Infiltration", *],
+       [{(?m, status), ...}, ?status, ?t]
+where ?t <= '2025-06-18 22:12:00'
+return ?status, ?t;
 
 /* Query 4: Mission role assignments per agent */
-search [{(+agent_id, agent)}, +agent_name, *],
-       [{(agent_id, alias)}, +alias, *],
-       [{(agent_id, agent), (+mission_id, mission)}, +mission_role, +assigned_at]
-return agent_name, alias, mission_role, assigned_at;
+search [{(?agent_id, agent), ...}, ?agent_name, *],
+       [{(?agent_id, alias), ...}, ?alias, *],
+       [{(?agent_id, agent), (?mission_id, mission)}, ?mission_role, ?assigned_at]
+return ?agent_name, ?alias, ?mission_role, ?assigned_at;

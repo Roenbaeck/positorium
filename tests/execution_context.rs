@@ -16,7 +16,7 @@ fn now_override_is_shared_by_the_complete_script_and_reported() {
 
     let result = engine
         .execute_collect_with_options(
-            "add role observed; add posit [{(+event, observed)}, @NOW, @NOW]; search [{(*, observed)}, +value, +time] return value, time;",
+            "add role observed; add posit [{(+event, observed)}, @NOW, @NOW]; search [{(*, observed), ...}, ?value, ?time] return ?value, ?time;",
             ExecutionOptions {
                 now: Some(resolved_now.clone()),
                 ..ExecutionOptions::default()
@@ -41,7 +41,7 @@ fn multi_searches_report_one_shared_now_value() {
     let engine = Engine::new(&db);
     let results = engine
         .execute_collect_multi(
-            "add role observed; add posit [{(+event, observed)}, @NOW, @NOW]; search [{(*, observed)}, +value, *] return value; search [{(*, observed)}, *, +time] return time;",
+            "add role observed; add posit [{(+event, observed)}, @NOW, @NOW]; search [{(*, observed), ...}, ?value, *] return ?value; search [{(*, observed), ...}, *, ?time] return ?time;",
         )
         .expect("script executes");
 

@@ -1254,7 +1254,6 @@ fn evaluate_predicate(predicate: &Predicate, binding: &Binding) -> Result<bool, 
 }
 
 fn compare(left: &BoundValue, operator: &str, right: &BoundValue) -> Result<bool, DatabaseError> {
-    let operator = if operator == "==" { "=" } else { operator };
     match (left, right) {
         (BoundValue::Literal(left), BoundValue::Literal(right)) => {
             let result = match operator {

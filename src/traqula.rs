@@ -816,7 +816,7 @@ impl ResolvedParameter {
 }
 
 impl ExecutionOptions {
-    fn resolve(self, source: &str) -> Result<ExecutionContext, DatabaseError> {
+    fn resolve(self, _source: &str) -> Result<ExecutionContext, DatabaseError> {
         let deadline = self
             .timeout
             .map(|timeout| {
@@ -838,7 +838,7 @@ impl ExecutionOptions {
             metadata: ExecutionMetadata {
                 traqula_version: TRAQULA_VERSION,
                 resolved_now,
-                warnings: execution_warnings(source),
+                warnings: Vec::new(),
             },
             deadline,
             cancellation: self.cancellation.unwrap_or_default(),
@@ -846,62 +846,6 @@ impl ExecutionOptions {
             parameters,
         })
     }
-}
-
-fn execution_warnings(source: &str) -> Vec<ExecutionWarning> {
-    let bytes = source.as_bytes();
-    let mut cursor = 0;
-    let mut in_comment = false;
-    let mut in_double_quote = false;
-    let mut in_single_quote = false;
-    let mut escaped = false;
-    while cursor < bytes.len() {
-        let byte = bytes[cursor];
-        let next = bytes.get(cursor + 1).copied();
-        if in_comment {
-            if byte == b'*' && next == Some(b'/') {
-                in_comment = false;
-                cursor += 2;
-                continue;
-            }
-        } else if in_double_quote {
-            if escaped {
-                escaped = false;
-            } else if byte == b'\\' {
-                escaped = true;
-            } else if byte == b'"' {
-                in_double_quote = false;
-            }
-        } else if in_single_quote {
-            if byte == b'\'' {
-                in_single_quote = false;
-            }
-        } else if byte == b'/' && next == Some(b'*') {
-            in_comment = true;
-            cursor += 2;
-            continue;
-        } else if byte == b'"' {
-            in_double_quote = true;
-        } else if byte == b'\'' {
-            in_single_quote = true;
-        } else if byte == b'='
-            && next == Some(b'=')
-            && cursor
-                .checked_sub(1)
-                .and_then(|index| bytes.get(index))
-                .copied()
-                != Some(b'=')
-            && bytes.get(cursor + 2).copied() != Some(b'=')
-        {
-            return vec![ExecutionWarning {
-                code: "legacy-double-equals".to_string(),
-                message: "legacy '==' means nominal equality and is deprecated".to_string(),
-                rewrite: Some("replace '==' with '='".to_string()),
-            }];
-        }
-        cursor += 1;
-    }
-    Vec::new()
 }
 
 impl ExecutionContext {
@@ -3394,7 +3338,7 @@ mod boundary_tests {
             "\0",
             "add",
             "add posit [",
-            "search [{(*, missing)}, +value, *] return value",
+            "search [{(*, missing), ...}, ?value, *] return ?value",
             "/* unterminated",
             "\"\\u{not-unicode}\"",
             "💥;",

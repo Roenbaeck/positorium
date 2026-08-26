@@ -112,7 +112,7 @@ Positorium can run as a library or an HTTP server. The server layer (Axum + Toki
 
 Request body:
 ```jsonc
-{ "traqula_version": 1, "script": "search [{(*, name)}, +n, *] return n;", "stream": false, "timeout_ms": 5000 }
+{ "traqula_version": 1, "script": "search [{(*, name), ...}, ?n, *] return ?n;", "stream": false, "timeout_ms": 5000 }
 ```
 
 Response (single result set):

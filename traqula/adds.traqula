@@ -11,13 +11,13 @@ add posit +p1 [{(+idw, wife), (+idh, husband)}, "married", '2004-06-19'],
           +p1 [{(idh, name)}, "Lars Samuelsson",      '1972-08-20'], /* A name I used to go by */
           +p1 [{(idh, address)}, { "street": "The Road of Karlberg", "postal code": 11335, "care_of": { "name": "Lars Roenbaeck", "apartment": 1501 } }, '2007-09-01'],
           +p1 [{(idh, age)}, 30.14159265358979323846264338327950288419716939937510582097494459230781640628620899862803482534211706798214, '2003-02-20'],
-          +p2 [{(idh, epithet)}, "/* liker of comments */, ], and  ""spaces""", @BOT];
+          +p2 [{(idh, epithet)}, "/* liker of comments */, ], and \"spaces\"", @BOT];
 
-add role  birth date;
+add role `birth date`;
 
 add posit [{(idw, name)}, "Anneli",    '1972-02-13'],
           [{(idw, age)}, 30, '2002-02-13'], 
-          [{(idw, birth date)}, '1972-02-13', '1972-02-13'];
+          [{(idw, `birth date`)}, '1972-02-13', '1972-02-13'];
 
 add posit +p1 [{(idh, name)}, "Lars Roenbaeck", '2004-07-01'];  
 add posit [{(p1, posit), (idh, ascertains)}, 100%, @NOW], 
@@ -25,4 +25,3 @@ add posit [{(p1, posit), (idh, ascertains)}, 100%, @NOW],
 
 add posit [{(idw, name)}, 42, '2030-12-01'];  
 add posit [{(+new, name)}, "Arfle Barfle Gloop", '2025-12-01'];  
-

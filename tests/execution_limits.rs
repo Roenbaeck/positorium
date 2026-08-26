@@ -51,7 +51,7 @@ fn execution_row_cap_reports_only_actual_truncation() {
 
     let result = engine
         .execute_collect_with_options(
-            "search [{(*, name)}, +name, *] return name;",
+            "search [{(*, name), ...}, ?name, *] return ?name;",
             ExecutionOptions {
                 max_rows_per_search: Some(1),
                 ..ExecutionOptions::default()
@@ -75,7 +75,7 @@ fn a_failed_command_keeps_earlier_commands_but_publishes_no_partial_posit() {
     assert!(db.contains_role("committed").unwrap());
     assert!(!db.contains_role("missing").unwrap());
     let result = engine
-        .execute_collect("search [{(*, committed)}, +value, *] return value;")
+        .execute_collect("search [{(*, committed), ...}, ?value, *] return ?value;")
         .unwrap();
     assert!(result.rows.is_empty());
 }

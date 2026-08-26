@@ -17,7 +17,7 @@ fn results_preserve_complete_literal_tokens() {
             add posit [{(+string, value)}, "\u0041\u00e9", @NOW];
             add posit [{(+json, value)}, { "b": [true, null], "a": 1.00 }, @NOW];
             add posit [{(+certainty, value)}, 075%, @NOW];
-            search [{(*, value)}, +literal, *] return literal;
+            search [{(*, value), ...}, ?literal, *] return ?literal;
             "#,
         )
         .expect("lossless literal script");
@@ -59,18 +59,18 @@ fn predicates_use_nominal_semantics_without_changing_results() {
         .unwrap();
 
     let number = engine
-        .execute_collect("search [{(*, number)}, +n, *] where n = 10 return n;")
+        .execute_collect("search [{(*, number), ...}, ?n, *] where ?n = 10 return ?n;")
         .expect("cross-numeric-family equality");
     assert_eq!(number.rows, vec![vec!["+0010.00".to_string()]]);
 
     let string = engine
-        .execute_collect(r#"search [{(*, label)}, +s, *] where s = "A" return s;"#)
+        .execute_collect(r#"search [{(*, label), ...}, ?s, *] where ?s = "A" return ?s;"#)
         .expect("decoded string equality");
     assert_eq!(string.rows, vec![vec![r#""\u0041""#.to_string()]]);
 
     let json = engine
         .execute_collect(
-            r#"search [{(+item, document)}, { "b": [true,null], "a": 1 }, *] return item;"#,
+            r#"search [{(?item, document), ...}, { "b": [true, null], "a": 1 }, *] return ?item;"#,
         )
         .expect("structural JSON equality");
     assert_eq!(json.rows.len(), 1);
@@ -85,7 +85,7 @@ fn arbitrary_precision_integer_predicates_are_exact() {
 
     let result = engine
         .execute_collect(
-            "search [{(*, number)}, +n, *] where n > 340282366920938463463374607431768211454 return n;",
+            "search [{(*, number), ...}, ?n, *] where ?n > 340282366920938463463374607431768211454 return ?n;",
         )
         .expect("arbitrary precision comparison");
     assert_eq!(
@@ -109,43 +109,58 @@ fn literal_operators_keep_identity_nominality_and_compatibility_distinct() {
         .unwrap();
 
     let exact = engine
-        .execute_collect("search [{(*, number)}, +n, *] where n === +0010.00 return n;")
+        .execute_collect("search [{(*, number), ...}, ?n, *] where ?n === +0010.00 return ?n;")
         .expect("exact identity predicate");
     assert_eq!(exact.rows, vec![vec!["+0010.00".to_string()]]);
 
     let different_spelling = engine
-        .execute_collect("search [{(*, number)}, +n, *] where n === 10.00 return n;")
+        .execute_collect("search [{(*, number), ...}, ?n, *] where ?n === 10.00 return ?n;")
         .expect("exact non-match");
     assert!(different_spelling.rows.is_empty());
 
-    for operator in ["=", "==", "?="] {
+    for operator in ["=", "?="] {
         let result = engine
             .execute_collect(&format!(
-                "search [{{(*, number)}}, +n, *] where n {operator} 10 return n;"
+                "search [{{(*, number), ...}}, ?n, *] where ?n {operator} 10 return ?n;"
             ))
             .unwrap_or_else(|error| panic!("{operator} comparison failed: {error}"));
         assert_eq!(result.rows, vec![vec!["+0010.00".to_string()]]);
-        if operator == "==" {
-            assert_eq!(result.metadata.warnings.len(), 1);
-            assert_eq!(result.metadata.warnings[0].code, "legacy-double-equals");
-        } else {
-            assert!(result.metadata.warnings.is_empty());
-        }
+        assert!(result.metadata.warnings.is_empty());
     }
 
     let exact_json = engine
         .execute_collect(
-            r#"search [{(*, document)}, +d, *] where d === {"a": 1.00, "b": [true, null]} return d;"#,
+            r#"search [{(*, document), ...}, ?d, *] where ?d === {"a": 1.00, "b": [true, null]} return ?d;"#,
         )
         .expect("exact JSON identity");
     assert_eq!(exact_json.rows.len(), 1);
 
     let reordered_json = engine
         .execute_collect(
-            r#"search [{(*, document)}, +d, *] where d === { "b": [true,null], "a": 1 } return d;"#,
+            r#"search [{(*, document), ...}, ?d, *] where ?d === { "b": [true, null], "a": 1 } return ?d;"#,
         )
         .expect("presentation-sensitive JSON identity");
     assert!(reordered_json.rows.is_empty());
+}
+
+#[test]
+fn unpublished_pre_beta_search_spellings_are_rejected() {
+    let engine = engine();
+    engine
+        .execute("add role number; add posit [{(+item, number)}, 10, @NOW];")
+        .unwrap();
+
+    for script in [
+        "search [{(+item, number), ...}, ?n, *] return ?n;",
+        "search [{(item, number), ...}, ?n, *] return ?n;",
+        "search [{(?item, number), ...}, +n, *] return ?n;",
+        "search [{(?item, number), ...}, ?n, *] where ?n == 10 return ?n;",
+    ] {
+        assert!(
+            engine.execute_collect(script).is_err(),
+            "unpublished spelling unexpectedly parsed: {script}"
+        );
+    }
 }
 
 #[test]
@@ -161,7 +176,7 @@ fn malformed_structured_literals_fail_without_creating_a_posit() {
     );
 
     let result = engine
-        .execute_collect("search [{(*, value)}, +literal, *] return literal;")
+        .execute_collect("search [{(*, value), ...}, ?literal, *] return ?literal;")
         .expect("database remains queryable");
     assert!(result.rows.is_empty());
 }

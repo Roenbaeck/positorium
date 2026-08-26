@@ -47,29 +47,31 @@ add_posit = { ^"add posit" ~ (posit ~ ","?)+ ~ ";" }
 
 // search command
 wildcard = { "*" }
+// Retained as an internal rule because the isolated, non-dispatched legacy
+// evaluator still compiles against it. No public search production references it.
 recall_union = { recall ~ ("|" ~ recall)+ }
 query_union = { query_variable ~ ("|" ~ query_variable)+ }
-appearance_search = { "(" ~ (wildcard | query_union | recall_union | query_variable | insert | recall) ~ "," ~ (wildcard | query_variable | role) ~ ")" }
+appearance_search = { "(" ~ (wildcard | query_union | query_variable) ~ "," ~ (wildcard | query_variable | role) ~ ")" }
 ellipsis = { "..." }
 appearance_list = { (appearance_search ~ ("," ~ appearance_search)* ~ ("," ~ ellipsis)?) | ellipsis }
 appearance_set_binding = { query_variable ~ "=" }
 appearance_set_search = { appearance_set_binding? ~ (wildcard | "{" ~ appearance_list? ~ "}") }
-appearing_value_search = { (wildcard | query_variable | insert | recall | parameter | constant | json | string | time | certainty | decimal | int) }
-appearance_time_search = { (wildcard | query_variable | insert | recall | parameter | constant | time) }
+appearing_value_search = { (wildcard | query_variable | parameter | constant | json | string | time | certainty | decimal | int) }
+appearance_time_search = { (wildcard | query_variable | parameter | constant | time) }
 posit_binding = { query_variable ~ "=" }
 latest_marker = { ^"latest" }
 posit_search = {
-    latest_marker? ~ (posit_binding | insert)? ~
+    latest_marker? ~ posit_binding? ~
     "[" ~ appearance_set_search ~ "," ~ appearing_value_search ~ "," ~ appearance_time_search ~ "]" ~ as_of_clause?
 }
-variable_reference = { query_variable | recall }
+variable_reference = { query_variable }
 distinct = { ^"distinct" }
 return_clause = { ^"return" ~ distinct? ~ (variable_reference ~ ","?)+ }
 search_clause = { ^"search" ~ (posit_search ~ ","?)+ }
 union_clause = { ^"union" ~ (posit_search ~ ","?)+ }
 not_exists_clause = { ^"not exists" ~ "{" ~ (posit_search ~ ","?)+ ~ "}" }
 // where clause: variable comparator value/variable. Initially engine only enforced time, but grammar now allows broader RHS.
-comparator = { "===" | "?=" | "<=" | ">=" | "==" | "<" | ">" | "=" }
+comparator = { "===" | "?=" | "<=" | ">=" | "<" | ">" | "=" }
 rhs_value = { parameter | constant | time | certainty | decimal | int | string | json }
 condition = { variable_reference ~ comparator ~ (rhs_value | variable_reference) }
 where_clause = { ^"where" ~ condition ~ ("and" ~ condition)* }
@@ -80,4 +82,4 @@ order_by_clause = { ^"order by" ~ order_item ~ ("," ~ order_item)* }
 search = { search_clause ~ union_clause* ~ not_exists_clause* ~ where_clause? ~ return_clause ~ order_by_clause? ~ limit_clause? ~ ";" }
 
 // Optional per-pattern 'as of' clause
-as_of_clause = { "as of" ~ (parameter | constant | time | query_variable | recall) }
+as_of_clause = { "as of" ~ (parameter | constant | time | query_variable) }

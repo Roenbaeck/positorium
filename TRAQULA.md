@@ -1,322 +1,235 @@
 <img src="./Traqula.svg" alt="Traqula Language Reference" width="200">
 <p/>
 
-Welcome to the Traqula Study Guide! This guide is designed to be self-contained—no external files required. It will help you learn Traqula, Positorium's domain-specific language for managing and querying transitional data. We'll start with the basics and build up to advanced concepts, using plenty of working examples. By the end, you'll be able to write your own Traqula scripts.
+# Traqula language version 1
 
----
+Traqula is Positorium's declarative language for recording and querying
+transitional propositions. Version 1 is the first published grammar. There is
+no compatibility mode for the unpublished prototype syntax.
 
-## Cheat Sheet
+## The data model
 
-- `add role <role1>, <role2>, ...;` — Declare roles
-- `add posit [{(identity, role)}, value, time][, ...];` — Insert facts
-- `search <pattern> [where <condition>] [return <projection>] [limit <N>];` — Query data
-- `+var` — New identity (or insert matches into existing)
-- `var` — Recall identity (no insert)
-- `*` — Wildcard (match anything without keeping track of it)
-- `as of <time>` — Snapshot reduction
-- `where <condition>` — Filter results
-- `return <vars>` — Output variables
-- `limit <N>` — Cap results
+A posit is a proposition with three parts:
 
----
-
-## Glossary
-
-- **Thing**: An opaque identity (person, posit, etc.)
-- **Role**: A label (name, wife, age)
-- **Appearance**: (Thing, Role) pair
-- **AppearanceSet**: Set of appearances (the "viewport" for a posit)
-- **Posit**: A proposition: (AppearanceSet, Value, Time)
-- **Certainty**: Confidence in a posit (e.g., `75%`)
-- **Time**: When a posit is asserted
-
----
-
-## Lesson 1: Core Concepts – What is a Posit?
-
-A **posit** is a statement like: "Alice's name was 'Alice Smith' starting on January 1, 2023."
-
-- **AppearanceSet**: A set of (identity, role) pairs that define the "shape" or "viewport" of the posit. Think of it as a template with slots for specific roles, like holes in a piece of paper that you place over data to see what fits through.
-  - For example, `{(Alice, name)}` is a viewport with one hole: the "name" role aimed at Alice. When you look through this viewport at the database, you might see the value "Alice Smith" at time '2023-01-01'.
-  - For a couple: `{(Bob, husband), (Carol, wife)}` has two holes – one for the "husband" role (Bob) and one for the "wife" role (Carol). Aiming this at the data might reveal the value "married" at a certain time.
-  - This "aiming" happens during searches or when adding posits, binding identities to roles to extract or assert facts.
-- **Value**: The literal being asserted, including meaningful presentation such
-  as numeric precision.
-- **Time**: When this fact became true, like `'2023-01-01'`.
-
-Posits don't replace old data; they add layers. If Alice changes her name, you add a new posit with a later time.
-
----
-
-## Lesson 2: Getting Started – Running Traqula Scripts
-
-To follow along, start the Positorium server (see README.md). Use the web console at `http://localhost:8080` or send scripts via API.
-
-Scripts are sequences of commands separated by semicolons. Variables persist across commands.
-
-Example script structure:
-```
-add role name, age;
-add posit [{(+person, name)}, "Bob", '2020-01-01'];
-search [{(*, name)}, +n, *] return n;
+```text
+[AppearanceSet, LiteralValue, Time]
 ```
 
-Run this in the console to see "Bob" returned.
-
----
-
-## Lesson 3: Adding Data – Roles and Posits
-
-### Adding Roles
-
-Roles define what you can talk about. Declare them first.
-
-Syntax: `add role <role1>, <role2>, ...;`
-
-Example:
-```
-add role name, age, city;
-```
-
-This creates roles for names, ages, and cities.
-
-### Adding Posits
-
-Insert facts into the database.
-
-Syntax: `add posit [AppearanceSet, Value, Time][, ...];`
-
-- AppearanceSet: `{(identity, role), ...}`
-- Use `+var` to create new identities (e.g., `+person`).
-- Use `var` to reference existing ones.
-
-Example: Create a person with a name.
-```
-add role name;
-add posit [{(+alice, name)}, "Alice", '2023-01-01'];
-```
-
-This creates a new identity for Alice and posits her name.
-
-Multiple posits in one command:
-```
-add posit [{(alice, name)}, "Alice Smith", '2023-06-01'],
-          [{(alice, age)}, 30, '2023-01-01'];
-```
-
-Now Alice has a full name and age.
-
-**Try it:** Add a role for "city" and posit Alice's city as "New York" starting '2023-01-01'.
-
----
-
-## Lesson 4: Basic Searches – Finding Data
-
-Search for posits using patterns.
-
-Syntax: `search <pattern> [where <condition>] [return <projection>] [limit <N>];`
-
-### Simple Pattern Matching
-
-Pattern mirrors posit structure: `[{AppearanceSet}, Value, Time]`
-
-Use `*` for wildcards, `+var` to bind variables.
-
-Example: Find all names.
-```
-search [{(*, name)}, +n, *] return n;
-```
-
-This matches any posit with role "name", binds the value to `n`, and returns it.
-
-Output: `n: "Alice"`
-
-### Matching Specific Values
-
-```
-search [{(*, name)}, +n, "Alice", *] return n;
-```
-
-Finds posits where value is exactly "Alice", binding the value to `n` and returning it.
-
-### Binding Identities
-
-```
-search [{(+person, name)}, +name_val, *] return person, name_val;
-```
-
-Binds the identity to `person` and value to `name_val`.
-
-**Try it:** Search for Alice's age and return the value.
-
----
-
-## Lesson 5: Variables and Binding – Reusing Identities
-
-Variables make scripts powerful.
-
-- `+var`: New identity.
-- `var`: Existing identity.
-- `*`: Wildcard (no binding).
-
-Example: Create and reference.
-```
-add role wife, husband;
-add posit [{(+alice, wife), (+bob, husband)}, "married", '2020-01-01'];
-search [{(alice, wife), (bob, husband)}, +status, *] return status;
-```
-
-`alice` and `bob` persist, so you can use them in later commands.
-
-### Unions in Patterns
-
-Use `|` for "either role".
-
-Example: Names of wives or husbands.
-```
-search [{(alice|bob, name)}, +n, *] return n;
-```
-
-Matches if Alice or Bob has a name.
-
----
-
-## Lesson 6: Filtering with WHERE – Narrowing Results
-
-Add conditions after `search`.
-
-Supported: Time (`t`, `t1 == t2`), Value (`v == "text"`, `age > 25`), Certainty (`c >= 80%`).
-
-Example: Names valid before 2000.
-```
-search [{(*, name)}, +n, +t] where t <= '1999-12-31' return n, t;
-```
-
-**Try it:** Find ages greater than 25.
-
----
-
-## Lesson 7: Temporal Queries with 'as of' – Snapshots vs. History
-
-`as of` reduces to the latest posit per appearance set at or before a time.
-
-- Literal: `as of '2020-01-01'`
-- Variable: `as of mt` (per binding)
-
-Example: Current names (snapshot).
-```
-search [{(*, name)}, +n, *] as of @NOW return n;
-```
-
-Vs. history up to now:
-```
-search [{(*, name)}, +n, +t] where t <= @NOW return n, t;
-```
-
-The first returns one name per person (latest); the second returns all historical names.
-
-Example: Names at marriage time.
-```
-add role wife, husband, name;
-add posit [{(+w, wife), (+h, husband)}, "married", '2004-06-19'],
-          [{(w, name)}, "Bella Trix", '1972-12-13'],
-          [{(w, name)}, "Bella Bald", '2024-05-29'];
-search [{(+w, wife), (+h, husband)}, "married", +mt] as of @NOW,
-       [{(w|h, name)}, +n, +t] as of mt
-return n, t, mt;
-```
-
-This finds current marriages, then names as of marriage time.
-
-**Try it:** Modify to find names at divorce time.
-
----
-
-## Lesson 8: Projections and Limits – Controlling Output
-
-### RETURN
-
-Specify what to output. 
-
-Example: `return name, age;`
-
-### LIMIT
-
-Cap results: `limit 5;`
-
-Includes a flag if more exist.
-
----
-
-## Literals and Value Interpretation
-
-Traqula recognizes literal families so the engine can preserve and interpret
-values efficiently:
-
-- Strings: `"text"`
-- Numbers: `42`, `3.14`
-- JSON: `{"key": "value"}`
-- Certainty: `75%`
-- Time: `'2023-01-01'`, `@NOW`, `@BOT`, `@EOT`
-
-These are not schema datatypes that users must declare. Positorium's intended
-beta value model is WYSIWYG: the entered literal, including meaningful precision,
-is logical data, while integer widths, decimal encodings, compression, and other
-physical codecs remain hidden implementation details. A storage migration may
-change a codec but must not change the retrieved literal, posit identity, or
-query result.
-
-For example, `6` and `6.00` are different literal values because they express
-different precision, but they have the same nominal numeric value. The planned
-beta comparison relations distinguish those questions:
+- A **Thing** is an opaque identity.
+- A **Role** is a named identity such as `name`, `wife`, or `` `postal code` ``.
+- An **Appearance** is a `(Thing, Role)` pair.
+- An **AppearanceSet** is an unordered, duplicate-free set of appearances.
+- A **Posit** is an identified proposition consisting of an appearance set, a
+  literal value, and a time.
+
+Posits are appended. A later posit does not overwrite an earlier one.
+
+## Commands at a glance
 
 ```traqula
-where amount = 6     /* nominal equality; may match 6 and 6.00 */
-where amount ?= 6    /* compatible possible values; no hidden epsilon */
+add role name, age, `postal code`;
+
+add posit [{(+person, name)}, "Alice", '2024-01-01'],
+          [{(person, age)}, 30, '2024-01-01'];
+
+search [{(?person, name), ...}, ?name, ?time]
+where ?time <= @NOW
+return ?person, ?name, ?time
+order by ?time desc
+limit 20;
 ```
 
-Exact literal identity is a third relation whose syntax is still being decided.
-Compatibility means that the possible-value sets represented by the two literals
-intersect. It is not approximate equality based on an arbitrary implementation
-tolerance.
+Commands end with `;`. Block comments use `/* ... */`.
 
-When a role must contain only particular values, precision, units, or ranges,
-that rule belongs to Positorium's constraint layer rather than to a user-visible
-datatype. The posit remains recorded even when a later or competing constraint
-regards it as nonconforming.
+## Adding roles and posits
 
-> **Current prototype:** `?=` and lossless preservation of every literal spelling
-> are beta design decisions, not yet implemented by the current parser and
-> storage backend. Current supported `where` operators remain those listed in
-> Lesson 6.
+Declare roles before using them:
 
----
-
-## Full Example: Family and History
-
-```
-add role wife, husband, name, age;
-
-add posit [{(+p1, wife), (+p2, husband)}, "married", '2004-06-19'],
-          [{(p1, name)}, "Bella", '1972-02-13'],
-          [{(p2, name)}, "Archie", '1972-08-20'];
-
-search [{(+w, wife), (+h, husband)}, "married", *],
-       [{(w|h, name)}, +n, *]
-return n;
-
-search [{(w, name)}, +n, +t] where t <= '2020-01-01' return n, t;
-
-search [{(w, name)}, +n, *] as of '2020-01-01' return n;
+```traqula
+add role name, address, `birth date`;
 ```
 
----
+Bare roles are Unicode identifiers. Quote a role with backticks when it contains
+spaces, punctuation, a reserved word, or a literal `::` sequence.
 
-## Troubleshooting
+Mutation variables are scoped to the script being executed:
 
-- **No results?** Check roles are added, times match, variables bound.
-- **Too many results?** Add WHERE filters or LIMIT.
-- **Syntax errors?** Patterns must match posit structure exactly.
-- **Temporal confusion?** Remember: `as of` is snapshot (one per set), `where t <=` is history.
+- `+person` creates and binds a new Thing.
+- `person` recalls that binding in a later posit.
+- An optional leading `+p` binds the identity assigned to a newly added posit.
 
-Experiment in the web console. Happy querying!
+```traqula
+add role name, posit, ascertains;
+add posit +p [{(+person, name)}, "Alice", @NOW];
+add posit [{(p, posit), (person, ascertains)}, 100%, @NOW];
+```
+
+Each `add role` or `add posit` command commits atomically. Earlier successful
+commands remain committed if a later command fails.
+
+## Search variables and domains
+
+Search variables always start with `?` and are lexical to one `search` command.
+They do not carry into a later search. A variable acquires a domain from its
+position:
+
+- Thing: `(?person, name)`
+- Role: `(?person, ?role)`
+- Posit: `?p = [...]`
+- AppearanceSet: `?set = {...}`
+- LiteralValue: the second posit slot
+- Time: the third posit slot or `as of ?cutoff`
+
+Reusing a variable performs an equality join. Reusing it in incompatible
+domains is a typed query error.
+
+```traqula
+search [{(?person, name), ...}, ?name, *],
+       [{(?person, age), ...}, ?age, *]
+return ?person, ?name, ?age;
+```
+
+`*` matches without binding. `?left|?right` in a Thing slot matches either
+already-bound identity.
+
+## Exact and open appearance-set patterns
+
+Appearance-set matching is exact by default:
+
+```traqula
+search [{(?wife, wife), (?husband, husband)}, "married", *]
+return ?wife, ?husband;
+```
+
+That pattern matches an appearance set containing exactly those two members.
+Add a trailing `...` to request subset matching:
+
+```traqula
+search [{(?person, name), ...}, ?name, *]
+return ?person, ?name;
+```
+
+Use `*` for any complete appearance set. Bind whole structures explicitly when
+needed:
+
+```traqula
+search ?p = [?set = {(?thing, ?role), ...}, ?value, ?time]
+return ?p, ?set, ?thing, ?role, ?value, ?time;
+```
+
+## Literal values and comparisons
+
+Traqula preserves the complete accepted token for every literal:
+
+- integer and decimal: `6`, `+006.00`
+- string: `"text"`
+- JSON object: `{"key": [true, null]}`
+- certainty: `75%`
+- time-valued literal: `'2024-05'`
+
+The comparison relations are deliberately different:
+
+```traqula
+where ?value === +006.00  /* exact token identity */
+where ?value = 6          /* nominal semantic equality */
+where ?value ?= 6         /* declared possible-value sets intersect */
+```
+
+Integer and decimal comparisons use exact arbitrary-precision arithmetic.
+Certainty compares only with certainty and requires `%`. String equality
+decodes escapes but does not normalize text; string ordering is not supported.
+JSON nominal equality is structural, while `===` preserves presentation such as
+key order, spacing, and numeric spelling.
+
+Ordering operators are `<`, `<=`, `>`, and `>=`. The unpublished `==` spelling
+is rejected; use `=`.
+
+## Time and snapshots
+
+Accepted time precision includes year, month, day, minute, second, and
+subsecond forms. A coarse time denotes a half-open interval, so mixed-precision
+times can overlap without being ordered. `@BOT`, `@NOW`, and `@EOT` are built-in
+constants. One `@NOW` value is resolved for the complete script.
+
+`as of` first matches the pattern structurally, then keeps every maximal
+matching posit at or before the cutoff for each appearance set. Equal-time and
+incomparable maxima are preserved:
+
+```traqula
+search [{(?person, name), ...}, ?name, ?time] as of '2024-06'
+return ?person, ?name, ?time;
+```
+
+Use `latest` when value matching must happen before reduction:
+
+```traqula
+search latest [{(?case, status), ...}, "wanted", ?time] as of @NOW
+return ?case, ?time;
+```
+
+An `as of ?cutoff` variable may be bound by another pattern in the same search;
+the planner resolves the dependency regardless of source order.
+
+## Query algebra
+
+Multiple patterns in one branch form a natural join and preserve bag
+multiplicity. `union` appends another branch. `not exists` is a safe correlated
+anti-join: every variable it references must already be bound positively.
+
+```traqula
+search [{(?person, name), ...}, ?name, *]
+union [{(?person, alias), ...}, ?name, *]
+not exists { [{(?person, retired), ...}, true, *] }
+return distinct ?person, ?name
+order by ?name, ?person
+limit 100;
+```
+
+The result pipeline is projection, optional `distinct`, deterministic
+`order by`, then `limit`. Without `distinct`, duplicate rows are meaningful and
+are retained. `asc` is the default direction; `desc` reverses it.
+
+## Typed parameters
+
+`$name` denotes a value supplied separately by the Rust, HTTP, or WASM API.
+Parameters are typed as either literal or time values. They never substitute
+source text, roles, variables, or grammar.
+
+```traqula
+search [{(?item, amount), ...}, ?amount, *] as of $cutoff
+where ?amount = $target
+return ?item, ?amount;
+```
+
+HTTP request:
+
+```json
+{
+  "traqula_version": 1,
+  "script": "search [{(?item, amount), ...}, ?amount, *] as of $cutoff where ?amount = $target return ?item, ?amount;",
+  "parameters": {
+    "cutoff": {"kind": "time", "text": "2024-12-31"},
+    "target": {"kind": "literal", "text": "6.00"}
+  },
+  "stream": false
+}
+```
+
+Missing parameters, invalid parameter tokens, and use in the wrong domain are
+typed errors.
+
+## Results and errors
+
+Result cells carry both a lossless text representation and a kind: Thing, Role,
+Posit, AppearanceSet, Literal, or Time. Native, HTTP, NDJSON, and WASM surfaces
+use the same structured result contract.
+
+Parse errors, unknown variables, inconsistent variable domains, unsafe
+negation, invalid recall, unsupported comparisons, bad parameters, timeouts,
+and cancellation are reported as errors. They do not panic and do not silently
+reinterpret source. Version 1 has no legacy syntax warnings because it has no
+legacy grammar.
+
+For complete API and compatibility boundaries, see [CONTRACTS.md](CONTRACTS.md).
+For startup, backup, validation, and recovery procedures, see
+[OPERATIONS.md](OPERATIONS.md).

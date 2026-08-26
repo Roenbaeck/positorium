@@ -5,7 +5,7 @@ fn rust_results_use_lossless_structured_cells() {
     let database = Database::new(PersistenceMode::InMemory).unwrap();
     let result = Engine::new(&database)
         .execute_collect(
-            "add role value; add posit [{(+item, value)}, +0010.00, '2024-05']; search [{(+found, value)}, +literal, +time] return found, literal, time;",
+            "add role value; add posit [{(+item, value)}, +0010.00, '2024-05']; search [{(?found, value), ...}, ?literal, ?time] return ?found, ?literal, ?time;",
         )
         .unwrap();
 

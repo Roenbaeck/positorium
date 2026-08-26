@@ -48,7 +48,7 @@ fn append_only_store_replays_roles_posits_and_indexes() {
 
     let restored = Database::new(PersistenceMode::File(path.clone())).expect("replay store");
     let result = Engine::new(&restored)
-        .execute_collect("search [{(*, amount)}, +value, +time] return value, time;")
+        .execute_collect("search [{(*, amount), ...}, ?value, ?time] return ?value, ?time;")
         .expect("query restored indexes");
     assert_eq!(
         result.rows,
@@ -83,7 +83,7 @@ fn every_literal_family_survives_append_only_restart_losslessly() {
 
     let restored = Database::new(PersistenceMode::File(path.clone())).expect("restore store");
     let result = Engine::new(&restored)
-        .execute_collect("search [{(*, value)}, +literal, *] return literal;")
+        .execute_collect("search [{(*, value), ...}, ?literal, *] return ?literal;")
         .expect("query restored literals");
     let mut tokens: Vec<String> = result.rows.iter().map(|row| row[0].text.clone()).collect();
     tokens.sort();

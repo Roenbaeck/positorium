@@ -86,7 +86,7 @@ mod tests {
     fn test_wasm_execution() {
         let engine = WasmEngine::new().expect("Failed to create engine");
         // Simple script to test integration
-        let script = "add role person; add posit [{(+a, person)}, \"Alice\", @NOW]; search [{(*, person)}, +name, *] return name;";
+        let script = "add role person; add posit [{(+a, person)}, \"Alice\", @NOW]; search [{(*, person), ...}, ?name, *] return ?name;";
         let output = engine.execute(script).expect("Execution failed");
 
         let output: serde_json::Value = serde_wasm_bindgen::from_value(output).unwrap();

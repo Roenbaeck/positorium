@@ -17,8 +17,8 @@ add posit [{(+idw, wife), (+idh, husband)}, "married", '2004-06-19'],
           [{(idw, name)}, "Bella Trix", '1972-12-13'],
           [{(idw, name)}, "Bella Bald", '2024-05-29'];
 
-search [{(+w, wife), (+h, husband)}, "married", +mt] as of @NOW, [{(w|h, name)}, +n2, +t2]
-return n2, t2, mt;"#;
+search [{(?w, wife), (?h, husband), ...}, "married", ?mt] as of @NOW, [{(?w|?h, name), ...}, ?n2, ?t2]
+return ?n2, ?t2, ?mt;"#;
     let results = engine.execute_collect_multi(script).expect("multi ok");
     assert_eq!(results.len(), 1, "one search");
     assert_eq!(results[0].row_count, 5, "married snapshot names by itself");

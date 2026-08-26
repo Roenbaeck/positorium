@@ -20,13 +20,13 @@ fn certainty_literal_equivalents() {
         "75%",
     ];
     for f in &positive_match {
-        let script = format!("search [{{(*, confidence)}}, +c, *] where c = {f} return c;");
+        let script = format!("search [{{(*, confidence), ...}}, ?c, *] where ?c = {f} return ?c;");
         let res = engine.execute_collect(&script).expect("query ok");
         assert_eq!(res.rows.len(), 1, "percent form {f} should match");
     }
     let unsupported = ["0.75", "75", "0.749"];
     for f in &unsupported {
-        let script = format!("search [{{(*, confidence)}}, +c, *] where c = {f} return c;");
+        let script = format!("search [{{(*, confidence), ...}}, ?c, *] where ?c = {f} return ?c;");
         let error = engine.execute_collect(&script).unwrap_err();
         assert!(
             format!("{error}").contains("unsupported nominal comparison"),
@@ -34,7 +34,7 @@ fn certainty_literal_equivalents() {
         );
     }
     let result = engine
-        .execute_collect("search [{(*, confidence)}, +c, *] where c = 74% return c;")
+        .execute_collect("search [{(*, confidence), ...}, ?c, *] where ?c = 74% return ?c;")
         .expect("same-family comparison is valid");
     assert_eq!(result.rows.len(), 0);
 }
@@ -48,7 +48,7 @@ fn one_percent_is_not_parsed_as_one_hundred_percent() {
         .unwrap();
 
     let result = engine
-        .execute_collect("search [{(*, confidence)}, +c, *] return c;")
+        .execute_collect("search [{(*, confidence), ...}, ?c, *] return ?c;")
         .expect("query ok");
     assert_eq!(result.rows, vec![vec!["1%".to_string()]]);
 }
@@ -57,16 +57,16 @@ fn one_percent_is_not_parsed_as_one_hundred_percent() {
 fn certainty_ordering() {
     let engine = setup();
     // Using percent: 75% >= 70% succeeds
-    let script = "search [{(*, confidence)}, +c, *] where c >= 70% return c;";
+    let script = "search [{(*, confidence), ...}, ?c, *] where ?c >= 70% return ?c;";
     let res = engine.execute_collect(script).expect("query ok");
     assert_eq!(res.rows.len(), 1);
     // Greater-than a higher percent returns 0
-    let script = "search [{(*, confidence)}, +c, *] where c > 80% return c;";
+    let script = "search [{(*, confidence), ...}, ?c, *] where ?c > 80% return ?c;";
     let res = engine.execute_collect(script).expect("query ok");
     assert_eq!(res.rows.len(), 0);
     // Missing percent should trigger an error
     let err = engine
-        .execute_collect("search [{(*, confidence)}, +c, *] where c > 80 return c;")
+        .execute_collect("search [{(*, confidence), ...}, ?c, *] where ?c > 80 return ?c;")
         .unwrap_err();
     assert!(format!("{}", err).contains("percent sign"));
 }
@@ -75,7 +75,7 @@ fn certainty_ordering() {
 fn numeric_pruning() {
     let engine = setup();
     // Should prune to the value 10 only
-    let script = "search [{(*, number)}, +n, *] where n > 5 return n;";
+    let script = "search [{(*, number), ...}, ?n, *] where ?n > 5 return ?n;";
     let res = engine.execute_collect(script).expect("query ok");
     assert_eq!(res.rows.len(), 1);
     assert_eq!(res.rows[0][0], "10");
@@ -88,7 +88,9 @@ fn adjacent_large_integers_compare_exactly() {
     engine.execute("add role number; add posit [{(+n1, number)}, 9007199254740992, @NOW]; add posit [{(+n2, number)}, 9007199254740993, @NOW];").unwrap();
 
     let result = engine
-        .execute_collect("search [{(*, number)}, +n, *] where n = 9007199254740993 return n;")
+        .execute_collect(
+            "search [{(*, number), ...}, ?n, *] where ?n = 9007199254740993 return ?n;",
+        )
         .expect("query ok");
     assert_eq!(result.rows, vec![vec!["9007199254740993".to_string()]]);
 }
@@ -96,7 +98,7 @@ fn adjacent_large_integers_compare_exactly() {
 #[test]
 fn error_unknown_variable() {
     let engine = setup();
-    let script = "search [{(*, number)}, +n, *] where x = 5 return n;"; // x never bound
+    let script = "search [{(*, number), ...}, ?n, *] where ?x = 5 return ?n;"; // x never bound
     let err = engine.execute_collect(script).unwrap_err();
     let msg = format!("{}", err);
     assert!(msg.contains("Unknown variable"));
@@ -105,7 +107,7 @@ fn error_unknown_variable() {
 #[test]
 fn error_type_mismatch_ordering() {
     let engine = setup();
-    let script = "search [{(*, label)}, +l, *] where l < 5 return l;"; // string ordering invalid
+    let script = "search [{(*, label), ...}, ?l, *] where ?l < 5 return ?l;"; // string ordering invalid
     let err = engine.execute_collect(script).unwrap_err();
     let msg = format!("{}", err);
     assert!(msg.contains("Ordering comparison not allowed") || msg.contains("Type mismatch"));
@@ -118,7 +120,7 @@ fn time_where_regression() {
     // Add minimal roles / posits to simulate marriage-like pattern with times.
     engine.execute("add role wife; add role husband; add role name; add role posit; add role ascertains; add posit [{(+w1, wife), (+h1, husband)}, \"married\", '2012-12-12']; add posit [{(+p1, posit), (+a1, ascertains)}, 0%, @NOW]; add posit [{(+h1, name)}, \"Bob\", '2012-12-12'];").unwrap();
     // Query where bound time t1 is compared to a future date -> expect zero rows
-    let script = "search +p [{(+w, wife), (+h, husband)}, \"married\", +t1] as of '2012-12-12', [{(p, posit), (*, ascertains)}, +c, +at] as of @NOW, [{(h, name)}, +n, +t] as of t1 where t1 > '2022-01-01' return n, t, c, at;";
+    let script = "search ?p = [{(?w, wife), (?h, husband), ...}, \"married\", ?t1] as of '2012-12-12', [{(?p, posit), (*, ascertains), ...}, ?c, ?at] as of @NOW, [{(?h, name), ...}, ?n, ?t] as of ?t1 where ?t1 > '2022-01-01' return ?n, ?t, ?c, ?at;";
     let res = engine.execute_collect(script).expect("query ok");
     assert_eq!(res.rows.len(), 0, "time predicate should filter all rows");
 }

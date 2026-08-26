@@ -10,11 +10,11 @@ add role color;
 add posit [{(+red_item, color)}, "red", '2024-01-01'],
           [{(+blue_item, color)}, "blue", '2024-01-01'];
 
-search [{(+item, color)}, "red", *]
-return item;
+search [{(?item, color), ...}, "red", *]
+return ?item;
 
-search [{(+item, color)}, +value, *]
-return item, value;
+search [{(?item, color), ...}, ?value, *]
+return ?item, ?value;
 "#;
 
     let results = engine.execute_collect_multi(script).expect("multi search");

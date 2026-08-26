@@ -66,7 +66,7 @@ fn query_tokens(path: &Path) -> Vec<String> {
     let database =
         Database::new(PersistenceMode::File(path.to_string_lossy().into_owned())).unwrap();
     let result = Engine::new(&database)
-        .execute_collect("search [{(*, value)}, +literal, *] return literal;")
+        .execute_collect("search [{(*, value), ...}, ?literal, *] return ?literal;")
         .unwrap();
     let mut tokens = result
         .rows

@@ -10,45 +10,45 @@ add posit [{(+wife_id, wife), (+husband_id, husband)}, "married", '2004-06-19'],
           [{(wife_id, name)}, "Bella Bald", '2024-05-29']; /* took husband's surname after remarrying him */
 
 /* sanity check, give me all names stored for divorced couples (at any point in time) */
-search    [{(+w, wife), (+h, husband)}, "divorced", *], 
-          [{(w|h, name)}, +n, +t]
+search    [{(?w, wife), (?h, husband)}, "divorced", *],
+          [{(?w|?h, name), ...}, ?n, ?t]
 return
-    n, t;
+    ?n, ?t;
 
 /* give me all names stored for couples that are currently divorced */
-search    [{(+w, wife), (+h, husband)}, "divorced", +mt] as of @NOW, 
-          [{(w|h, name)}, +n, +t]
+search    [{(?w, wife), (?h, husband)}, "divorced", ?mt] as of @NOW,
+          [{(?w|?h, name), ...}, ?n, ?t]
 return
-    n, t, mt;
+    ?n, ?t, ?mt;
 
 /* give me all names stored for couples that are currently married */
-search    [{(+w, wife), (+h, husband)}, "married", +mt] as of @NOW, 
-          [{(w|h, name)}, +n, +t]
+search    [{(?w, wife), (?h, husband)}, "married", ?mt] as of @NOW,
+          [{(?w|?h, name), ...}, ?n, ?t]
 return
-    n, t, mt;
+    ?n, ?t, ?mt;
 
 /* give me the name of each wife and husband at the time they got married */
-search    [{(+w, wife), (+h, husband)}, "married", +mt] as of @NOW, 
-          [{(w|h, name)}, +n, +t] as of mt
+search    [{(?w, wife), (?h, husband)}, "married", ?mt] as of @NOW,
+          [{(?w|?h, name), ...}, ?n, ?t] as of ?mt
 return
-    n, t, mt;
+    ?n, ?t, ?mt;
 
 /* give me the name history of each wife and husband up to and including the time of their marriage */
-search    [{(+w, wife), (+h, husband)}, "married", +mt] as of @NOW, 
-          [{(w|h, name)}, +n, +t] 
-where t <= mt
+search    [{(?w, wife), (?h, husband)}, "married", ?mt] as of @NOW,
+          [{(?w|?h, name), ...}, ?n, ?t]
+where ?t <= ?mt
 return
-    n, t, mt;
+    ?n, ?t, ?mt;
 
 /* give me the name of each wife and husband that were divorced before 2022 */
-search    [{(+w, wife), (+h, husband)}, "divorced", +mt] as of '2022', 
-          [{(w|h, name)}, +n, +t] as of mt
+search    [{(?w, wife), (?h, husband)}, "divorced", ?mt] as of '2022',
+          [{(?w|?h, name), ...}, ?n, ?t] as of ?mt
 return
-    n, t, mt;
+    ?n, ?t, ?mt;
 
 /* give me the name history of each wife and husband up to and including the time of their divorce */
-search    [{(+w, wife), (+h, husband)}, "married", +mt] as of '2022', 
-          [{(w|h, name)}, +n, +t] 
-where t <= mt
+search    [{(?w, wife), (?h, husband)}, "married", ?mt] as of '2022',
+          [{(?w|?h, name), ...}, ?n, ?t]
+where ?t <= ?mt
 return
-    n, t, mt;
+    ?n, ?t, ?mt;

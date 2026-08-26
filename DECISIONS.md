@@ -1454,6 +1454,31 @@ legacy user data or published SQLite contract to preserve.
   logical values independent of storage UIDs and SQL conversion types.
 - Accepted on: 2026-08-26
 
+### D032: Pre-Beta Traqula Compatibility
+
+**Status:** Accepted
+
+**Supersedes:** Only the one-minor legacy-grammar clauses in D012, D014, D017,
+and D019
+
+No Positorium release has published the search-side `+x`/bare-variable syntax,
+implicit subset matching, or `==` comparison spelling. There is no released
+Traqula source contract to migrate.
+
+**Response:**
+
+- Choice: Publish only the D012/D014/D017/D019 grammar in the first beta. Reject
+  the unpublished spellings instead of carrying a legacy parser mode.
+- Rewrite guidance: Development examples and tests are updated mechanically:
+  search variables gain `?`, posit binders gain `=`, subset patterns gain a
+  trailing `...`, and nominal `==` becomes `=`.
+- Compatibility boundary: Traqula version 1 is the first published language
+  contract. D030 deprecation windows begin only after that release.
+- Reasoning: As with the unreleased SQLite prototype in D031, a compatibility
+  mode would create permanent parser and test surface without protecting any
+  released source or user data.
+- Accepted on: 2026-08-26
+
 ---
 
 ## Decision Summary
@@ -1493,3 +1518,4 @@ Update this table as decisions are accepted.
 | D029 | HTTP beta trust boundary | Accepted | Loopback, same-origin, enforced limits |
 | D030 | Beta compatibility promise | Accepted | Logical-data migration; versioned surfaces |
 | D031 | Pre-release SQLite compatibility | Accepted | Remove unpublished prototype path now |
+| D032 | Pre-beta Traqula compatibility | Accepted | Publish only the new grammar |

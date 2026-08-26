@@ -1,70 +1,69 @@
 /* From all married couples, that have been ascertained, give me the name values of the wives and 
    the time since when they had that name */
-search +p [{(+w, wife), (*, husband)}, "married", *], 
-          [{(p, posit), (*, ascertains)}, *, *], 
-          [{(w, name)}, +n, +t]
+search ?p = [{(?w, wife), (*, husband)}, "married", *],
+          [{(?p, posit), (*, ascertains)}, *, *],
+          [{(?w, name), ...}, ?n, ?t]
 return
-    n, t;
+    ?n, ?t;
 
 /* For everything that has a name, give me all name values that became valid on 1972-02-13 */
-search [{(*, name)}, +n, '1972-02-13']
+search [{(*, name), ...}, ?n, '1972-02-13']
 return
-    n;
+    ?n;
 
 /* For everything that has a name, give me all name values that were valid on or before 1999-12-31 */
-search [{(*, name)}, +n, +t]
-where t <= '1999-12-31'
+search [{(*, name), ...}, ?n, ?t]
+where ?t <= '1999-12-31'
 return
-    n;
+    ?n;
 
 /* Marriage asserted and name for either spouse (union) */
-search +p [{(+w, wife), (+h, husband)}, "married", *],
-          [{(p, posit), (*, ascertains)}, *, *],
-          [{(w|h, name)}, +n, +t]
-where t < '2004-07-01'
+search ?p = [{(?w, wife), (?h, husband)}, "married", *],
+          [{(?p, posit), (*, ascertains)}, *, *],
+          [{(?w|?h, name), ...}, ?n, ?t]
+where ?t < '2004-07-01'
 return
-    n, t;
+    ?n, ?t;
 
-search +pos [{(+w, wife), (+h, husband)}, "married", *],
-          [{(pos, husband), (*, wife)}, *, *],
-          [{(w|h, name)}, +n, +t]
-where t < '2004-07-01'
+search ?pos = [{(?w, wife), (?h, husband)}, "married", *],
+          [{(?pos, husband), (*, wife)}, *, *],
+          [{(?w|?h, name), ...}, ?n, ?t]
+where ?t < '2004-07-01'
 return
-    n, t;
+    ?n, ?t;
 
-search +p [{(*, wife), (+h, husband)}, "married", *], 
-          [{(p, posit), (*, ascertains)}, +c, +at], 
-          [{(h, name)}, +n, +t]
+search ?p = [{(*, wife), (?h, husband)}, "married", *],
+          [{(?p, posit), (*, ascertains)}, ?c, ?at],
+          [{(?h, name), ...}, ?n, ?t]
 return
-    n, t, c, at;
+    ?n, ?t, ?c, ?at;
 
 /* As-of variants (latest per pattern at given cut points) */
-search +p [{(+w, wife), (+h, husband)}, "married", *] as of '2012-12-12',
-          [{(p, posit), (*, ascertains)}, +c, +at] as of @NOW,
-          [{(w, name)}, +n, +t] as of @NOW
+search ?p = [{(?w, wife), (?h, husband)}, "married", *] as of '2012-12-12',
+          [{(?p, posit), (*, ascertains)}, ?c, ?at] as of @NOW,
+          [{(?w, name), ...}, ?n, ?t] as of @NOW
 return
-    n, t, c, at;
+    ?n, ?t, ?c, ?at;
 
-search    [{(+h, name)}, +hn, *],
-          [{(+w, name)}, +wn, *],
-       +p [{(w, wife), (h, husband)}, +s, +t], 
-          [{(p, posit), (*, ascertains)}, *, *] 
+search    [{(?h, name), ...}, ?hn, *],
+          [{(?w, name), ...}, ?wn, *],
+       ?p = [{(?w, wife), (?h, husband)}, ?s, ?t],
+          [{(?p, posit), (*, ascertains)}, *, *]
 return
-    h, hn, w, wn, s, t;
+    ?h, ?hn, ?w, ?wn, ?s, ?t;
 
 
 /* As-of using recalled time variables (temporally dependent join) */
-search +p [{(+w, wife), (+h, husband)}, "married", +t1] as of '2012-12-12',
-          [{(p, posit), (*, ascertains)}, +c, +at] as of @NOW,
-          [{(h, name)}, +n, +t] as of t1
+search ?p = [{(?w, wife), (?h, husband)}, "married", ?t1] as of '2012-12-12',
+          [{(?p, posit), (*, ascertains)}, ?c, ?at] as of @NOW,
+          [{(?h, name), ...}, ?n, ?t] as of ?t1
 return
-    n, t, c, at;
+    ?n, ?t, ?c, ?at;
 
-search +p [{(h, name)}, +n, +t] 
+search ?p = [{(?h, name), ...}, ?n, ?t]
 return
-    p, h, n, t;
+    ?p, ?h, ?n, ?t;
 
-search [{(*, name)}, +n2, +t2] 
+search [{(*, name), ...}, ?n2, ?t2]
 return
-    n2, t2;    
-    
+    ?n2, ?t2;

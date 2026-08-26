@@ -22,7 +22,7 @@ Beta does not mean an Internet-facing, production-ready service. Authentication,
 replication, distributed execution, and container packaging are outside this
 milestone unless they become necessary for a concrete deployment.
 
-All beta-gating decisions D001-D031 in `DECISIONS.md` were accepted on
+All beta-gating decisions D001-D032 in `DECISIONS.md` were accepted on
 2026-08-26. The unchecked items below track remaining specification,
 implementation, documentation, and test work; decision acceptance alone does not
 complete them. Decision identifiers are included where they clarify the governing
@@ -218,15 +218,14 @@ this algebra.
         - Implement safe `not exists { <patterns> }`: correlated variables must be
             bound outside, inner variables are local, and no inner binding escapes.
             It means absence of recorded evidence, never a false proposition (D016).
-- [ ] **Specify literal comparison and lossless result cells.**
+- [x] **Specify literal comparison and lossless result cells.**
         - Return the entered literal representation consistently across Rust, HTTP,
             SSE, and WASM; internal codec IDs are not user-facing result metadata.
         - Define `=` as nominal equality under supported semantic interpretation and
             `?=` as intersection of declared possible-value sets, never a hidden
             epsilon or implementation-defined tolerance.
-        - Use `===` for exact literal identity. The legacy `==` spelling means nominal
-            `=` only in the explicitly selected compatibility grammar and emits a
-            deprecation warning (D017).
+        - Use `===` for exact literal identity. Reject the unpublished `==` spelling;
+            Traqula version 1 is the first released grammar (D017, D032).
         - Compare integers and decimals with exact arbitrary-precision arithmetic;
             compare certainty only with certainty by exact percentage; support string
             equality without normalization but no string ordering in beta.
@@ -244,7 +243,7 @@ this algebra.
         - Apply filtering, then projection/`DISTINCT`, then `ORDER BY`, then `LIMIT`.
             Set the versioned SSE end event's `limited: true` exactly when more rows
             existed.
-- [ ] **Define stable role and literal syntax.**
+- [x] **Define stable role and literal syntax.**
         - Make role names case-sensitive and NFC-normalized at parser and catalog
             boundaries (D001).
         - Keep identifier-like bare role names and use backticks for literal role names
@@ -253,9 +252,9 @@ this algebra.
         - Use `$name` for typed literal/time parameters supplied in a separate API
             object. Parameters never substitute source text, roles, variables, or
             syntax.
-        - Provide the D012/D014/D017 legacy Traqula version for one beta minor release,
-            with deprecation warnings and mechanical rewrite hints, and update the Pest
-            and both VS Code grammars together.
+        - Do not carry a legacy grammar for unpublished syntax. Update development
+            examples mechanically and keep the Pest and both VS Code grammars together
+            (D032).
 
 ## P0: Append-Only Persistence
 
@@ -427,7 +426,7 @@ posit replay.
         - Verify metadata-before-dependent-posit ordering in the interleaved log,
             command-level atomicity, strict acknowledgment durability, backup committed
             lengths and identity remapping.
-- [ ] **Language contract tests.**
+- [x] **Language contract tests.**
         - Cover mixed time precision, equal-time ties, literal and variable `as of`,
             shorthand expansion equivalence, binding multiplicity, and deterministic
             result ordering where promised.
@@ -436,8 +435,8 @@ posit replay.
             literal identity, nominal `=`, compatible `?=`, DISTINCT, and ordered
             LIMIT behavior.
         - Cover script-scoped and overridden `@NOW`, typed unsupported-comparison
-            errors, exact numeric and structural JSON comparison, and the one-minor
-            legacy grammar with its rewrite warnings.
+            errors, exact numeric and structural JSON comparison, and rejection of the
+            unpublished pre-beta spellings (D032).
 - [ ] **Core equality/property tests.**
         - Verify the `Eq`/`Hash` and `Eq`/`Ord` laws for Role, Appearance,
             AppearanceSet, literal values, Time, and Posit.

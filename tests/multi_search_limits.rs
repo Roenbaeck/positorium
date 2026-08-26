@@ -3,22 +3,20 @@ use positorium::traqula::Engine;
 
 // Verifies that each search command applies its own LIMIT independently.
 // Script under test:
-// search +p [{(h, name)}, +n, +t] return p, h, n, t limit 2;
-// search [{(*, name)}, +n2, +t2] return n2, t2 limit 1;
+// search ?p = [{(?h, name), ...}, ?n, ?t] return ?p, ?h, ?n, ?t limit 2;
+// search [{(*, name), ...}, ?n2, ?t2] return ?n2, ?t2 limit 1;
 #[test]
 fn per_search_limits() {
     let db = Database::new(PersistenceMode::InMemory).unwrap();
     let engine = Engine::new(&db);
     engine.execute("add role name; add role h; add posit [{(+h1, h)}, 1, @NOW]; add posit [{(+h2, h)}, 2, @NOW]; add posit [{(+h3, h)}, 3, @NOW]; add posit [{(+a, name)}, \"Alice\", @NOW]; add posit [{(+b, name)}, \"Bob\", @NOW]; add posit [{(+c, name)}, \"Carol\", @NOW];").unwrap();
     let script = r#"
-search +p [{(*, name)}, +n, +t]
-return
-    p, n, t
+search ?p = [{(*, name), ...}, ?n, ?t]
+return ?p, ?n, ?t
 limit 2;
 
-search [{(*, name)}, +n2, +t2]
-return
-    n2, t2
+search [{(*, name), ...}, ?n2, ?t2]
+return ?n2, ?t2
 limit 1;
 "#;
     let results = engine.execute_collect_multi(script).expect("multi ok");

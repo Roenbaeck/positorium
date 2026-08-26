@@ -103,7 +103,7 @@
     },
     "operators": {
       "name": "keyword.operator.traqula",
-      "match": "(===|\\?=|<=|>=|==|<|>|=|\\+|\\|)"
+      "match": "(===|\\?=|<=|>=|<|>|=|\\+|\\|)"
     },
     "punctuation": {
       "name": "punctuation.traqula",
