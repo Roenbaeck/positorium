@@ -324,4 +324,30 @@ mod tests {
                 .is_none()
         );
     }
+
+    #[test]
+    fn concurrent_clients_are_serialized_without_losing_commands() {
+        let db = Arc::new(Database::new(crate::construct::PersistenceMode::InMemory).unwrap());
+        let interface = QueryInterface::new(Arc::clone(&db));
+        let handles = (0..32)
+            .map(|index| {
+                interface
+                    .start_query(
+                        format!("add role concurrent_{index};"),
+                        QueryOptions {
+                            stream_results: false,
+                            timeout: Some(Duration::from_secs(2)),
+                        },
+                    )
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+        for index in 0..32 {
+            assert!(db.contains_role(&format!("concurrent_{index}")).unwrap());
+        }
+    }
 }

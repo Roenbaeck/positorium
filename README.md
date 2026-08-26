@@ -22,7 +22,10 @@ This makes Positorium well‑suited for master data management, regulated domain
 
 Traqula is Positorium's domain-specific language for defining roles, positing facts with time, and querying data through pattern matching. Query variables are lexical to one `search`; allocation bindings remain available only to later mutation commands in the same script.
 
-For the complete language reference, examples, and details on posits, variables, and search patterns, see [TRAQULA.md](TRAQULA.md).
+For the complete language reference, see [TRAQULA.md](TRAQULA.md). Worked
+patterns for correction, disagreement, assertions, external identification,
+multi-valued attributes, repeated participants, backup, and transfer are in
+[COOKBOOK.md](COOKBOOK.md).
 
 The normative design for the append-only beta store is in [STORAGE.md](STORAGE.md).
 File-backed mode uses that framed, checksummed, append-only format. The
@@ -43,7 +46,8 @@ Build:
 cargo build
 ```
 
-Run the binary; it will read configuration from positorium.json and execute the Traqula script at traqula/example.traqula:
+Run the binary; it reads `positorium.json` and executes its configured Traqula
+startup script:
 
 ```sh
 target/debug/positorium
@@ -53,7 +57,10 @@ Config (positorium.json):
 
 ```json
 {
+	"listen_interface": "127.0.0.1",
+	"listen_port": 8080,
 	"database_file_and_path": "positorium.store",
+	"enable_persistence": true,
 	"recreate_database_on_startup": false,
 	"traqula_file_to_run_on_startup": "traqula/adds.traqula"
 }
@@ -61,7 +68,7 @@ Config (positorium.json):
 
 ## Initialization Modes
 
-The engine now uses an explicit persistence mode enum:
+The engine uses an explicit persistence mode enum:
 
 ```rust
 use positorium::{Database, PersistenceMode};
@@ -103,6 +110,10 @@ Physical backup excludes uncommitted tail bytes without changing the source.
 Logical import creates a new store UUID and emits the complete identity remap.
 The versioned formats and failure rules are specified in [TRANSFER.md](TRANSFER.md).
 Independent beta boundary versions are listed in [CONTRACTS.md](CONTRACTS.md).
+Operational startup, durability, recovery, and resource-limit procedures are in
+[OPERATIONS.md](OPERATIONS.md).
+The repeatable architecture benchmark and current indicative baseline are in
+[BENCHMARKS.md](BENCHMARKS.md).
 
 ## Client / Server Architecture
 
@@ -195,26 +206,21 @@ A minimal static HTML client (`positorium.html`) demonstrates submitting scripts
 ## Updated Status and Roadmap
 
 Implemented:
-* Roles, appearances, appearance sets, heterogeneous posits with times
-* Framed append-only persistence with atomic command batches and deterministic replay
-* Traqula parsing (Pest) for add/search/where/return, unions, multi-result scripts
-* Bitmap-backed indexes for fast intersections
-* Time filtering (variable vs literal and variable vs variable)
-* Value predicate filtering (variable vs literal & variable vs variable) with type-aware ordering checks
-* Certainty percent-only literals and strict ordering rules
-* HTTP server (Axum), JSON query endpoint, multi-result response encoding
-* PowerShell helper script for lifecycle (start/stop/restart) with logging presets
-* Minimal HTML client page
-* Execution error surfacing (unknown variable, type mismatch, ordering misuse)
-* Streaming row delivery over HTTP (chunked / SSE)
+* Immutable core constructs, exact literal tokens, and precision-aware time
+* Framed append-only persistence with atomic durable command batches, hidden
+  lossless codecs, deterministic replay, recovery, backup, and logical transfer
+* Declarative Traqula joins, union, safe `not exists`, snapshots, typed
+  comparisons and parameters, `distinct`, ordering, and limits
+* Structured native, HTTP/SSE, and WASM results with cooperative limits and cancellation
+* Trusted/local Axum service, browser testbed, lifecycle scripts, and synchronized editor grammar
 
 Planned/next:
 * WHERE enhancements: OR, grouping, BETWEEN, IN
 * Aggregations and tuple-shaped / structured returns
 * Projection type annotations stabilization (avoid dynamic probing)
-* Authentication / access control for the server
+* Authentication / access control for a future non-local server posture
 * Optimization: caching value extraction during predicate evaluation
-* Optional JSON/CSV export helpers
+* Optional CSV-oriented export helpers beyond the stable JSONL logical transfer
 
 ## Long-term Goals
 
@@ -226,7 +232,8 @@ These are aspirational features that align with the full vision of Transitional 
 * **Uncertainty Theory Integration**: Extend certainty handling to full uncertainty theory, supporting complex logical consistency checks across collections of opinions.
 * **Performance and Scalability**: Optimize for large-scale deployments with distributed persistence, advanced indexing, and parallel query execution.
 * **Ecosystem Expansion**: Develop integrations with other databases, visualization tools, and APIs; add more data types (e.g., geospatial, multimedia); and build a plugin system for custom extensions.
-* **Production Readiness**: Implement enterprise features like backup/restore, replication, monitoring, and compliance tooling to transition from experimental to production-grade.
+* **Production Readiness**: Extend the existing backup/restore tools with
+  replication, monitoring, and compliance workflows.
 
 ## License
 

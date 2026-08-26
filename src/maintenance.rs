@@ -6,7 +6,7 @@ use crate::error::{DatabaseError, Result};
 use crate::literal::{LiteralFamily, LiteralValue};
 use crate::storage::{
     FORMAT_MAJOR, FORMAT_MINOR, LogStore, ReplayedPosit, ReplayedRole, StoreBackend, StoreSnapshot,
-    posit_record_logical, raw_codec_record, role_record_parts, sync_parent_directory,
+    codec_records, posit_record_logical, role_record_parts, sync_parent_directory,
 };
 use chrono::{Datelike, NaiveDate, Timelike};
 use serde::{Deserialize, Serialize};
@@ -284,7 +284,7 @@ pub fn import_store(
     let (identity_map, mappings) = build_identity_remap(&imported, &destination_uuid)?;
 
     let mut transformed_roles = Vec::with_capacity(imported.roles.len());
-    let mut metadata = Vec::with_capacity(imported.roles.len() + 1);
+    let mut metadata = Vec::with_capacity(imported.roles.len() + 3);
     for role in &imported.roles {
         let identity = mapped(&identity_map, role.identity)?;
         transformed_roles.push(ReplayedRole {
@@ -294,7 +294,7 @@ pub fn import_store(
         });
         metadata.push(role_record_parts(identity, &role.name, role.reserved));
     }
-    metadata.push(raw_codec_record());
+    metadata.extend(codec_records());
     store.append_batch(&metadata)?;
 
     let mut transformed_posits = Vec::with_capacity(imported.posits.len());

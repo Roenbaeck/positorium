@@ -414,7 +414,7 @@ posit replay.
 
 ## P1: Beta Validation
 
-- [ ] **Storage contract tests.**
+- [x] **Storage contract tests.**
         - Round-trip every literal family, presentation edge case, and temporal
             precision exactly across restart and across every applicable codec.
         - Verify that physically different encodings of one literal have identical
@@ -437,18 +437,18 @@ posit replay.
         - Cover script-scoped and overridden `@NOW`, typed unsupported-comparison
             errors, exact numeric and structural JSON comparison, and rejection of the
             unpublished pre-beta spellings (D032).
-- [ ] **Core equality/property tests.**
+- [x] **Core equality/property tests.**
         - Verify the `Eq`/`Hash` and `Eq`/`Ord` laws for Role, Appearance,
             AppearanceSet, literal values, Time, and Posit.
         - Verify that replay and import preserve proposition identity independently of
             record order and that no store-local identity collisions survive remapping.
-- [ ] **Concurrency and failure tests.**
+- [x] **Concurrency and failure tests.**
         - Verify single-writer locking, concurrent client serialization, cancellation,
             disk-full/write failure behavior, restart after failure, and clean shutdown.
-- [ ] **Fuzz storage and language parsers.**
+- [x] **Fuzz storage and language parsers.**
         - Ensure malformed or arbitrary bytes/scripts produce bounded errors, not
             panics or unbounded allocation.
-- [ ] **Benchmark the intended architecture.**
+- [x] **Benchmark the intended architecture.**
         - Measure append throughput, bytes per posit, replay/startup time, query time,
             and memory usage at representative result-set sizes.
 
@@ -484,7 +484,7 @@ posit replay.
 - [x] **Keep editor support synchronized.**
         - Test that both copies of `traqula.tmLanguage.json` remain aligned with
             `src/traqula.pest`.
-- [ ] **Write beta documentation.**
+- [x] **Write beta documentation.**
         - Update `TRAQULA.md` to distinguish history, ordinary snapshots, assertions,
             and assertion-resolution policies.
         - Document exact/open set matching, structural query-variable domains, posit

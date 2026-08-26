@@ -4,6 +4,7 @@ use positorium::construct::{Database, PersistenceMode};
 use positorium::maintenance::{backup_store, export_store, import_store, inspect_store};
 use positorium::traqula::Engine;
 use serde_json::Value;
+use std::collections::HashSet;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -104,9 +105,14 @@ fn logical_export_import_is_lossless_and_remaps_every_non_builtin_identity() {
     let remap_document: Value = serde_json::from_slice(&std::fs::read(remap).unwrap()).unwrap();
     let mappings = remap_document["mappings"].as_array().unwrap();
     assert_eq!(mappings.len(), import_report.remapped_identities);
+    let mut destination_identities = HashSet::new();
     for mapping in mappings {
         let source_local = mapping["source"]["local"].as_u64().unwrap();
         let destination_local = mapping["destination"]["local"].as_u64().unwrap();
+        assert!(
+            destination_identities.insert(destination_local),
+            "identity remapping produced a destination collision"
+        );
         if !matches!(source_local, 1 | 2) {
             assert_ne!(source_local, destination_local);
         }
@@ -119,6 +125,55 @@ fn logical_export_import_is_lossless_and_remaps_every_non_builtin_identity() {
             import_report.destination_store_uuid
         );
     }
+}
+
+#[test]
+fn logical_import_is_independent_of_posit_record_order() {
+    let case = TemporaryCase::new("record-order");
+    let source = case.path("source.store");
+    let export = case.path("source.jsonl");
+    let reordered = case.path("reordered.jsonl");
+    let destination_a = case.path("destination-a.store");
+    let destination_b = case.path("destination-b.store");
+    let remap_a = case.path("remap-a.json");
+    let remap_b = case.path("remap-b.json");
+    populate(&source);
+    export_store(&source, &export).unwrap();
+
+    let mut metadata = Vec::new();
+    let mut posits = Vec::new();
+    for line in std::fs::read_to_string(&export).unwrap().lines() {
+        let record: Value = serde_json::from_str(line).unwrap();
+        if record["record"] == "posit" {
+            posits.push(line.to_string());
+        } else {
+            metadata.push(line.to_string());
+        }
+    }
+    posits.reverse();
+    metadata.extend(posits);
+    std::fs::write(&reordered, format!("{}\n", metadata.join("\n"))).unwrap();
+
+    import_store(&export, &destination_a, &remap_a).unwrap();
+    import_store(&reordered, &destination_b, &remap_b).unwrap();
+    assert_eq!(query_tokens(&destination_a), query_tokens(&destination_b));
+
+    let mappings_a: Value = serde_json::from_slice(&std::fs::read(remap_a).unwrap()).unwrap();
+    let mappings_b: Value = serde_json::from_slice(&std::fs::read(remap_b).unwrap()).unwrap();
+    let locals = |document: &Value| {
+        document["mappings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|mapping| {
+                (
+                    mapping["source"]["local"].as_u64().unwrap(),
+                    mapping["destination"]["local"].as_u64().unwrap(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(locals(&mappings_a), locals(&mappings_b));
 }
 
 #[test]

@@ -34,7 +34,7 @@ use crate::error::DatabaseError;
 use crate::literal::LiteralValue;
 #[cfg(feature = "persistence")]
 use crate::storage::{
-    LogStore, ReplayedStore, StoreBackend, posit_record_parts, raw_codec_record, role_record,
+    LogStore, ReplayedStore, StoreBackend, codec_records, posit_record_parts, role_record,
 };
 use bimap::BiMap;
 use core::hash::{BuildHasher, BuildHasherDefault, Hasher};
@@ -709,7 +709,10 @@ impl Database {
 
         #[cfg(feature = "persistence")]
         if let Some(replayed) = replayed {
-            if replayed.roles.is_empty() && replayed.posits.is_empty() && !replayed.has_raw_codec {
+            if replayed.roles.is_empty()
+                && replayed.posits.is_empty()
+                && !replayed.has_required_codecs
+            {
                 database.bootstrap_append_store()?;
             } else {
                 database.restore_append_store(replayed)?;
@@ -738,11 +741,8 @@ impl Database {
     fn bootstrap_append_store(&self) -> Result<(), DatabaseError> {
         let posit = Role::new(POSIT_ROLE_ID, "posit".to_string(), true);
         let ascertains = Role::new(ASCERTAINS_ROLE_ID, "ascertains".to_string(), true);
-        let records = vec![
-            role_record(&posit),
-            role_record(&ascertains),
-            raw_codec_record(),
-        ];
+        let mut records = vec![role_record(&posit), role_record(&ascertains)];
+        records.extend(codec_records());
         self.store
             .lock()
             .map_err(|error| DatabaseError::Lock(error.to_string()))?
@@ -764,9 +764,9 @@ impl Database {
 
     #[cfg(feature = "persistence")]
     fn restore_append_store(&self, replayed: ReplayedStore) -> Result<(), DatabaseError> {
-        if !replayed.has_raw_codec {
+        if !replayed.has_required_codecs {
             return Err(DatabaseError::DataCorruption {
-                message: "append-only store lacks the mandatory raw codec".to_string(),
+                message: "append-only store lacks the mandatory v1 codec registry".to_string(),
             });
         }
         for role in replayed.roles {
@@ -1181,6 +1181,7 @@ impl Database {
 #[cfg(all(test, feature = "persistence"))]
 mod append_store_tests {
     use super::*;
+    use crate::storage::InjectedFailure;
     use crate::traqula::Engine;
 
     #[test]
@@ -1204,7 +1205,7 @@ mod append_store_tests {
         let store = database.store.lock().unwrap();
         let batches = store.as_ref().unwrap().replay();
         assert_eq!(batches.len(), 3, "bootstrap plus two commands");
-        assert_eq!(batches[0].len(), 3, "built-ins and raw codec");
+        assert_eq!(batches[0].len(), 5, "built-ins and v1 codec registry");
         assert_eq!(batches[1].len(), 2, "both roles commit together");
         assert_eq!(batches[2].len(), 2, "both posits commit together");
         drop(store);
@@ -1215,5 +1216,50 @@ mod append_store_tests {
         assert_eq!(restored.posit_keeper.lock().unwrap().len(), 2);
         drop(restored);
         let _ = std::fs::remove_dir_all(path);
+    }
+
+    #[test]
+    fn failed_durable_writes_publish_no_memory_state_and_recover_on_reopen() {
+        for failure in [InjectedFailure::LogWrite, InjectedFailure::ManifestCommit] {
+            let path = std::env::temp_dir().join(format!(
+                "positorium-injected-write-{failure:?}-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            let database =
+                Database::new(PersistenceMode::File(path.to_string_lossy().into_owned())).unwrap();
+            Engine::new(&database).execute("add role stable;").unwrap();
+            database
+                .store
+                .lock()
+                .unwrap()
+                .as_mut()
+                .unwrap()
+                .inject_failure(failure);
+
+            let error = Engine::new(&database)
+                .execute("add role unpublished;")
+                .unwrap_err();
+            assert!(error.to_string().contains("injected"), "{error}");
+            assert!(!database.contains_role("unpublished").unwrap());
+            let error = Engine::new(&database)
+                .execute("add role blocked_after_uncertain_write;")
+                .unwrap_err();
+            assert!(error.to_string().contains("fail-closed"), "{error}");
+            drop(database);
+
+            let reopened =
+                Database::new(PersistenceMode::File(path.to_string_lossy().into_owned())).unwrap();
+            assert!(reopened.contains_role("stable").unwrap());
+            assert!(!reopened.contains_role("unpublished").unwrap());
+            Engine::new(&reopened)
+                .execute("add role recovered;")
+                .unwrap();
+            drop(reopened);
+            let _ = std::fs::remove_dir_all(path);
+        }
     }
 }

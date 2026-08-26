@@ -170,6 +170,27 @@ return ?case, ?time;
 An `as of ?cutoff` variable may be bound by another pattern in the same search;
 the planner resolves the dependency regardless of source order.
 
+### History, snapshots, and assertions are separate
+
+A search without `as of` reads recorded history. Ordinary `as of` reduces that
+history to the maximal posit proposition or propositions for each complete
+appearance set. It does not inspect who asserted a posit, combine certainty,
+or choose a preferred source.
+
+Assertions are ordinary posits joined explicitly through the reserved `posit`
+and `ascertains` roles:
+
+```traqula
+search ?claim = [{(?case, status), ...}, ?status, ?changed],
+       [{(?claim, posit), (?source, ascertains)}, ?certainty, ?asserted]
+return ?case, ?status, ?changed, ?source, ?certainty, ?asserted;
+```
+
+Only `posit` and `ascertains` are reserved in version 1. Assertion resolution,
+source preference, certainty combination, and “information in effect” are
+explicit post-beta query or application policies. They never alter ordinary
+snapshot semantics or silently discard disagreement.
+
 ## Query algebra
 
 Multiple patterns in one branch form a natural join and preserve bag
@@ -232,4 +253,5 @@ legacy grammar.
 
 For complete API and compatibility boundaries, see [CONTRACTS.md](CONTRACTS.md).
 For startup, backup, validation, and recovery procedures, see
-[OPERATIONS.md](OPERATIONS.md).
+[OPERATIONS.md](OPERATIONS.md). Worked modeling and transfer recipes are in
+[COOKBOOK.md](COOKBOOK.md).

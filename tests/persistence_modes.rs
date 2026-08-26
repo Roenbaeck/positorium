@@ -72,8 +72,12 @@ fn every_literal_family_survives_append_only_restart_losslessly() {
                 add role value;
                 add posit [{(+s, value)}, "\u0041", @NOW];
                 add posit [{(+i, value)}, +001, @NOW];
+                add posit [{(+canonical_i, value)}, 10, @NOW];
+                add posit [{(+minimum_i, value)}, -9223372036854775808, @NOW];
+                add posit [{(+maximum_i, value)}, 9223372036854775807, @NOW];
                 add posit [{(+d, value)}, 01.00, @NOW];
                 add posit [{(+c, value)}, 075%, @NOW];
+                add posit [{(+canonical_c, value)}, 75%, @NOW];
                 add posit [{(+j, value)}, { "a": 1.00 }, @NOW];
                 add posit [{(+t, value)}, '2024-05', @NOW];
                 "#,
@@ -87,18 +91,39 @@ fn every_literal_family_survives_append_only_restart_losslessly() {
         .expect("query restored literals");
     let mut tokens: Vec<String> = result.rows.iter().map(|row| row[0].text.clone()).collect();
     tokens.sort();
-    assert_eq!(
-        tokens,
-        vec![
-            r#""\u0041""#.to_string(),
-            "'2024-05'".to_string(),
-            "+001".to_string(),
-            "01.00".to_string(),
-            "075%".to_string(),
-            r#"{ "a": 1.00 }"#.to_string(),
-        ]
-    );
+    let mut expected = vec![
+        r#""\u0041""#.to_string(),
+        "'2024-05'".to_string(),
+        "+001".to_string(),
+        "-9223372036854775808".to_string(),
+        "01.00".to_string(),
+        "075%".to_string(),
+        "10".to_string(),
+        "75%".to_string(),
+        "9223372036854775807".to_string(),
+        r#"{ "a": 1.00 }"#.to_string(),
+    ];
+    expected.sort();
+    assert_eq!(tokens, expected);
     drop(restored);
+    remove_store(&path);
+}
+
+#[test]
+#[cfg(feature = "persistence")]
+fn explicit_shutdown_flush_leaves_a_reopenable_store() {
+    let path = temporary_store_path("shutdown-flush");
+    {
+        let database = Database::new(PersistenceMode::File(path.clone())).unwrap();
+        positorium::traqula::Engine::new(&database)
+            .execute("add role shutdown; add posit [{(+item, shutdown)}, \"clean\", @NOW];")
+            .unwrap();
+        database.flush().unwrap();
+    }
+
+    let reopened = Database::new(PersistenceMode::File(path.clone())).unwrap();
+    assert!(reopened.contains_role("shutdown").unwrap());
+    drop(reopened);
     remove_store(&path);
 }
 

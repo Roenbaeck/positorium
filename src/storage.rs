@@ -34,6 +34,59 @@ pub(crate) const RECORD_POSIT: u8 = 3;
 const RECORD_COMMIT: u8 = 255;
 const RAW_CODEC_IDENTIFIER: u16 = 0;
 const RAW_CODEC_VERSION: u16 = 1;
+const CANONICAL_I64_CODEC_IDENTIFIER: u16 = 1;
+const CANONICAL_I64_CODEC_VERSION: u16 = 1;
+const CANONICAL_CERTAINTY_CODEC_IDENTIFIER: u16 = 2;
+const CANONICAL_CERTAINTY_CODEC_VERSION: u16 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum BuiltinCodec {
+    RawUtf8,
+    CanonicalI64,
+    CanonicalCertainty,
+}
+
+impl BuiltinCodec {
+    const ALL: [Self; 3] = [Self::RawUtf8, Self::CanonicalI64, Self::CanonicalCertainty];
+
+    fn identifier(self) -> u16 {
+        match self {
+            Self::RawUtf8 => RAW_CODEC_IDENTIFIER,
+            Self::CanonicalI64 => CANONICAL_I64_CODEC_IDENTIFIER,
+            Self::CanonicalCertainty => CANONICAL_CERTAINTY_CODEC_IDENTIFIER,
+        }
+    }
+
+    fn version(self) -> u16 {
+        match self {
+            Self::RawUtf8 => RAW_CODEC_VERSION,
+            Self::CanonicalI64 => CANONICAL_I64_CODEC_VERSION,
+            Self::CanonicalCertainty => CANONICAL_CERTAINTY_CODEC_VERSION,
+        }
+    }
+
+    fn family(self) -> u8 {
+        match self {
+            Self::RawUtf8 => 0,
+            Self::CanonicalI64 => LiteralFamily::Integer.identifier(),
+            Self::CanonicalCertainty => LiteralFamily::Certainty.identifier(),
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::RawUtf8 => "raw-utf8-token",
+            Self::CanonicalI64 => "canonical-i64",
+            Self::CanonicalCertainty => "canonical-certainty",
+        }
+    }
+
+    fn from_pair(identifier: u16, version: u16) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|codec| codec.identifier() == identifier && codec.version() == version)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ReplayedRole {
@@ -55,7 +108,7 @@ pub(crate) struct ReplayedStore {
     pub store_uuid: [u8; 16],
     pub roles: Vec<ReplayedRole>,
     pub posits: Vec<ReplayedPosit>,
-    pub has_raw_codec: bool,
+    pub has_required_codecs: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,6 +204,15 @@ pub(crate) struct LogStore {
     next_sequence: u64,
     next_batch: u64,
     poisoned: bool,
+    #[cfg(test)]
+    injected_failure: Option<InjectedFailure>,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InjectedFailure {
+    LogWrite,
+    ManifestCommit,
 }
 
 pub(crate) struct StoreSnapshot {
@@ -222,6 +284,8 @@ impl LogStore {
             next_sequence,
             next_batch,
             poisoned: false,
+            #[cfg(test)]
+            injected_failure: None,
         })
     }
 
@@ -235,6 +299,11 @@ impl LogStore {
 
     pub(crate) fn replay_logical(&self) -> Result<ReplayedStore> {
         replay_logical(self.manifest.store_uuid, &self.batches)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn inject_failure(&mut self, failure: InjectedFailure) {
+        self.injected_failure = Some(failure);
     }
 }
 
@@ -371,14 +440,22 @@ pub(crate) fn role_record_parts(identity: Thing, name: &str, reserved: bool) -> 
     PendingRecord::new(RECORD_ROLE, payload)
 }
 
-pub(crate) fn raw_codec_record() -> PendingRecord {
+fn codec_record(codec: BuiltinCodec) -> PendingRecord {
     let mut payload = Vec::new();
-    payload.extend_from_slice(&RAW_CODEC_IDENTIFIER.to_le_bytes());
-    payload.extend_from_slice(&RAW_CODEC_VERSION.to_le_bytes());
-    payload.push(0); // family 0 declares the mandatory raw codec for every family.
+    payload.extend_from_slice(&codec.identifier().to_le_bytes());
+    payload.extend_from_slice(&codec.version().to_le_bytes());
+    payload.push(codec.family());
     payload.extend_from_slice(&0u16.to_le_bytes());
-    encode_text("raw-utf8-token", &mut payload);
+    encode_text(codec.name(), &mut payload);
     PendingRecord::new(RECORD_CODEC, payload)
+}
+
+pub(crate) fn codec_records() -> Vec<PendingRecord> {
+    BuiltinCodec::ALL.into_iter().map(codec_record).collect()
+}
+
+fn raw_codec_record() -> PendingRecord {
+    codec_record(BuiltinCodec::RawUtf8)
 }
 
 pub(crate) fn posit_record(posit: &Posit<LiteralValue>) -> Result<PendingRecord> {
@@ -416,6 +493,16 @@ pub(crate) fn posit_record_logical(
             "a persisted appearance set cannot repeat a role".to_string(),
         ));
     }
+    posit_record_logical_with_codec(identity, appearances, value, time, select_codec(value))
+}
+
+fn posit_record_logical_with_codec(
+    identity: Thing,
+    appearances: &[(Thing, Thing)],
+    value: &LiteralValue,
+    time: &Time,
+    codec: BuiltinCodec,
+) -> Result<PendingRecord> {
     let mut payload = Vec::new();
     payload.extend_from_slice(&identity.to_le_bytes());
     encode_uleb128(appearances.len() as u64, &mut payload);
@@ -424,11 +511,60 @@ pub(crate) fn posit_record_logical(
         payload.extend_from_slice(&thing.to_le_bytes());
     }
     payload.push(value.family().identifier());
-    payload.extend_from_slice(&RAW_CODEC_IDENTIFIER.to_le_bytes());
-    payload.extend_from_slice(&RAW_CODEC_VERSION.to_le_bytes());
-    encode_text(value.token(), &mut payload);
+    payload.extend_from_slice(&codec.identifier().to_le_bytes());
+    payload.extend_from_slice(&codec.version().to_le_bytes());
+    let encoded = encode_literal(value, codec)?;
+    encode_blob(&encoded, &mut payload);
     encode_time(time, &mut payload);
     Ok(PendingRecord::new(RECORD_POSIT, payload))
+}
+
+fn select_codec(value: &LiteralValue) -> BuiltinCodec {
+    match value.family() {
+        LiteralFamily::Integer => value
+            .token()
+            .parse::<i64>()
+            .ok()
+            .filter(|parsed| parsed.to_string() == value.token())
+            .map_or(BuiltinCodec::RawUtf8, |_| BuiltinCodec::CanonicalI64),
+        LiteralFamily::Certainty => value
+            .token()
+            .strip_suffix('%')
+            .and_then(|token| token.parse::<i8>().ok())
+            .filter(|percent| (-100..=100).contains(percent))
+            .filter(|percent| format!("{percent}%") == value.token())
+            .map_or(BuiltinCodec::RawUtf8, |_| BuiltinCodec::CanonicalCertainty),
+        _ => BuiltinCodec::RawUtf8,
+    }
+}
+
+fn encode_literal(value: &LiteralValue, codec: BuiltinCodec) -> Result<Vec<u8>> {
+    match codec {
+        BuiltinCodec::RawUtf8 => Ok(value.token().as_bytes().to_vec()),
+        BuiltinCodec::CanonicalI64 => {
+            let integer = value.token().parse::<i64>().map_err(|error| {
+                DatabaseError::Invariant(format!(
+                    "canonical integer codec selection failed: {error}"
+                ))
+            })?;
+            let zigzag = ((integer as u64) << 1) ^ ((integer >> 63) as u64);
+            let mut encoded = Vec::new();
+            encode_uleb128(zigzag, &mut encoded);
+            Ok(encoded)
+        }
+        BuiltinCodec::CanonicalCertainty => {
+            let percent = value
+                .token()
+                .strip_suffix('%')
+                .and_then(|token| token.parse::<i8>().ok())
+                .ok_or_else(|| {
+                    DatabaseError::Invariant(
+                        "canonical certainty codec selection failed".to_string(),
+                    )
+                })?;
+            Ok(vec![percent as u8])
+        }
+    }
 }
 
 fn encode_time(time: &Time, target: &mut Vec<u8>) {
@@ -470,7 +606,7 @@ fn replay_logical(store_uuid: [u8; 16], batches: &[Vec<StoredRecord>]) -> Result
     let mut propositions = HashSet::new();
     let mut roles = Vec::new();
     let mut posits = Vec::new();
-    let mut has_raw_codec = false;
+    let mut codecs = HashSet::new();
     for batch in batches {
         for record in batch {
             match record.record_type {
@@ -487,17 +623,14 @@ fn replay_logical(store_uuid: [u8; 16], batches: &[Vec<StoredRecord>]) -> Result
                     roles.push(role);
                 }
                 RECORD_CODEC => {
-                    if has_raw_codec {
+                    let codec = decode_codec(&record.payload)?;
+                    if !codecs.insert(codec) {
                         return record_corruption(record, "duplicate Codec record");
                     }
-                    decode_raw_codec(&record.payload)?;
-                    has_raw_codec = true;
                 }
                 RECORD_POSIT => {
-                    if !has_raw_codec {
-                        return record_corruption(record, "Posit precedes required raw codec");
-                    }
-                    let posit = decode_posit(&record.payload)?;
+                    let posit = decode_posit(&record.payload, &codecs)
+                        .map_err(|error| record_corruption_error(record, error))?;
                     if !construct_identities.insert(posit.identity) {
                         return record_corruption(record, "duplicate Role or Posit identity");
                     }
@@ -527,15 +660,21 @@ fn replay_logical(store_uuid: [u8; 16], batches: &[Vec<StoredRecord>]) -> Result
             }
         }
     }
-    if !roles.is_empty() || !posits.is_empty() || has_raw_codec {
+    let has_required_codecs = BuiltinCodec::ALL
+        .into_iter()
+        .all(|codec| codecs.contains(&codec));
+    if !roles.is_empty() || !posits.is_empty() || !codecs.is_empty() {
         validate_builtin_role(&roles_by_identity, &identities_by_name, 1, "posit")?;
         validate_builtin_role(&roles_by_identity, &identities_by_name, 2, "ascertains")?;
+        if !has_required_codecs {
+            return corruption("store lacks one or more mandatory v1 codecs");
+        }
     }
     Ok(ReplayedStore {
         store_uuid,
         roles,
         posits,
-        has_raw_codec,
+        has_required_codecs,
     })
 }
 
@@ -580,26 +719,25 @@ fn decode_role(payload: &[u8]) -> Result<ReplayedRole> {
     })
 }
 
-fn decode_raw_codec(payload: &[u8]) -> Result<()> {
+fn decode_codec(payload: &[u8]) -> Result<BuiltinCodec> {
     let mut cursor = 0;
     let identifier = take_u16(payload, &mut cursor, "codec identifier")?;
     let version = take_u16(payload, &mut cursor, "codec version")?;
     let family = take_byte(payload, &mut cursor, "codec family")?;
     let flags = take_u16(payload, &mut cursor, "codec flags")?;
     let name = decode_text(payload, &mut cursor)?;
-    if identifier != RAW_CODEC_IDENTIFIER
-        || version != RAW_CODEC_VERSION
-        || family != 0
-        || flags != 0
-        || name != "raw-utf8-token"
-        || cursor != payload.len()
-    {
+    let codec = BuiltinCodec::from_pair(identifier, version).ok_or_else(|| {
+        DatabaseError::DataCorruption {
+            message: "unknown required codec".to_string(),
+        }
+    })?;
+    if family != codec.family() || flags != 0 || name != codec.name() || cursor != payload.len() {
         return corruption("unknown or malformed required codec");
     }
-    Ok(())
+    Ok(codec)
 }
 
-fn decode_posit(payload: &[u8]) -> Result<ReplayedPosit> {
+fn decode_posit(payload: &[u8], codecs: &HashSet<BuiltinCodec>) -> Result<ReplayedPosit> {
     let mut cursor = 0;
     let identity = take_u64(payload, &mut cursor, "Posit identity")?;
     if identity == 0 {
@@ -610,6 +748,9 @@ fn decode_posit(payload: &[u8]) -> Result<ReplayedPosit> {
             message: "appearance count exceeds addressable memory".to_string(),
         }
     })?;
+    if count == 0 || count > payload.len().saturating_sub(cursor) / 16 {
+        return corruption("appearance count exceeds the remaining Posit payload");
+    }
     let mut appearances = Vec::with_capacity(count);
     for _ in 0..count {
         let role = take_u64(payload, &mut cursor, "appearance Role")?;
@@ -631,10 +772,13 @@ fn decode_posit(payload: &[u8]) -> Result<ReplayedPosit> {
         })?;
     let codec = take_u16(payload, &mut cursor, "codec identifier")?;
     let codec_version = take_u16(payload, &mut cursor, "codec version")?;
-    if codec != RAW_CODEC_IDENTIFIER || codec_version != RAW_CODEC_VERSION {
-        return corruption("unknown required Posit codec");
-    }
-    let token = decode_text(payload, &mut cursor)?;
+    let codec = BuiltinCodec::from_pair(codec, codec_version)
+        .filter(|codec| codecs.contains(codec))
+        .ok_or_else(|| DatabaseError::DataCorruption {
+            message: "unknown or not-yet-declared Posit codec".to_string(),
+        })?;
+    let encoded = decode_blob(payload, &mut cursor)?;
+    let token = decode_literal(encoded, family, codec)?;
     let value =
         LiteralValue::new(token, family).map_err(|error| DatabaseError::DataCorruption {
             message: format!("invalid persisted literal: {error}"),
@@ -649,6 +793,38 @@ fn decode_posit(payload: &[u8]) -> Result<ReplayedPosit> {
         value,
         time,
     })
+}
+
+fn decode_literal(encoded: &[u8], family: LiteralFamily, codec: BuiltinCodec) -> Result<String> {
+    match codec {
+        BuiltinCodec::RawUtf8 => {
+            std::str::from_utf8(encoded)
+                .map(str::to_string)
+                .map_err(|error| DatabaseError::DataCorruption {
+                    message: format!("literal payload is not UTF-8: {error}"),
+                })
+        }
+        BuiltinCodec::CanonicalI64 if family == LiteralFamily::Integer => {
+            let mut cursor = 0;
+            let zigzag = decode_uleb128(encoded, &mut cursor)?;
+            if cursor != encoded.len() {
+                return corruption("canonical integer payload has trailing bytes");
+            }
+            let integer = ((zigzag >> 1) as i64) ^ -((zigzag & 1) as i64);
+            Ok(integer.to_string())
+        }
+        BuiltinCodec::CanonicalCertainty if family == LiteralFamily::Certainty => {
+            let [encoded] = encoded else {
+                return corruption("canonical certainty payload must contain one byte");
+            };
+            let percent = *encoded as i8;
+            if !(-100..=100).contains(&percent) {
+                return corruption("canonical certainty payload is outside -100..=100");
+            }
+            Ok(format!("{percent}%"))
+        }
+        _ => corruption("Posit codec is incompatible with its literal family"),
+    }
 }
 
 fn decode_time(payload: &[u8], cursor: &mut usize) -> Result<Time> {
@@ -707,6 +883,12 @@ fn record_corruption<T>(record: &StoredRecord, message: impl Into<String>) -> Re
     ))
 }
 
+fn record_corruption_error(record: &StoredRecord, error: DatabaseError) -> DatabaseError {
+    DatabaseError::DataCorruption {
+        message: format!("record sequence {}: {error}", record.sequence),
+    }
+}
+
 impl StoreBackend for LogStore {
     fn append_batch(&mut self, records: &[PendingRecord]) -> Result<Vec<StoredRecord>> {
         if self.poisoned {
@@ -716,6 +898,15 @@ impl StoreBackend for LogStore {
             ));
         }
         validate_pending_records(records)?;
+        #[cfg(test)]
+        let injected_failure = self.injected_failure.take();
+        #[cfg(test)]
+        if injected_failure == Some(InjectedFailure::LogWrite) {
+            self.poisoned = true;
+            return Err(DatabaseError::Persistence(
+                "injected log write failure (simulated disk full)".to_string(),
+            ));
+        }
         let old_length = self.manifest.committed_length;
         let mut sequence = self.next_sequence;
         let mut framed = Vec::new();
@@ -767,6 +958,13 @@ impl StoreBackend for LogStore {
             store_uuid: self.manifest.store_uuid,
             committed_length: new_length,
         };
+        #[cfg(test)]
+        if injected_failure == Some(InjectedFailure::ManifestCommit) {
+            self.poisoned = true;
+            return Err(DatabaseError::Persistence(
+                "injected manifest commit failure".to_string(),
+            ));
+        }
         if let Err(error) = write_manifest(&self.directory, &new_manifest) {
             self.poisoned = true;
             return Err(error);
@@ -1166,27 +1364,36 @@ fn validate_commit(
 }
 
 fn encode_text(value: &str, target: &mut Vec<u8>) {
+    encode_blob(value.as_bytes(), target);
+}
+
+fn encode_blob(value: &[u8], target: &mut Vec<u8>) {
     encode_uleb128(value.len() as u64, target);
-    target.extend_from_slice(value.as_bytes());
+    target.extend_from_slice(value);
 }
 
 fn decode_text(bytes: &[u8], cursor: &mut usize) -> Result<String> {
+    let encoded = decode_blob(bytes, cursor)?;
+    std::str::from_utf8(encoded)
+        .map_err(|error| DatabaseError::DataCorruption {
+            message: format!("invalid UTF-8 text: {error}"),
+        })
+        .map(str::to_string)
+}
+
+fn decode_blob<'a>(bytes: &'a [u8], cursor: &mut usize) -> Result<&'a [u8]> {
     let length = usize::try_from(decode_uleb128(bytes, cursor)?).map_err(|_| {
         DatabaseError::DataCorruption {
-            message: "text length exceeds addressable memory".to_string(),
+            message: "byte-string length exceeds addressable memory".to_string(),
         }
     })?;
     let end = cursor
         .checked_add(length)
         .filter(|end| *end <= bytes.len())
         .ok_or_else(|| DatabaseError::DataCorruption {
-            message: "truncated text field".to_string(),
+            message: "truncated byte-string field".to_string(),
         })?;
-    let value = std::str::from_utf8(&bytes[*cursor..end])
-        .map_err(|error| DatabaseError::DataCorruption {
-            message: format!("invalid UTF-8 text: {error}"),
-        })?
-        .to_string();
+    let value = &bytes[*cursor..end];
     *cursor = end;
     Ok(value)
 }
@@ -1365,6 +1572,7 @@ fn frame_io_error(offset: u64, sequence: Option<u64>, error: std::io::Error) -> 
 mod tests {
     use super::*;
     use crate::construct::{Appearance, AppearanceSet};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -1426,8 +1634,13 @@ mod tests {
             stored(role_record(&posit_role), 1),
             stored(role_record(&ascertains_role), 2),
             stored(role_record(&value_role), 3),
-            stored(raw_codec_record(), 4),
         ];
+        batch.extend(
+            codec_records()
+                .into_iter()
+                .enumerate()
+                .map(|(index, record)| stored(record, 4 + index as u64)),
+        );
         for (index, (value, time)) in values.iter().zip(times.iter()).enumerate() {
             let posit = Posit::new(
                 100 + index as u64,
@@ -1435,12 +1648,12 @@ mod tests {
                 value.clone(),
                 time.clone(),
             );
-            batch.push(stored(posit_record(&posit).unwrap(), 5 + index as u64));
+            batch.push(stored(posit_record(&posit).unwrap(), 7 + index as u64));
         }
 
         let replayed = replay_logical([7; 16], &[batch]).unwrap();
         assert_eq!(replayed.store_uuid, [7; 16]);
-        assert!(replayed.has_raw_codec);
+        assert!(replayed.has_required_codecs);
         assert_eq!(replayed.roles.len(), 3);
         assert_eq!(replayed.posits.len(), values.len());
         for (index, posit) in replayed.posits.iter().enumerate() {
@@ -1449,6 +1662,73 @@ mod tests {
             assert_eq!(posit.value, values[index]);
             assert_eq!(posit.time, times[index]);
         }
+    }
+
+    #[test]
+    fn compact_and_raw_codecs_reconstruct_one_logical_literal_identity() {
+        let posit_role = Role::new(1, "posit".to_string(), true);
+        let ascertains_role = Role::new(2, "ascertains".to_string(), true);
+        let value_role = Role::new(3, "value".to_string(), false);
+        let value = LiteralValue::new("9223372036854775807", LiteralFamily::Integer).unwrap();
+        let padded = LiteralValue::new("+001", LiteralFamily::Integer).unwrap();
+        let certainty = LiteralValue::new("75%", LiteralFamily::Certainty).unwrap();
+        let padded_certainty = LiteralValue::new("075%", LiteralFamily::Certainty).unwrap();
+        assert_eq!(select_codec(&value), BuiltinCodec::CanonicalI64);
+        assert_eq!(select_codec(&padded), BuiltinCodec::RawUtf8);
+        assert_eq!(select_codec(&certainty), BuiltinCodec::CanonicalCertainty);
+        assert_eq!(select_codec(&padded_certainty), BuiltinCodec::RawUtf8);
+
+        let time = Time::new_date_from("2024-05-06").unwrap();
+        let appearances = [(3, 42)];
+        let compact = posit_record_logical_with_codec(
+            100,
+            &appearances,
+            &value,
+            &time,
+            BuiltinCodec::CanonicalI64,
+        )
+        .unwrap();
+        let raw = posit_record_logical_with_codec(
+            101,
+            &appearances,
+            &value,
+            &time,
+            BuiltinCodec::RawUtf8,
+        )
+        .unwrap();
+        assert_ne!(compact.payload, raw.payload);
+        assert!(compact.payload.len() < raw.payload.len());
+
+        let metadata = || {
+            let mut batch = vec![
+                stored(role_record(&posit_role), 1),
+                stored(role_record(&ascertains_role), 2),
+                stored(role_record(&value_role), 3),
+            ];
+            batch.extend(
+                codec_records()
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, record)| stored(record, 4 + index as u64)),
+            );
+            batch
+        };
+
+        for record in [compact.clone(), raw.clone()] {
+            let mut batch = metadata();
+            batch.push(stored(record, 7));
+            let replayed = replay_logical([6; 16], &[batch]).unwrap();
+            assert_eq!(replayed.posits[0].value, value);
+        }
+
+        let mut duplicate = metadata();
+        duplicate.push(stored(compact, 7));
+        duplicate.push(stored(raw, 8));
+        let error = replay_logical([6; 16], &[duplicate]).unwrap_err();
+        assert!(
+            error.to_string().contains("duplicate Posit proposition"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -1465,23 +1745,28 @@ mod tests {
             value,
             Time::new_date_from("2024-05-06").unwrap(),
         );
-        let base = vec![
+        let mut base = vec![
             stored(role_record(&posit_role), 1),
             stored(role_record(&ascertains_role), 2),
-            stored(raw_codec_record(), 3),
         ];
+        base.extend(
+            codec_records()
+                .into_iter()
+                .enumerate()
+                .map(|(index, record)| stored(record, 3 + index as u64)),
+        );
         let mut dangling = base.clone();
-        dangling.push(stored(posit_record(&posit).unwrap(), 4));
+        dangling.push(stored(posit_record(&posit).unwrap(), 6));
         let error = replay_logical([8; 16], &[dangling]).unwrap_err();
         assert!(error.to_string().contains("unknown Role"), "{error}");
 
         let missing_role_record = Role::new(9, "missing".to_string(), false);
         let mut duplicate = base;
-        duplicate.push(stored(role_record(&missing_role_record), 4));
-        duplicate.push(stored(posit_record(&posit).unwrap(), 5));
+        duplicate.push(stored(role_record(&missing_role_record), 6));
+        duplicate.push(stored(posit_record(&posit).unwrap(), 7));
         let mut second = posit_record(&posit).unwrap();
         second.payload[0..8].copy_from_slice(&101u64.to_le_bytes());
-        duplicate.push(stored(second, 6));
+        duplicate.push(stored(second, 8));
         let error = replay_logical([8; 16], &[duplicate]).unwrap_err();
         assert!(
             error.to_string().contains("duplicate Posit proposition"),
@@ -1493,7 +1778,12 @@ mod tests {
             stored(role_record(&posit_role), 2),
         ];
         duplicate_role.push(stored(role_record(&ascertains_role), 3));
-        duplicate_role.push(stored(raw_codec_record(), 4));
+        duplicate_role.extend(
+            codec_records()
+                .into_iter()
+                .enumerate()
+                .map(|(index, record)| stored(record, 4 + index as u64)),
+        );
         let error = replay_logical([8; 16], &[duplicate_role]).unwrap_err();
         assert!(error.to_string().contains("duplicate or conflicting Role"));
     }
@@ -1502,19 +1792,20 @@ mod tests {
     fn logical_replay_rejects_unknown_required_codecs() {
         let posit_role = Role::new(1, "posit".to_string(), true);
         let ascertains_role = Role::new(2, "ascertains".to_string(), true);
-        let mut codec = raw_codec_record();
-        codec.payload[2..4].copy_from_slice(&2u16.to_le_bytes());
-        let batch = vec![
+        let mut codecs = codec_records();
+        codecs[0].payload[2..4].copy_from_slice(&2u16.to_le_bytes());
+        let mut batch = vec![
             stored(role_record(&posit_role), 1),
             stored(role_record(&ascertains_role), 2),
-            stored(codec, 3),
         ];
-        let error = replay_logical([9; 16], &[batch]).unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("unknown or malformed required codec")
+        batch.extend(
+            codecs
+                .into_iter()
+                .enumerate()
+                .map(|(index, record)| stored(record, 3 + index as u64)),
         );
+        let error = replay_logical([9; 16], &[batch]).unwrap_err();
+        assert!(error.to_string().contains("unknown required codec"));
     }
 
     #[test]
@@ -1536,6 +1827,30 @@ mod tests {
     }
 
     #[test]
+    fn arbitrary_storage_payloads_return_bounded_errors_without_panicking() {
+        let codecs = BuiltinCodec::ALL.into_iter().collect::<HashSet<_>>();
+        for seed in 0_u16..1024 {
+            let length = usize::from(seed % 512);
+            let bytes = (0..length)
+                .map(|index| {
+                    seed.wrapping_mul(109)
+                        .wrapping_add((index as u16).wrapping_mul(197)) as u8
+                })
+                .collect::<Vec<_>>();
+            let outcome = catch_unwind(AssertUnwindSafe(|| {
+                let _ = decode_role(&bytes);
+                let _ = decode_codec(&bytes);
+                let _ = decode_posit(&bytes, &codecs);
+                let mut cursor = 0;
+                let _ = decode_time(&bytes, &mut cursor);
+                let mut cursor = 0;
+                let _ = decode_uleb128(&bytes, &mut cursor);
+            }));
+            assert!(outcome.is_ok(), "storage payload panicked for seed {seed}");
+        }
+    }
+
+    #[test]
     fn memory_batches_receive_monotonic_sequences() {
         let mut store = MemoryStore::new();
         let first = store
@@ -1551,7 +1866,7 @@ mod tests {
     }
 
     #[test]
-    fn log_batches_survive_reopen_with_the_same_uuid() {
+    fn acknowledged_batches_survive_reopen_without_an_extra_flush() {
         let directory = TemporaryStore::new("reopen");
         let (uuid, committed_length) = {
             let mut store = LogStore::open(&directory.0).unwrap();
@@ -1569,7 +1884,6 @@ mod tests {
                     .collect::<Vec<_>>(),
                 [1, 2, 3]
             );
-            store.flush().unwrap();
             (store.store_uuid(), store.committed_length())
         };
 
@@ -1731,6 +2045,47 @@ mod tests {
             assert_eq!(
                 std::fs::metadata(candidate.0.join(LOG_NAME)).unwrap().len(),
                 base_length
+            );
+        }
+    }
+
+    #[test]
+    fn every_truncation_inside_committed_tail_is_fatal_and_never_rewritten() {
+        let source = TemporaryStore::new("committed-tail-source");
+        let first_length = {
+            let mut store = LogStore::open(&source.0).unwrap();
+            store
+                .append_batch(&[PendingRecord::new(RECORD_ROLE, b"first".to_vec())])
+                .unwrap();
+            let first_length = store.committed_length();
+            store
+                .append_batch(&[PendingRecord::new(RECORD_ROLE, b"second".to_vec())])
+                .unwrap();
+            first_length
+        };
+        let manifest = std::fs::read(source.0.join(MANIFEST_NAME)).unwrap();
+        let log = std::fs::read(source.0.join(LOG_NAME)).unwrap();
+
+        for cut in first_length as usize..log.len() {
+            let candidate = TemporaryStore::new(&format!("committed-tail-cut-{cut}"));
+            std::fs::create_dir_all(&candidate.0).unwrap();
+            std::fs::write(candidate.0.join(LOCK_NAME), []).unwrap();
+            std::fs::write(candidate.0.join(MANIFEST_NAME), &manifest).unwrap();
+            std::fs::write(candidate.0.join(LOG_NAME), &log[..cut]).unwrap();
+
+            let error = match LogStore::open(&candidate.0) {
+                Ok(_) => panic!("committed truncation at byte {cut} unexpectedly opened"),
+                Err(error) => error,
+            };
+            assert!(
+                error.to_string().contains("committed length")
+                    || error.to_string().contains("truncated"),
+                "cut {cut}: {error}"
+            );
+            assert_eq!(
+                std::fs::metadata(candidate.0.join(LOG_NAME)).unwrap().len(),
+                cut as u64,
+                "failed open must not rewrite committed corruption"
             );
         }
     }
