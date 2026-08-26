@@ -40,7 +40,8 @@ A **posit** is a statement like: "Alice's name was 'Alice Smith' starting on Jan
   - For example, `{(Alice, name)}` is a viewport with one hole: the "name" role aimed at Alice. When you look through this viewport at the database, you might see the value "Alice Smith" at time '2023-01-01'.
   - For a couple: `{(Bob, husband), (Carol, wife)}` has two holes – one for the "husband" role (Bob) and one for the "wife" role (Carol). Aiming this at the data might reveal the value "married" at a certain time.
   - This "aiming" happens during searches or when adding posits, binding identities to roles to extract or assert facts.
-- **Value**: The fact being asserted, like `"Alice Smith"`.
+- **Value**: The literal being asserted, including meaningful presentation such
+  as numeric precision.
 - **Time**: When this fact became true, like `'2023-01-01'`.
 
 Posits don't replace old data; they add layers. If Alice changes her name, you add a new posit with a later time.
@@ -247,13 +248,47 @@ Includes a flag if more exist.
 
 ---
 
-## Data Types and Literals
+## Literals and Value Interpretation
+
+Traqula recognizes literal families so the engine can preserve and interpret
+values efficiently:
 
 - Strings: `"text"`
-- Numbers: `42` (int), `3.14` (decimal)
+- Numbers: `42`, `3.14`
 - JSON: `{"key": "value"}`
 - Certainty: `75%`
 - Time: `'2023-01-01'`, `@NOW`, `@BOT`, `@EOT`
+
+These are not schema datatypes that users must declare. Positorium's intended
+beta value model is WYSIWYG: the entered literal, including meaningful precision,
+is logical data, while integer widths, decimal encodings, compression, and other
+physical codecs remain hidden implementation details. A storage migration may
+change a codec but must not change the retrieved literal, posit identity, or
+query result.
+
+For example, `6` and `6.00` are different literal values because they express
+different precision, but they have the same nominal numeric value. The planned
+beta comparison relations distinguish those questions:
+
+```traqula
+where amount = 6     /* nominal equality; may match 6 and 6.00 */
+where amount ?= 6    /* compatible possible values; no hidden epsilon */
+```
+
+Exact literal identity is a third relation whose syntax is still being decided.
+Compatibility means that the possible-value sets represented by the two literals
+intersect. It is not approximate equality based on an arbitrary implementation
+tolerance.
+
+When a role must contain only particular values, precision, units, or ranges,
+that rule belongs to Positorium's constraint layer rather than to a user-visible
+datatype. The posit remains recorded even when a later or competing constraint
+regards it as nonconforming.
+
+> **Current prototype:** `?=` and lossless preservation of every literal spelling
+> are beta design decisions, not yet implemented by the current parser and
+> storage backend. Current supported `where` operators remain those listed in
+> Lesson 6.
 
 ---
 
