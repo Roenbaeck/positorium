@@ -15,21 +15,20 @@
 //!   identity (also a thing).
 //!
 //! # Example
-//! Create a role, a thing, an appearance, an appearance set and finally a
-//! posit with a string value and time.
+//! Construct a database and mutate it through the high-level execution API.
 //! ```
-//! use positorium::construct::{Database, PersistenceMode};
-//! use positorium::datatype::Time;
-//! // Pure in-memory (no file persistence)
+//! use positorium::{Database, Engine, PersistenceMode};
 //! let db = Database::new(PersistenceMode::InMemory).unwrap();
-//! let (role, _) = db.create_role("person".to_string(), false).unwrap();
-//! let thing = db.create_thing().unwrap();
-//! let (appearance, _) = db.create_appearance(*thing, role).unwrap();
-//! let (appearance_set, _) = db.create_appearance_set(vec![appearance]).unwrap();
-//! let time = Time::new();
-//! let posit = db.create_posit(appearance_set, String::from("Alice"), time.clone()).unwrap();
-//! assert_eq!(posit.value(), &"Alice".to_string());
+//! Engine::new(&db)
+//!     .execute("add role person; add posit [{(+person, person)}, \"Alice\", @NOW];")
+//!     .unwrap();
 //! ```
+//!
+//! # Unstable internals
+//!
+//! This hidden module carries no beta compatibility promise. Database mutation
+//! is crate-private; beta callers use database construction and high-level
+//! execution APIs.
 use crate::datatype::{DataType, Time};
 use crate::error::DatabaseError;
 use crate::literal::LiteralValue;
@@ -633,24 +632,24 @@ impl PersistenceMode {
 pub struct Database {
     pub(crate) execution_owner: Mutex<()>,
     // owns a thing generator
-    pub thing_generator: Arc<Mutex<ThingGenerator>>,
+    pub(crate) thing_generator: Arc<Mutex<ThingGenerator>>,
     // owns keepers for the available constructs
-    pub role_keeper: Arc<Mutex<RoleKeeper>>,
-    pub appearance_keeper: Arc<Mutex<AppearanceKeeper>>,
-    pub appearance_set_keeper: Arc<Mutex<AppearanceSetKeeper>>,
-    pub posit_keeper: Arc<Mutex<PositKeeper>>,
+    pub(crate) role_keeper: Arc<Mutex<RoleKeeper>>,
+    pub(crate) appearance_keeper: Arc<Mutex<AppearanceKeeper>>,
+    pub(crate) appearance_set_keeper: Arc<Mutex<AppearanceSetKeeper>>,
+    pub(crate) posit_keeper: Arc<Mutex<PositKeeper>>,
     // owns lookups between constructs (similar to database indexes)
-    pub thing_to_appearance_lookup: Arc<Mutex<Lookup<Thing, Arc<Appearance>, ThingHasher>>>,
-    pub role_to_appearance_lookup: Arc<Mutex<RoleAppearanceLookup>>,
-    pub appearance_to_appearance_set_lookup: Arc<Mutex<AppearanceSetLookup>>,
-    pub appearance_set_to_posit_thing_lookup:
+    pub(crate) thing_to_appearance_lookup: Arc<Mutex<Lookup<Thing, Arc<Appearance>, ThingHasher>>>,
+    pub(crate) role_to_appearance_lookup: Arc<Mutex<RoleAppearanceLookup>>,
+    pub(crate) appearance_to_appearance_set_lookup: Arc<Mutex<AppearanceSetLookup>>,
+    pub(crate) appearance_set_to_posit_thing_lookup:
         Arc<Mutex<ThingLookup<Arc<AppearanceSet>, OtherHasher>>>,
-    pub role_to_posit_thing_lookup: Arc<Mutex<ThingLookup<Thing, OtherHasher>>>,
+    pub(crate) role_to_posit_thing_lookup: Arc<Mutex<ThingLookup<Thing, OtherHasher>>>,
     /// Reverse lookup: posit thing -> its appearance set (type-erased from value/time).
-    pub posit_thing_to_appearance_set_lookup:
+    pub(crate) posit_thing_to_appearance_set_lookup:
         Arc<Mutex<HashMap<Thing, Arc<AppearanceSet>, ThingHasher>>>,
     /// Type-erased index: posit thing -> its time (for generic time filtering)
-    pub posit_time_lookup: Arc<Mutex<HashMap<Thing, Time, ThingHasher>>>,
+    pub(crate) posit_time_lookup: Arc<Mutex<HashMap<Thing, Time, ThingHasher>>>,
     // Append-only persistence owner. `None` is the in-memory mode.
     #[cfg(feature = "persistence")]
     store: Arc<Mutex<Option<LogStore>>>,
@@ -822,46 +821,24 @@ impl Database {
         Ok(())
     }
     // functions to access the owned generator and keepers
-    pub fn thing_generator(&self) -> Arc<Mutex<ThingGenerator>> {
+    pub(crate) fn thing_generator(&self) -> Arc<Mutex<ThingGenerator>> {
         Arc::clone(&self.thing_generator)
     }
-    pub fn role_keeper(&self) -> Arc<Mutex<RoleKeeper>> {
+    pub(crate) fn role_keeper(&self) -> Arc<Mutex<RoleKeeper>> {
         Arc::clone(&self.role_keeper)
     }
-    pub fn appearance_keeper(&self) -> Arc<Mutex<AppearanceKeeper>> {
-        Arc::clone(&self.appearance_keeper)
-    }
-    pub fn appearance_set_keeper(&self) -> Arc<Mutex<AppearanceSetKeeper>> {
-        Arc::clone(&self.appearance_set_keeper)
-    }
-    pub fn posit_keeper(&self) -> Arc<Mutex<PositKeeper>> {
+    pub(crate) fn posit_keeper(&self) -> Arc<Mutex<PositKeeper>> {
         Arc::clone(&self.posit_keeper)
     }
-    pub fn thing_to_appearance_lookup(
-        &self,
-    ) -> Arc<Mutex<Lookup<Thing, Arc<Appearance>, ThingHasher>>> {
-        Arc::clone(&self.thing_to_appearance_lookup)
-    }
-    pub fn role_to_appearance_lookup(&self) -> Arc<Mutex<RoleAppearanceLookup>> {
-        Arc::clone(&self.role_to_appearance_lookup)
-    }
-    pub fn appearance_to_appearance_set_lookup(&self) -> Arc<Mutex<AppearanceSetLookup>> {
-        Arc::clone(&self.appearance_to_appearance_set_lookup)
-    }
-    pub fn appearance_set_to_posit_thing_lookup(
-        &self,
-    ) -> Arc<Mutex<ThingLookup<Arc<AppearanceSet>, OtherHasher>>> {
-        Arc::clone(&self.appearance_set_to_posit_thing_lookup)
-    }
-    pub fn role_to_posit_thing_lookup(&self) -> Arc<Mutex<ThingLookup<Thing, OtherHasher>>> {
+    pub(crate) fn role_to_posit_thing_lookup(&self) -> Arc<Mutex<ThingLookup<Thing, OtherHasher>>> {
         Arc::clone(&self.role_to_posit_thing_lookup)
     }
-    pub fn posit_thing_to_appearance_set_lookup(
+    pub(crate) fn posit_thing_to_appearance_set_lookup(
         &self,
     ) -> Arc<Mutex<HashMap<Thing, Arc<AppearanceSet>, ThingHasher>>> {
         Arc::clone(&self.posit_thing_to_appearance_set_lookup)
     }
-    pub fn posit_time_lookup(&self) -> Arc<Mutex<HashMap<Thing, Time, ThingHasher>>> {
+    pub(crate) fn posit_time_lookup(&self) -> Arc<Mutex<HashMap<Thing, Time, ThingHasher>>> {
         Arc::clone(&self.posit_time_lookup)
     }
 
@@ -877,28 +854,28 @@ impl Database {
         }
         Ok(())
     }
-    pub fn create_thing(&self) -> Result<Arc<Thing>, DatabaseError> {
-        #[cfg(feature = "persistence")]
-        if self
-            .store
+
+    /// Return whether the normalized, case-sensitive role catalog contains `name`.
+    pub fn contains_role(&self, name: &str) -> Result<bool, DatabaseError> {
+        let name: String = name.nfc().collect();
+        Ok(self
+            .role_keeper
             .lock()
             .map_err(|error| DatabaseError::Lock(error.to_string()))?
-            .is_some()
-        {
-            return Err(DatabaseError::Execution(
-                "standalone Thing allocation is not durable in the beta store; allocate through a role or posit command"
-                    .to_string(),
-            ));
-        }
-        let thing = self
-            .thing_generator
+            .get(&name)
+            .is_some())
+    }
+
+    /// Return the number of roles in the catalog, including reserved roles.
+    pub fn role_count(&self) -> Result<usize, DatabaseError> {
+        Ok(self
+            .role_keeper
             .lock()
             .map_err(|error| DatabaseError::Lock(error.to_string()))?
-            .generate();
-        Ok(Arc::new(thing))
+            .len())
     }
     // functions to create constructs for the keepers to keep that also populate the lookups
-    pub fn keep_role(&self, role: Role) -> Result<(Arc<Role>, bool), DatabaseError> {
+    pub(crate) fn keep_role(&self, role: Role) -> Result<(Arc<Role>, bool), DatabaseError> {
         Ok(self
             .role_keeper
             .lock()
@@ -943,17 +920,6 @@ impl Database {
         let _ = builtin_role;
         Ok(())
     }
-    pub fn create_role(
-        &self,
-        role_name: String,
-        reserved: bool,
-    ) -> Result<(Arc<Role>, bool), DatabaseError> {
-        self.create_roles(vec![(role_name, reserved)])?
-            .into_iter()
-            .next()
-            .ok_or_else(|| DatabaseError::Invariant("role command returned no role".to_string()))
-    }
-
     pub(crate) fn create_roles(
         &self,
         roles: Vec<(String, bool)>,
@@ -1027,7 +993,7 @@ impl Database {
             })
             .collect())
     }
-    pub fn keep_appearance(
+    pub(crate) fn keep_appearance(
         &self,
         appearance: Appearance,
     ) -> Result<(Arc<Appearance>, bool), DatabaseError> {
@@ -1050,22 +1016,14 @@ impl Database {
         }
         Ok((kept_appearance, previously_kept))
     }
-    #[deprecated(since = "0.1.5", note = "use Database::create_appearance")]
-    pub fn create_apperance(
-        &self,
-        thing: Thing,
-        role: Arc<Role>,
-    ) -> Result<(Arc<Appearance>, bool), DatabaseError> {
-        self.create_appearance(thing, role)
-    }
-    pub fn create_appearance(
+    pub(crate) fn create_appearance(
         &self,
         thing: Thing,
         role: Arc<Role>,
     ) -> Result<(Arc<Appearance>, bool), DatabaseError> {
         self.keep_appearance(Appearance::new(thing, role))
     }
-    pub fn keep_appearance_set(
+    pub(crate) fn keep_appearance_set(
         &self,
         appearance_set: AppearanceSet,
     ) -> Result<(Arc<AppearanceSet>, bool), DatabaseError> {
@@ -1084,7 +1042,7 @@ impl Database {
         }
         Ok((kept_appearance_set, previously_kept))
     }
-    pub fn create_appearance_set(
+    pub(crate) fn create_appearance_set(
         &self,
         appearance_set: Vec<Arc<Appearance>>,
     ) -> Result<(Arc<AppearanceSet>, bool), DatabaseError> {
@@ -1095,7 +1053,8 @@ impl Database {
         })?;
         self.keep_appearance_set(appearance_set)
     }
-    pub fn keep_posit<V: 'static + DataType>(
+    #[cfg(feature = "persistence")]
+    pub(crate) fn keep_posit<V: 'static + DataType>(
         &self,
         posit: Posit<V>,
     ) -> Result<(Arc<Posit<V>>, bool), DatabaseError> {
@@ -1136,58 +1095,6 @@ impl Database {
         }
         Ok((kept_posit, previously_kept))
     }
-    pub fn create_posit<V: 'static + DataType>(
-        &self,
-        appearance_set: Arc<AppearanceSet>,
-        value: V,
-        time: Time,
-    ) -> Result<Arc<Posit<V>>, DatabaseError> {
-        let posit_thing = self
-            .thing_generator
-            .lock()
-            .map_err(|error| DatabaseError::Lock(error.to_string()))?
-            .generate();
-        let candidate = Arc::new(Posit::new(posit_thing, appearance_set, value, time));
-        if let Some(existing) = self
-            .posit_keeper
-            .lock()
-            .map_err(|error| DatabaseError::Lock(error.to_string()))?
-            .existing(&candidate)
-        {
-            self.thing_generator
-                .lock()
-                .map_err(|error| DatabaseError::Lock(error.to_string()))?
-                .release(posit_thing);
-            return Ok(existing);
-        }
-        #[cfg(feature = "persistence")]
-        {
-            let mut store = self
-                .store
-                .lock()
-                .map_err(|error| DatabaseError::Lock(error.to_string()))?;
-            if let Some(store) = store.as_mut() {
-                let literal = (candidate.value() as &dyn Any)
-                    .downcast_ref::<LiteralValue>()
-                    .ok_or_else(|| {
-                        DatabaseError::Execution(
-                            "persistent beta posits require a lossless LiteralValue".to_string(),
-                        )
-                    })?;
-                let record = posit_record_parts(
-                    candidate.posit(),
-                    &candidate.appearance_set(),
-                    literal,
-                    candidate.time(),
-                )?;
-                store.append_batch(&[record])?;
-            }
-        }
-        let (kept_posit, previously_kept) = self.keep_posit_arc(candidate)?;
-        debug_assert!(!previously_kept);
-        Ok(kept_posit)
-    }
-
     pub(crate) fn create_literal_posits(
         &self,
         posits: Vec<(Arc<AppearanceSet>, LiteralValue, Time)>,

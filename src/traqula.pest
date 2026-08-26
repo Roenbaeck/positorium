@@ -25,7 +25,7 @@ variable = ${ !(keyword ~ ! (CASED_LETTER | digit | "_" )) ~ CASED_LETTER ~ (CAS
 constant = { "@" ~ UPPERCASE_LETTER+ }
 
 // add role command
-role = { (CASED_LETTER | SPACE_SEPARATOR)+ }
+role = { (CASED_LETTER | NONSPACING_MARK | SPACING_MARK | SPACE_SEPARATOR)+ }
 add_role = { ^"add role" ~ (role ~ ","?)+ ~ ";" }
 
 // add posit command

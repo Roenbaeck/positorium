@@ -64,7 +64,7 @@ Config (positorium.json):
 The engine now uses an explicit persistence mode enum:
 
 ```rust
-use positorium::construct::{Database, PersistenceMode};
+use positorium::{Database, PersistenceMode};
 
 // Ephemeral: nothing is written, all data lost when process exits
 let db = Database::new(PersistenceMode::InMemory);

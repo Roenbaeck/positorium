@@ -23,13 +23,10 @@ fn remove_store(path: &str) {
 #[test]
 fn in_memory_mode_allows_basic_operations() {
     let db = Database::new(PersistenceMode::InMemory).expect("db");
-    let (role, existed) = db
-        .create_role("person".to_string(), false)
-        .expect("create role");
-    assert!(!existed);
-    let thing = db.create_thing().expect("ephemeral thing");
-    let (appearance, _) = db.create_appearance(*thing, role).unwrap();
-    let (_aset, _) = db.create_appearance_set(vec![appearance]).unwrap();
+    positorium::Engine::new(&db)
+        .execute("add role person; add posit [{(+person, person)}, \"Alice\", @NOW];")
+        .expect("execute in memory");
+    assert!(db.contains_role("person").unwrap());
 }
 
 #[test]
@@ -46,8 +43,7 @@ fn append_only_store_replays_roles_posits_and_indexes() {
                 "add role amount; add posit [{(+item, amount)}, +001.00, '2026-08-26'];",
             )
             .expect("durable commands");
-        assert_eq!(db.role_keeper().lock().unwrap().len(), 3);
-        assert_eq!(db.posit_keeper().lock().unwrap().len(), 1);
+        assert_eq!(db.role_count().unwrap(), 3);
     }
 
     let restored = Database::new(PersistenceMode::File(path.clone())).expect("replay store");
@@ -103,17 +99,6 @@ fn every_literal_family_survives_append_only_restart_losslessly() {
         ]
     );
     drop(restored);
-    remove_store(&path);
-}
-
-#[test]
-#[cfg(feature = "persistence")]
-fn persistent_store_rejects_standalone_thing_allocation() {
-    let path = temporary_store_path("standalone-thing");
-    let db = Database::new(PersistenceMode::File(path.clone())).expect("create store");
-    let error = db.create_thing().unwrap_err();
-    assert!(error.to_string().contains("standalone Thing allocation"));
-    drop(db);
     remove_store(&path);
 }
 

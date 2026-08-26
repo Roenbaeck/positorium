@@ -1,48 +1,39 @@
 //! Positorium – a lightweight experimental implementation of Transitional Modeling concepts.
 //!
-//! Positorium centers on the *posit* concept: a proposition of the form
-//! `(AppearanceSet, Value, Time)`, where:
-//! * A [`construct::Thing`] is an opaque identity (a simple `u64`).
-//! * A [`construct::Role`] names a semantic placeholder a thing can occupy.
-//! * An [`construct::Appearance`] pairs a thing with a role.
-//! * An [`construct::AppearanceSet`] is a duplicate‑free, role‑unique set of appearances.
-//! * A [`construct::Posit`] couples an appearance set with a typed value (`V: DataType`) and time (`Time`).
-//!
-//! These core constructs are owned and deduplicated by "keeper" structures (see
-//! the `construct` module) enabling canonical sharing through `Arc` while
-//! providing efficient lookup indexes for query evaluation.
+//! Positorium centers on immutable posit propositions: an appearance set, a
+//! lossless literal, and a time, with a separately assigned store-local identity.
+//! The public beta surface deliberately hides keeper, index, and storage details.
 //!
 //! ## Modules
-//! * [`construct`] – Fundamental identity / posit building blocks and keepers.
 //! * [`datatype`] – The [`datatype::DataType`] trait plus provided concrete types
 //!   (string, numeric, temporal, certainty, JSON, decimal, etc.).
 //! * `storage` – private append-only framing, replay, and durability machinery.
 //! * [`maintenance`] – versioned logical transfer, inspection, and physical backup.
-//! * [`traqula`] – A minimal DSL (parser + engine) for adding roles, posits and performing searches.
+//! * [`traqula`] – Traqula execution and structured result contracts.
 //!
 //! ## Data Types
-//! Any type implementing [`datatype::DataType`] can be used as the value in a posit.
-//! Built‑ins currently retain transitional internal names for heterogeneous indexing.
+//! Durable beta commands preserve complete lossless literal tokens. Physical
+//! encodings remain private and never appear in query results.
 //!
 //! ## Persistence
-//! [`construct::Database`] owns either an ephemeral engine or one append-only
+//! [`Database`] owns either an ephemeral engine or one append-only
 //! store, durably commits each mutation command, and rebuilds all keepers and
 //! indexes through validated replay on startup.
 //!
 //! ## Traqula DSL
-//! The `traqula` module exposes an [`traqula::Engine`] capable of parsing simple
+//! [`Engine`] parses and executes
 //! scripts consisting of semicolon‑separated commands (e.g. `add role`,
 //! `add posit`, future `search`). Grammar details live in `traqula.pest`.
 //!
 //! ## Quick Start
 //! ```
-//! use positorium::{construct::{Database, PersistenceMode}, traqula::Engine};
+//! use positorium::{Database, Engine, PersistenceMode};
 //! let db = Database::new(PersistenceMode::InMemory).unwrap();
 //! let engine = Engine::new(&db);
 //! engine
 //!     .execute("add role person; add posit [{(+a, person)}, \"Alice\", @NOW];")
 //!     .unwrap();
-//! assert!(db.role_keeper().lock().unwrap().len() >= 1);
+//! assert!(db.contains_role("person").unwrap());
 //! ```
 //!
 //! ## Status & Roadmap
@@ -62,6 +53,7 @@
 //! Generated crate docs intentionally aggregate conceptual guidance formerly
 //! kept in `main.rs` so that library consumers see them directly on docs.rs.
 
+#[doc(hidden)]
 pub mod construct;
 pub mod datatype;
 pub mod error;
@@ -76,3 +68,12 @@ mod storage;
 pub mod traqula;
 #[cfg(feature = "wasm")]
 pub mod wasm;
+
+pub use construct::{Database, PersistenceMode};
+pub use error::{DatabaseError, Result};
+pub use interface::{CancelToken, QueryHandle, QueryId, QueryInterface, QueryOptions, Row};
+pub use literal::{LiteralFamily, LiteralValue};
+pub use traqula::{
+    CancellationToken, CollectedResult, CollectedResultSet, Engine, ExecutionMetadata,
+    ExecutionOptions, ExecutionWarning, MultiStreamCallbacks, RowSink, SinkFlow,
+};

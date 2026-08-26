@@ -1,9 +1,7 @@
-use positorium::construct::{
-    ASCERTAINS_ROLE_ID, Appearance, AppearanceSet, POSIT_ROLE_ID, Posit, Role, ThingGenerator,
-};
+use positorium::construct::{Appearance, AppearanceSet, Posit, Role, ThingGenerator};
 use positorium::construct::{Database, PersistenceMode};
 use positorium::datatype::{Certainty, Time};
-use positorium::traqula::{Engine, posits_involving_thing};
+use positorium::traqula::Engine;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -97,15 +95,13 @@ fn snapshots_preserve_incomparable_and_equal_time_conflicts() {
 #[test]
 fn role_catalog_normalizes_nfc_and_keeps_names_case_sensitive() {
     let db = Database::new(PersistenceMode::InMemory).unwrap();
-    let (decomposed, existed) = db.create_role("cafe\u{301}".to_string(), false).unwrap();
-    assert!(!existed);
-    let (composed, existed) = db.create_role("caf\u{e9}".to_string(), false).unwrap();
-    assert!(existed);
-    assert_eq!(decomposed.role(), composed.role());
-
-    let (upper, existed) = db.create_role("CAF\u{c9}".to_string(), false).unwrap();
-    assert!(!existed);
-    assert_ne!(decomposed.role(), upper.role());
+    Engine::new(&db)
+        .execute("add role cafe\u{301}; add role caf\u{e9}; add role CAF\u{c9};")
+        .unwrap();
+    assert_eq!(db.role_count().unwrap(), 4);
+    assert!(db.contains_role("cafe\u{301}").unwrap());
+    assert!(db.contains_role("caf\u{e9}").unwrap());
+    assert!(db.contains_role("CAF\u{c9}").unwrap());
 }
 
 #[test]
@@ -168,38 +164,26 @@ fn certainty_boundaries_and_consistency_follow_the_signed_scale() {
 #[test]
 fn only_assertion_roles_are_reserved_by_default() {
     let db = Database::new(PersistenceMode::InMemory).unwrap();
-    assert_eq!(db.role_keeper().lock().unwrap().len(), 2);
-    let keeper = db.role_keeper();
-    let keeper = keeper.lock().unwrap();
-    let posit = keeper.get("posit").unwrap();
-    let ascertains = keeper.get("ascertains").unwrap();
-    assert!(posit.reserved());
-    assert!(ascertains.reserved());
-    assert_eq!(posit.role(), POSIT_ROLE_ID);
-    assert_eq!(ascertains.role(), ASCERTAINS_ROLE_ID);
-    drop(keeper);
-    let (thing, existed) = db.create_role("thing".to_string(), false).unwrap();
-    assert!(!existed);
-    assert!(!thing.reserved());
+    assert_eq!(db.role_count().unwrap(), 2);
+    assert!(db.contains_role("posit").unwrap());
+    assert!(db.contains_role("ascertains").unwrap());
+    assert!(!db.contains_role("thing").unwrap());
+    Engine::new(&db).execute("add role thing;").unwrap();
+    assert_eq!(db.role_count().unwrap(), 3);
 }
 
 #[test]
 fn invalid_appearance_sets_and_unknown_roles_return_errors() {
     let db = Database::new(PersistenceMode::InMemory).unwrap();
-    let (role, _) = db.create_role("member".to_string(), false).unwrap();
-    let (first, _) = db.create_appearance(10, Arc::clone(&role)).unwrap();
-    let (second, _) = db.create_appearance(11, role).unwrap();
-    assert!(db.create_appearance_set(vec![first, second]).is_err());
-
     let engine = Engine::new(&db);
+    let duplicate_role = engine
+        .execute_collect(
+            "add role member; add posit [{(+first, member), (+second, member)}, \"value\", @NOW];",
+        )
+        .unwrap_err();
+    assert!(duplicate_role.to_string().contains("at most one Thing"));
     let error = engine
         .execute_collect("add posit [{(+x, missing)}, \"value\", @NOW];")
         .unwrap_err();
     assert!(error.to_string().contains("Unknown role: missing"));
-}
-
-#[test]
-fn missing_lookup_keys_produce_empty_results() {
-    let db = Database::new(PersistenceMode::InMemory).unwrap();
-    assert!(posits_involving_thing(&db, 999_999).is_empty());
 }

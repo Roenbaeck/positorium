@@ -21,13 +21,7 @@ fn pre_cancelled_execution_does_not_mutate_the_database() {
         .expect_err("pre-cancelled execution must fail");
 
     assert!(matches!(error, DatabaseError::Cancelled));
-    assert!(
-        db.role_keeper()
-            .lock()
-            .unwrap()
-            .get("never-created")
-            .is_none()
-    );
+    assert!(!db.contains_role("never-created").unwrap());
 }
 
 #[test]
@@ -44,13 +38,7 @@ fn zero_timeout_fails_before_the_first_command() {
         .expect_err("expired execution must fail");
 
     assert!(matches!(error, DatabaseError::Timeout));
-    assert!(
-        db.role_keeper()
-            .lock()
-            .unwrap()
-            .get("never-created")
-            .is_none()
-    );
+    assert!(!db.contains_role("never-created").unwrap());
 }
 
 #[test]

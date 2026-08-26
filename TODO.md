@@ -365,7 +365,7 @@ posit replay.
         - Remove panic/`unwrap` paths reachable through scripts, persisted bytes,
             configuration, locks, or network input. Internal proven invariants may use
             assertions rather than blanket replacement.
-- [ ] **Enforce a single database owner.**
+- [x] **Enforce a single database owner.**
         - Serialize scripts through one worker/command queue so queries cannot observe
             half-updated keepers or indexes.
         - Enforce command-level atomicity: each semicolon-delimited command commits all
@@ -392,7 +392,7 @@ posit replay.
             guidance before removing published syntax or APIs.
         - Permit immediate, release-noted changes for security fixes, corruption fixes,
             and behavior that was never part of a published contract (D030).
-- [ ] **Narrow the Rust public API.**
+- [x] **Narrow the Rust public API.**
         - Stabilize only high-level `Database` open/construction and command/query entry
             points; opaque logical/external identity handles; execution options;
             lossless result and stream-event types; storage configuration; and
@@ -400,8 +400,8 @@ posit replay.
         - Keep keepers, indexes/lookups, `ThingGenerator`, parser/AST/planner internals,
             physical storage owners/records/codecs, and public fields exposing those
             details explicitly unstable.
-        - Rename `create_apperance` to `create_appearance` while narrowing the API and
-            apply the D030 deprecation policy to any already-published surface.
+        - Remove the unreleased `create_apperance` compatibility shim while narrowing
+            the API; no release exposed it, so no deprecation window is needed (D031).
 - [ ] **Unify structured results.**
         - Use one lossless literal result model for Rust, HTTP, streaming, and WASM
             instead of mixing normalized values, datatype names, and tab-separated text.
