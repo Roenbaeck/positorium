@@ -9,15 +9,15 @@
 
 use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver};
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::construct::Database;
-use crate::traqula::Engine;
+use crate::error::{DatabaseError, Result};
+use crate::traqula::{
+    CollectedResult, CollectedResultSet, Engine, ExecutionOptions, MultiStreamCallbacks, RowSink,
+};
 
 /// A single row emitted by the engine. For now it's just a line of text (stdout-compatible).
 /// This can be evolved into a structured enum once projection returns tuples.
@@ -25,25 +25,7 @@ use crate::traqula::Engine;
 pub struct Row(pub String);
 
 /// Cancellation token shared with the worker thread.
-#[derive(Debug, Clone)]
-pub struct CancelToken(Arc<AtomicBool>);
-impl Default for CancelToken {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl CancelToken {
-    pub fn new() -> Self {
-        Self(Arc::new(AtomicBool::new(false)))
-    }
-    pub fn cancel(&self) {
-        self.0.store(true, Ordering::SeqCst);
-    }
-    pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Relaxed)
-    }
-}
+pub use crate::traqula::CancellationToken as CancelToken;
 
 /// Opaque query identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -97,7 +79,8 @@ impl Default for QueryOptions {
 pub struct QueryInterface {
     db: Arc<Database>, // shared database
     next_id: Mutex<u64>,
-    active: Mutex<HashMap<QueryId, CancelToken>>, // for external cancellation
+    active: Arc<Mutex<HashMap<QueryId, CancelToken>>>, // for external cancellation
+    execution: Arc<Mutex<()>>,
 }
 
 impl QueryInterface {
@@ -105,7 +88,8 @@ impl QueryInterface {
         Self {
             db,
             next_id: Mutex::new(0),
-            active: Mutex::new(HashMap::new()),
+            active: Arc::new(Mutex::new(HashMap::new())),
+            execution: Arc::new(Mutex::new(())),
         }
     }
 
@@ -137,16 +121,24 @@ impl QueryInterface {
         // Execute on a background thread; Persistor performs serialized writes internally.
         let db = Arc::clone(&self.db);
         let cancel_for_thread = cancel.clone();
+        let active = Arc::clone(&self.active);
+        let execution = Arc::clone(&self.execution);
         let timeout = options.timeout;
         let join = std::thread::spawn(move || {
-            let engine = Engine::new(&db);
-            // For now, execute monolithically; cancellation checked pre/post.
-            if let Some(d) = timeout
-                && (d.is_zero() || cancel_for_thread.is_cancelled())
-            {
-                return;
+            if let Ok(_owner) = execution.lock() {
+                let engine = Engine::new(&db);
+                let _ = engine.execute_collect_multi_with_options(
+                    &script,
+                    ExecutionOptions {
+                        timeout,
+                        cancellation: Some(cancel_for_thread),
+                        ..ExecutionOptions::default()
+                    },
+                );
             }
-            engine.execute(&script);
+            if let Ok(mut active) = active.lock() {
+                active.remove(&id);
+            }
             let _ = tx; // placeholder to avoid unused warning when not streaming
         });
 
@@ -165,8 +157,65 @@ impl QueryInterface {
     /// and is appropriate for one-off startup scripts or environments using in-memory
     /// SQLite where cross-thread connections are not viable.
     pub fn run_sync(&self, script: &str) {
+        let Ok(_owner) = self.execution.lock() else {
+            return;
+        };
         let engine = Engine::new(&self.db);
         engine.execute(script);
+    }
+
+    /// Execute a single-result script while holding the database owner lock.
+    pub fn execute_collect_with_options(
+        &self,
+        script: &str,
+        options: ExecutionOptions,
+    ) -> Result<CollectedResult> {
+        let _owner = self
+            .execution
+            .lock()
+            .map_err(|error| DatabaseError::Lock(error.to_string()))?;
+        Engine::new(&self.db).execute_collect_with_options(script, options)
+    }
+
+    /// Execute a multi-result script while holding the database owner lock.
+    pub fn execute_collect_multi_with_options(
+        &self,
+        script: &str,
+        options: ExecutionOptions,
+    ) -> Result<Vec<CollectedResultSet>> {
+        let _owner = self
+            .execution
+            .lock()
+            .map_err(|error| DatabaseError::Lock(error.to_string()))?;
+        Engine::new(&self.db).execute_collect_multi_with_options(script, options)
+    }
+
+    /// Stream one result set while holding the database owner lock.
+    pub fn execute_stream_single_with_options<S: RowSink>(
+        &self,
+        script: &str,
+        sink: &mut S,
+        options: ExecutionOptions,
+    ) -> Result<(Vec<String>, bool, usize)> {
+        let _owner = self
+            .execution
+            .lock()
+            .map_err(|error| DatabaseError::Lock(error.to_string()))?;
+        Engine::new(&self.db).execute_stream_single_with_options(script, sink, options)
+    }
+
+    /// Stream multiple result sets while holding the database owner lock.
+    pub fn execute_stream_multi_with_options<C: MultiStreamCallbacks>(
+        &self,
+        script: &str,
+        callbacks: &mut C,
+        options: ExecutionOptions,
+    ) -> Result<()> {
+        let _owner = self
+            .execution
+            .lock()
+            .map_err(|error| DatabaseError::Lock(error.to_string()))?;
+        Engine::new(&self.db).execute_stream_multi_with_options(script, callbacks, options)
     }
 
     /// Cancel a query by id.

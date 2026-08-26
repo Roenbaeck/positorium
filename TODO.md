@@ -76,7 +76,7 @@ The accepted decisions now define the required fixes.
             `@NOW`s in one script differ (src/traqula.rs). Resolve it once per complete
             script, allow an execution-option override, and expose the resolved value
             in execution metadata (D011).
-- [ ] **Server/interface gaps.**
+- [x] **Server/interface gaps.**
         - `timeout_ms` is accepted and ignored (`let _timeout`, src/server.rs);
             `QueryOptions::timeout` is only checked for zero before start
             (src/interface.rs).
@@ -459,7 +459,7 @@ compact sequential writes and deterministic posit replay.
 
 ## P1: Server And Distribution
 
-- [ ] **Harden the trusted/local HTTP beta.**
+- [x] **Harden the trusted/local HTTP beta.**
         - Make HTTP status codes match response bodies and streaming errors.
         - Implement or remove the advertised timeout and cancellation options.
         - Enforce a 1 MiB default request body with a 16 MiB hard maximum and at most

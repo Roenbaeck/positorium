@@ -16,6 +16,10 @@ pub enum DatabaseError {
     },
     #[error("Execution error: {0}")]
     Execution(String),
+    #[error("Execution cancelled")]
+    Cancelled,
+    #[error("Execution timed out")]
+    Timeout,
     #[error("Unknown role: {0}")]
     UnknownRole(String),
     #[error("Invalid appearance set: {0}")]

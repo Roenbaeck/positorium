@@ -96,6 +96,7 @@ Request body:
 Response (single result set):
 ```jsonc
 {
+	"api_version": "v1",
 	"id": 0,
 	"status": "ok",
 	"elapsed_ms": 1.23,
@@ -108,6 +109,20 @@ Response (single result set):
 ```
 
 If the script contains multiple `search` commands, the response omits top-level `columns/rows` and instead returns `result_sets` (array of result set objects) with cumulative `row_count`.
+
+The beta HTTP service is a trusted local interface, not an Internet-facing API.
+It binds to `127.0.0.1` by default, permits no cross-origin browser access by
+default, and only accepts explicitly configured exact loopback CORS origins.
+Binding to a non-loopback address does not add authentication or make the
+service safe for public exposure.
+
+Requests default to a 1 MiB body limit and a five-second execution deadline.
+Configuration may raise those limits only as far as the 16 MiB and 30-second
+hard caps. A request's `timeout_ms` can lower, but cannot raise, the configured
+deadline. Scripts are limited to 1,000 commands and each search to 100,000 rows;
+buffered responses and versioned SSE completion events report whether rows were
+actually truncated. Scripts submitted through the HTTP interface execute
+serially against one database owner.
 
 ### Starting the server
 

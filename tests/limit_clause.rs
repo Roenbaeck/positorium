@@ -27,5 +27,8 @@ fn reserved_keyword_not_variable() {
         .execute_collect("search [{(*, name)}, +n, *] return n limit 2;")
         .expect("parse ok");
     assert!(res.row_count <= 2);
-    assert!(res.limited, "two rows present so limit reached");
+    assert!(
+        !res.limited,
+        "limited is false when exactly two rows exist and the limit is two"
+    );
 }

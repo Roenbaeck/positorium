@@ -123,8 +123,31 @@ async fn real_main() -> Result<()> {
                 "Invalid listen address {listen_interface}:{listen_port} – {e}"
             ))
         })?;
-    // Start HTTP server (simple /v1/query endpoint)
-    let app = positorium::server::router(Arc::clone(&interface));
+    let mut server_config = positorium::server::ServerConfig::default();
+    if let Some(value) = settings_lookup
+        .get("http_request_body_bytes")
+        .and_then(|value| value.parse::<usize>().ok())
+    {
+        server_config.request_body_bytes = value;
+    }
+    if let Some(value) = settings_lookup
+        .get("http_default_timeout_ms")
+        .and_then(|value| value.parse::<u64>().ok())
+    {
+        server_config.default_timeout = std::time::Duration::from_millis(value);
+    }
+    if let Some(origins) = settings_lookup.get("cors_allowed_origins") {
+        for origin in origins.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            server_config = server_config.allow_loopback_origin(origin)?;
+        }
+    }
+    if !addr.ip().is_loopback() {
+        tracing::warn!(
+            ?addr,
+            "non-loopback HTTP binding is still a trusted interface without authentication"
+        );
+    }
+    let app = positorium::server::router_with_config(Arc::clone(&interface), server_config)?;
     tracing::info!(?addr, "HTTP server listening");
     let listener = tokio::net::TcpListener::bind(addr)
         .await

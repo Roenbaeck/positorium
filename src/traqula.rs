@@ -52,7 +52,11 @@ use chrono::NaiveDateTime; // needed for defensive datetime validation in parse_
 use chrono::NaiveDate;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering as AtomicOrdering},
+};
+use std::time::{Duration, Instant};
 
 // used for internal result sets
 use roaring::RoaringTreemap;
@@ -540,6 +544,29 @@ use pest_derive::Parser;
 #[grammar = "traqula.pest"] // relative to src
 struct TraqulaParser;
 
+/// Return the number of top-level commands and searches in a validated script.
+#[cfg(feature = "server")]
+pub(crate) fn script_counts(traqula: &str) -> Result<(usize, usize), DatabaseError> {
+    let pairs = TraqulaParser::parse(Rule::traqula, traqula.trim()).map_err(|error| {
+        DatabaseError::Parse {
+            message: error.to_string(),
+            line: None,
+            col: None,
+        }
+    })?;
+    let mut commands = 0;
+    let mut searches = 0;
+    for pair in pairs {
+        if pair.as_rule() != Rule::EOI {
+            commands += 1;
+        }
+        if pair.as_rule() == Rule::search {
+            searches += 1;
+        }
+    }
+    Ok((commands, searches))
+}
+
 /// Execution engine binding a parsed Traqula script to a concrete database.
 pub struct Engine<'en> {
     database: &'en Database,
@@ -594,6 +621,30 @@ pub struct CollectedResultSet {
 pub struct ExecutionOptions {
     /// Deterministic replacement for every `@NOW` occurrence in the script.
     pub now: Option<Time>,
+    /// Cooperative wall-clock deadline measured from the start of execution.
+    pub timeout: Option<Duration>,
+    /// Token callers may use to request cooperative cancellation.
+    pub cancellation: Option<CancellationToken>,
+    /// Maximum rows emitted by each search. A lower Traqula `LIMIT` wins.
+    pub max_rows_per_search: Option<usize>,
+}
+
+/// A clonable cooperative cancellation token for one script execution.
+#[derive(Debug, Clone, Default)]
+pub struct CancellationToken(Arc<AtomicBool>);
+
+impl CancellationToken {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn cancel(&self) {
+        self.0.store(true, AtomicOrdering::Release);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(AtomicOrdering::Acquire)
+    }
 }
 
 /// Values resolved once and shared by every command in a script execution.
@@ -602,10 +653,53 @@ pub struct ExecutionMetadata {
     pub resolved_now: Time,
 }
 
+struct ExecutionContext {
+    metadata: ExecutionMetadata,
+    deadline: Option<Instant>,
+    cancellation: CancellationToken,
+    max_rows_per_search: Option<usize>,
+}
+
 impl ExecutionOptions {
-    fn resolve(self) -> ExecutionMetadata {
-        ExecutionMetadata {
-            resolved_now: self.now.unwrap_or_default(),
+    fn resolve(self) -> Result<ExecutionContext, DatabaseError> {
+        let deadline = self
+            .timeout
+            .map(|timeout| {
+                Instant::now().checked_add(timeout).ok_or_else(|| {
+                    DatabaseError::Execution("execution timeout is too large".into())
+                })
+            })
+            .transpose()?;
+        Ok(ExecutionContext {
+            metadata: ExecutionMetadata {
+                resolved_now: self.now.unwrap_or_default(),
+            },
+            deadline,
+            cancellation: self.cancellation.unwrap_or_default(),
+            max_rows_per_search: self.max_rows_per_search,
+        })
+    }
+}
+
+impl ExecutionContext {
+    fn check(&self) -> Result<(), DatabaseError> {
+        if self.cancellation.is_cancelled() {
+            return Err(DatabaseError::Cancelled);
+        }
+        if self
+            .deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            return Err(DatabaseError::Timeout);
+        }
+        Ok(())
+    }
+
+    fn effective_limit(&self, query_limit: Option<usize>) -> Option<usize> {
+        match (query_limit, self.max_rows_per_search) {
+            (Some(query), Some(maximum)) => Some(query.min(maximum)),
+            (Some(query), None) => Some(query),
+            (None, maximum) => maximum,
         }
     }
 }
@@ -622,7 +716,18 @@ impl<'en> Engine<'en> {
         traqula: &str,
         sink: &mut S,
     ) -> Result<(Vec<String>, bool, usize), crate::error::DatabaseError> {
-        let resolved_now = Time::new();
+        self.execute_stream_single_with_options(traqula, sink, ExecutionOptions::default())
+    }
+
+    /// Stream one search with cooperative timeout, cancellation, and row limits.
+    pub fn execute_stream_single_with_options<S: RowSink>(
+        &self,
+        traqula: &str,
+        sink: &mut S,
+        options: ExecutionOptions,
+    ) -> Result<(Vec<String>, bool, usize), crate::error::DatabaseError> {
+        let execution = options.resolve()?;
+        execution.check()?;
         let mut variables: Variables = Variables::default();
         let parse_result = TraqulaParser::parse(Rule::traqula, traqula.trim());
         let pairs = match parse_result {
@@ -662,9 +767,15 @@ impl<'en> Engine<'en> {
         let mut total_rows = 0usize;
         let mut limited = false;
         for command in pairs {
+            execution.check()?;
             match command.as_rule() {
                 Rule::add_role => self.add_role(command),
-                Rule::add_posit => self.add_posit(command, &mut variables, &resolved_now)?,
+                Rule::add_posit => self.add_posit(
+                    command,
+                    &mut variables,
+                    &execution.metadata.resolved_now,
+                    &execution,
+                )?,
                 Rule::search => {
                     let mut search_variables: Variables = Variables::default();
                     // limit extraction
@@ -700,12 +811,6 @@ impl<'en> Engine<'en> {
                             match self.inner.push(row, types) {
                                 SinkFlow::Continue => {
                                     self.count += 1;
-                                    if let Some(l) = self.limit
-                                        && self.count >= l
-                                    {
-                                        self.limited = true;
-                                        return SinkFlow::Stop;
-                                    }
                                     SinkFlow::Continue
                                 }
                                 stop => stop,
@@ -714,7 +819,7 @@ impl<'en> Engine<'en> {
                     }
                     let mut wrapper = CountingSink {
                         inner: sink,
-                        limit,
+                        limit: execution.effective_limit(limit),
                         count: 0,
                         limited: false,
                     };
@@ -724,7 +829,7 @@ impl<'en> Engine<'en> {
                         &mut wrapper,
                         &mut return_columns,
                         &mut err,
-                        &resolved_now,
+                        &execution,
                     );
                     if let Some(e) = err {
                         return Err(e);
@@ -761,8 +866,10 @@ impl<'en> Engine<'en> {
         command: Pair<Rule>,
         variables: &mut Variables,
         resolved_now: &Time,
+        execution: &ExecutionContext,
     ) -> Result<(), DatabaseError> {
         for structure in command.into_inner() {
+            execution.check()?;
             let mut variable: Option<String> = None;
             let mut posits: Vec<Thing> = Vec::new();
             let mut value_as_json: Option<JSON> = None;
@@ -952,6 +1059,10 @@ impl<'en> Engine<'en> {
                     let mut appearance_sets = Vec::new();
                     let mut appearance_error = None;
                     for_each_cartesian_indices(things_for_roles_ord.as_slice(), |idxs| {
+                        if let Err(error) = execution.check() {
+                            appearance_error = Some(error);
+                            return;
+                        }
                         if appearance_error.is_some() {
                             return;
                         }
@@ -985,6 +1096,7 @@ impl<'en> Engine<'en> {
                     // println!("Appearance sets {:?}", appearance_sets);
 
                     for appearance_set in appearance_sets {
+                        execution.check()?;
                         // create the posit of the found type
                         if time.is_none() {
                             eprintln!("Error: No valid time specified for posit. Skipping.");
@@ -1076,8 +1188,28 @@ impl<'en> Engine<'en> {
         sink: &mut dyn RowSink,
         return_columns: &mut Option<Vec<String>>,
         exec_error: &mut Option<crate::error::DatabaseError>,
-        resolved_now: &Time,
+        execution: &ExecutionContext,
     ) {
+        let resolved_now = &execution.metadata.resolved_now;
+        fn interrupted(
+            execution: &ExecutionContext,
+            exec_error: &mut Option<DatabaseError>,
+        ) -> bool {
+            match execution.check() {
+                Ok(()) => false,
+                Err(error) => {
+                    if exec_error.is_none() {
+                        *exec_error = Some(error);
+                    }
+                    true
+                }
+            }
+        }
+
+        if let Err(error) = execution.check() {
+            *exec_error = Some(error);
+            return;
+        }
         fn cmp_ordering(ordering: std::cmp::Ordering, op: &str) -> bool {
             use std::cmp::Ordering::{Equal, Greater, Less};
             matches!(
@@ -1182,10 +1314,18 @@ impl<'en> Engine<'en> {
             std::collections::HashSet::new();
         // (LIMIT handled externally by a wrapping sink)
         for clause in command.into_inner() {
+            if let Err(error) = execution.check() {
+                *exec_error = Some(error);
+                return;
+            }
             match clause.as_rule() {
                 Rule::search_clause => {
                     let mut pattern_index = 0usize; // diagnostic counter
                     for structure in clause.into_inner() {
+                        if let Err(error) = execution.check() {
+                            *exec_error = Some(error);
+                            return;
+                        }
                         let mut variable: Option<String> = None;
                         let mut _posits: Vec<Thing> = Vec::new();
                         let mut _value_as_json: Option<JSON> = None;
@@ -1501,6 +1641,9 @@ impl<'en> Engine<'en> {
                                     let rk_guard = rk.lock().unwrap();
                                     let mut role_things = Vec::with_capacity(roles.len());
                                     for role_name in &roles {
+                                        if interrupted(execution, exec_error) {
+                                            return;
+                                        }
                                         let Some(role) = rk_guard.get(role_name) else {
                                             *exec_error = Some(DatabaseError::UnknownRole(
                                                 role_name.to_string(),
@@ -1519,6 +1662,9 @@ impl<'en> Engine<'en> {
                                     });
                                     let mut candidates: Option<RoaringTreemap> = None;
                                     for (pos, idx) in order.into_iter().enumerate() {
+                                        if interrupted(execution, exec_error) {
+                                            return;
+                                        }
                                         let Some(bm_ref) = lk_guard.lookup(&role_things[idx])
                                         else {
                                             candidates = Some(RoaringTreemap::new());
@@ -1546,6 +1692,9 @@ impl<'en> Engine<'en> {
                                             let tk = self.database.posit_time_lookup();
                                             let guard = tk.lock().unwrap();
                                             for id in cands.iter() {
+                                                if interrupted(execution, exec_error) {
+                                                    return;
+                                                }
                                                 if let Some(pt) = guard.get(&id)
                                                     && pt == t
                                                 {
@@ -1573,6 +1722,9 @@ impl<'en> Engine<'en> {
                                             let mut best: StdHashMap<usize, Vec<(Time, Thing)>> =
                                                 StdHashMap::new();
                                             for pid in cands.iter() {
+                                                if interrupted(execution, exec_error) {
+                                                    return;
+                                                }
                                                 if let Some(pt) = time_guard.get(&pid)
                                                     && pt.definitely_at_or_before(as_of)
                                                     && let Some(aset) = aset_guard.get(&pid)
@@ -1620,6 +1772,9 @@ impl<'en> Engine<'en> {
                                                 .posit_thing_to_appearance_set_lookup();
                                             let aset_guard = aset_lk.lock().unwrap();
                                             for id in cands.iter() {
+                                                if interrupted(execution, exec_error) {
+                                                    return;
+                                                }
                                                 if let Some(aset) = aset_guard.get(&id) {
                                                     let mut role_names: Vec<String> = aset
                                                         .appearances()
@@ -1728,6 +1883,9 @@ impl<'en> Engine<'en> {
                                             let aset_guard = lk.lock().unwrap();
                                             let mut filtered = RoaringTreemap::new();
                                             'cand: for id in cands.iter() {
+                                                if interrupted(execution, exec_error) {
+                                                    return;
+                                                }
                                                 let appset = match aset_guard.get(&id) {
                                                     Some(aset) => aset,
                                                     None => continue,
@@ -1858,6 +2016,9 @@ impl<'en> Engine<'en> {
                                                 HashMap<String, Thing>,
                                             )> = Vec::new();
                                             for pid in cands.iter() {
+                                                if interrupted(execution, exec_error) {
+                                                    return;
+                                                }
                                                 if let Some(appset) = aset_guard.get(&pid) {
                                                     // First collect per-variable identity maps; union variables may yield multiple maps (one per union member)
                                                     let mut pending_maps: Vec<
@@ -1932,6 +2093,9 @@ impl<'en> Engine<'en> {
                                             });
                                             if !enumeration_started {
                                                 for (pid, id_map) in candidate_info.iter() {
+                                                    if interrupted(execution, exec_error) {
+                                                        return;
+                                                    }
                                                     let mut b = Binding::new();
                                                     b.identities.extend(
                                                         id_map.iter().map(|(k, v)| (k.clone(), *v)),
@@ -1962,6 +2126,9 @@ impl<'en> Engine<'en> {
                                                 let time_lk = self.database.posit_time_lookup();
                                                 let time_guard = time_lk.lock().unwrap();
                                                 for existing in bindings.iter() {
+                                                    if interrupted(execution, exec_error) {
+                                                        return;
+                                                    }
                                                     // Optional: resolve as-of time for this binding
                                                     let binding_as_of_time: Option<Time> =
                                                         if let Some(ref asv) = _as_of_var {
@@ -1989,6 +2156,9 @@ impl<'en> Engine<'en> {
                                                             Vec<(Time, Thing)>,
                                                         > = std::collections::HashMap::new();
                                                         for cid in cands.iter() {
+                                                            if interrupted(execution, exec_error) {
+                                                                return;
+                                                            }
                                                             if let Some(aset_c) =
                                                                 aset_guard.get(&cid)
                                                                 && let Some(ct) =
@@ -2021,6 +2191,9 @@ impl<'en> Engine<'en> {
                                                         None
                                                     };
                                                     for (pid, id_map) in candidate_info.iter() {
+                                                        if interrupted(execution, exec_error) {
+                                                            return;
+                                                        }
                                                         // Identity compatibility
                                                         let mut ok = true;
                                                         for (k, v) in id_map.iter() {
@@ -2285,6 +2458,9 @@ impl<'en> Engine<'en> {
                             let tk = self.database.posit_time_lookup();
                             let guard_time = tk.lock().unwrap();
                             bindings.retain(|b| {
+                                if interrupted(execution, exec_error) {
+                                    return false;
+                                }
                                 for (v, op, tcmp) in &where_time {
                                     if let Some((pid, VarKind::Time)) = b.value_slots.get(v) {
                                         if let Some(pt) = guard_time.get(pid) {
@@ -2313,6 +2489,9 @@ impl<'en> Engine<'en> {
                             let tk = self.database.posit_time_lookup();
                             let guard_time = tk.lock().unwrap();
                             bindings.retain(|b| {
+                                if interrupted(execution, exec_error) {
+                                    return false;
+                                }
                                 for (v1, op, v2) in &where_time_var {
                                     if let (
                                         Some((pid1, VarKind::Time)),
@@ -2352,6 +2531,9 @@ impl<'en> Engine<'en> {
                             let tp_guard = type_partitions.lock().unwrap();
                             let aset_guard = aset_lookup.lock().unwrap();
                             bindings.retain(|b| {
+                                if interrupted(execution, exec_error) {
+                                    return false;
+                                }
                                 for (l, op, r) in &where_value_var {
                                     let (lpid, lkind) = if let Some(t) = b.value_slots.get(l) { *t } else { if exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Unknown variable in predicate: {}", l))); } return false; };
                                     let (rpid, rkind) = if let Some(t) = b.value_slots.get(r) { *t } else { if exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Unknown variable in predicate: {}", r))); } return false; };
@@ -2410,6 +2592,9 @@ impl<'en> Engine<'en> {
                             let mut pk_guard = posit_keeper.lock().unwrap();
                             let tp_guard = type_partitions.lock().unwrap();
                             bindings.retain(|b| {
+                                if interrupted(execution, exec_error) {
+                                    return false;
+                                }
                                 for (lhs, op, rhs) in &where_value {
                                     // locate lhs posit/value
                                     let (pid, vkind) = if let Some(tup) = b.value_slots.get(lhs) { *tup } else { if exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Unknown variable in predicate: {}", lhs))); } return false; };
@@ -2510,6 +2695,9 @@ impl<'en> Engine<'en> {
                             return;
                         }
                         for b in bindings.iter() {
+                            if interrupted(execution, exec_error) {
+                                return;
+                            }
                             info!(target:"positorium::stream", event="row_binding_iter", identities=b.identities.len(), value_slots=b.value_slots.len(), posit_vars=b.posit_vars.len());
                             let mut row: Vec<String> = Vec::with_capacity(returns.len());
                             let mut types_row: Vec<String> = Vec::with_capacity(returns.len());
@@ -2638,7 +2826,12 @@ impl<'en> Engine<'en> {
         }
     }
     // Backwards compatible wrapper retaining original signature (prints rows)
-    fn search_print(&self, command: Pair<Rule>, variables: &mut Variables, resolved_now: &Time) {
+    fn search_print(
+        &self,
+        command: Pair<Rule>,
+        variables: &mut Variables,
+        execution: &ExecutionContext,
+    ) {
         let mut cols = None;
         let mut err = None;
         struct PrintSink;
@@ -2649,21 +2842,16 @@ impl<'en> Engine<'en> {
             }
         }
         let mut ps = PrintSink;
-        self.search(
-            command,
-            variables,
-            &mut ps,
-            &mut cols,
-            &mut err,
-            resolved_now,
-        );
+        self.search(command, variables, &mut ps, &mut cols, &mut err, execution);
         if let Some(e) = err {
             eprintln!("{}", e);
         }
     }
     /// Parse and execute a Traqula script (one or more commands).
     pub fn execute(&self, traqula: &str) {
-        let resolved_now = Time::new();
+        let Ok(execution) = ExecutionOptions::default().resolve() else {
+            return;
+        };
         let mut variables: Variables = Variables::default();
         let parse_result = TraqulaParser::parse(Rule::traqula, traqula.trim());
         let traqula = match parse_result {
@@ -2687,10 +2875,19 @@ impl<'en> Engine<'en> {
             }
         };
         for command in traqula {
+            if let Err(error) = execution.check() {
+                eprintln!("{error}");
+                return;
+            }
             match command.as_rule() {
                 Rule::add_role => self.add_role(command),
                 Rule::add_posit => {
-                    if let Err(error) = self.add_posit(command, &mut variables, &resolved_now) {
+                    if let Err(error) = self.add_posit(
+                        command,
+                        &mut variables,
+                        &execution.metadata.resolved_now,
+                        &execution,
+                    ) {
                         eprintln!("{error}");
                         return;
                     }
@@ -2698,7 +2895,7 @@ impl<'en> Engine<'en> {
                 Rule::search => {
                     // reset limit per search
                     let mut search_variables: Variables = Variables::default();
-                    self.search_print(command, &mut search_variables, &resolved_now);
+                    self.search_print(command, &mut search_variables, &execution);
                 }
                 Rule::EOI => (), // end of input
                 _ => println!("Unknown command: {:?}", command),
@@ -2719,7 +2916,9 @@ impl<'en> Engine<'en> {
         traqula: &str,
         options: ExecutionOptions,
     ) -> Result<CollectedResult, DatabaseError> {
-        let metadata = options.resolve();
+        let execution = options.resolve()?;
+        execution.check()?;
+        let metadata = execution.metadata.clone();
         let mut variables: Variables = Variables::default();
         struct CollectSink {
             rows: Vec<Vec<String>>,
@@ -2737,12 +2936,6 @@ impl<'en> Engine<'en> {
                 }
                 self.rows.push(row);
                 self.types.push(types);
-                if let Some(l) = self.limit
-                    && self.rows.len() >= l
-                {
-                    self.limited = true;
-                    return SinkFlow::Stop;
-                }
                 SinkFlow::Continue
             }
         }
@@ -2780,10 +2973,11 @@ impl<'en> Engine<'en> {
         };
         let mut search_count = 0usize;
         for command in traqula {
+            execution.check()?;
             match command.as_rule() {
                 Rule::add_role => self.add_role(command),
                 Rule::add_posit => {
-                    self.add_posit(command, &mut variables, &metadata.resolved_now)?;
+                    self.add_posit(command, &mut variables, &metadata.resolved_now, &execution)?;
                 }
                 Rule::search => {
                     let mut search_variables: Variables = Variables::default();
@@ -2803,7 +2997,7 @@ impl<'en> Engine<'en> {
                         }
                         l
                     };
-                    collector.limit = limit;
+                    collector.limit = execution.effective_limit(limit);
                     let mut err = None;
                     self.search(
                         command,
@@ -2811,7 +3005,7 @@ impl<'en> Engine<'en> {
                         &mut collector,
                         &mut return_columns,
                         &mut err,
-                        &metadata.resolved_now,
+                        &execution,
                     );
                     if let Some(e) = err {
                         return Err(e);
@@ -2849,7 +3043,9 @@ impl<'en> Engine<'en> {
         traqula: &str,
         options: ExecutionOptions,
     ) -> Result<Vec<CollectedResultSet>, DatabaseError> {
-        let metadata = options.resolve();
+        let execution = options.resolve()?;
+        execution.check()?;
+        let metadata = execution.metadata.clone();
         let mut variables: Variables = Variables::default();
         // Parse once
         let parse_result = TraqulaParser::parse(Rule::traqula, traqula.trim());
@@ -2878,10 +3074,11 @@ impl<'en> Engine<'en> {
         };
         let mut results: Vec<CollectedResultSet> = Vec::new();
         for command in traqula {
+            execution.check()?;
             match command.as_rule() {
                 Rule::add_role => self.add_role(command),
                 Rule::add_posit => {
-                    self.add_posit(command, &mut variables, &metadata.resolved_now)?;
+                    self.add_posit(command, &mut variables, &metadata.resolved_now, &execution)?;
                 }
                 Rule::search => {
                     let mut search_variables: Variables = Variables::default();
@@ -2901,12 +3098,6 @@ impl<'en> Engine<'en> {
                             }
                             self.rows.push(row);
                             self.types.push(types);
-                            if let Some(l) = self.limit
-                                && self.rows.len() >= l
-                            {
-                                self.limited = true;
-                                return SinkFlow::Stop;
-                            }
                             SinkFlow::Continue
                         }
                     }
@@ -2918,7 +3109,7 @@ impl<'en> Engine<'en> {
                     };
                     // Capture raw search text before moving command into search execution
                     let raw_search_string = command.as_str().trim().to_string();
-                    sink.limit = {
+                    let query_limit = {
                         let mut l = None;
                         let cloned = command.clone();
                         for c in cloned.into_inner() {
@@ -2932,6 +3123,7 @@ impl<'en> Engine<'en> {
                         }
                         l
                     };
+                    sink.limit = execution.effective_limit(query_limit);
                     let mut local_return_columns: Option<Vec<String>> = None;
                     let mut err = None;
                     self.search(
@@ -2940,7 +3132,7 @@ impl<'en> Engine<'en> {
                         &mut sink,
                         &mut local_return_columns,
                         &mut err,
-                        &metadata.resolved_now,
+                        &execution,
                     );
                     if let Some(e) = err {
                         return Err(e);
@@ -2972,7 +3164,18 @@ impl<'en> Engine<'en> {
         traqula: &str,
         callbacks: &mut C,
     ) -> Result<(), DatabaseError> {
-        let resolved_now = Time::new();
+        self.execute_stream_multi_with_options(traqula, callbacks, ExecutionOptions::default())
+    }
+
+    /// Stream multiple searches with cooperative timeout, cancellation, and row limits.
+    pub fn execute_stream_multi_with_options<C: MultiStreamCallbacks>(
+        &self,
+        traqula: &str,
+        callbacks: &mut C,
+        options: ExecutionOptions,
+    ) -> Result<(), DatabaseError> {
+        let execution = options.resolve()?;
+        execution.check()?;
         let mut variables: Variables = Variables::default();
         let parse_result = TraqulaParser::parse(Rule::traqula, traqula.trim());
         let pairs = match parse_result {
@@ -3000,10 +3203,16 @@ impl<'en> Engine<'en> {
         };
         let mut set_index = 0usize;
         for command in pairs {
+            execution.check()?;
             match command.as_rule() {
                 Rule::add_role => self.add_role(command),
                 Rule::add_posit => {
-                    self.add_posit(command, &mut variables, &resolved_now)?;
+                    self.add_posit(
+                        command,
+                        &mut variables,
+                        &execution.metadata.resolved_now,
+                        &execution,
+                    )?;
                 }
                 Rule::search => {
                     let mut search_variables: Variables = Variables::default();
@@ -3063,12 +3272,6 @@ impl<'en> Engine<'en> {
                             match self.inner.push(row, types) {
                                 SinkFlow::Continue => {
                                     self.count += 1;
-                                    if let Some(l) = self.limit
-                                        && self.count >= l
-                                    {
-                                        self.limited = true;
-                                        return SinkFlow::Stop;
-                                    }
                                     SinkFlow::Continue
                                 }
                                 stop => stop,
@@ -3082,7 +3285,7 @@ impl<'en> Engine<'en> {
                             started: false,
                             search_text: &search_text_full,
                         },
-                        limit,
+                        limit: execution.effective_limit(limit),
                         count: 0,
                         limited: false,
                     };
@@ -3094,7 +3297,7 @@ impl<'en> Engine<'en> {
                         &mut sink,
                         &mut return_columns,
                         &mut err,
-                        &resolved_now,
+                        &execution,
                     );
                     if let Some(e) = err {
                         return Err(e);
