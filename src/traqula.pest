@@ -55,8 +55,8 @@ posit_search = {
 return_clause = { ^"return" ~ (recall ~ ","?)+ }
 search_clause = { ^"search" ~ (posit_search ~ ","?)+ }
 // where clause: variable comparator value/variable. Initially engine only enforced time, but grammar now allows broader RHS.
-comparator = { "<=" | ">=" | "<" | ">" | "==" | "=" }
-rhs_value = { constant | time | certainty | decimal | int | string }
+comparator = { "===" | "?=" | "<=" | ">=" | "==" | "<" | ">" | "=" }
+rhs_value = { constant | time | certainty | decimal | int | string | json }
 condition = { recall ~ comparator ~ (rhs_value | recall) }
 where_clause = { ^"where" ~ condition ~ ("and" ~ condition)* }
 limit_clause = { ^"limit" ~ int }

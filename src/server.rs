@@ -1,8 +1,8 @@
 use crate::error::DatabaseError;
 use crate::interface::QueryInterface;
 use crate::traqula::{
-    CancellationToken, CollectedResultSet, ExecutionOptions, MultiStreamCallbacks, RowSink,
-    SinkFlow, script_counts,
+    CancellationToken, CollectedResultSet, ExecutionOptions, ExecutionWarning,
+    MultiStreamCallbacks, RowSink, SinkFlow, script_counts,
 };
 use axum::extract::{DefaultBodyLimit, State, rejection::JsonRejection};
 use axum::http::{HeaderValue, Method, StatusCode, header};
@@ -136,6 +136,8 @@ pub struct QueryResponse {
     pub id: u64,
     pub status: String,
     pub elapsed_ms: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warnings: Option<Vec<ExecutionWarning>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub columns: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -276,6 +278,7 @@ async fn query(
                     id: 0,
                     status: "ok".into(),
                     elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
+                    warnings: Some(result.metadata.warnings),
                     columns: Some(result.columns),
                     row_types: Some(result.row_types),
                     row_count: Some(result.row_count),
@@ -288,6 +291,10 @@ async fn query(
         }
         Ok(Ok(BufferedResult::Multi(result_sets))) => {
             let total_rows = result_sets.iter().map(|set| set.row_count).sum();
+            let warnings = result_sets
+                .first()
+                .map(|set| set.metadata.warnings.clone())
+                .unwrap_or_default();
             let result_sets = result_sets.into_iter().map(MultiResultSet::from).collect();
             json_response(
                 StatusCode::OK,
@@ -296,6 +303,7 @@ async fn query(
                     id: 0,
                     status: "ok".into(),
                     elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
+                    warnings: Some(warnings),
                     columns: None,
                     row_types: None,
                     row_count: Some(total_rows),
@@ -401,6 +409,15 @@ struct StreamingSink {
 }
 
 impl RowSink for StreamingSink {
+    fn on_warning(&mut self, warning: &ExecutionWarning) -> SinkFlow {
+        let event = serde_json::json!({
+            "version": 1,
+            "event": "warning",
+            "warning": warning
+        });
+        self.send(event)
+    }
+
     fn on_meta(&mut self, columns: &[String]) -> SinkFlow {
         let event = serde_json::json!({
             "version": 1,
@@ -443,6 +460,15 @@ struct StreamingCallbacks {
 }
 
 impl MultiStreamCallbacks for StreamingCallbacks {
+    fn on_warning(&mut self, warning: &ExecutionWarning) {
+        let event = serde_json::json!({
+            "version": 1,
+            "event": "warning",
+            "warning": warning
+        });
+        self.send(event);
+    }
+
     fn on_result_set_start(&mut self, index: usize, columns: &[String], search: &str) {
         let event = serde_json::json!({
             "version": 1,
@@ -533,6 +559,7 @@ fn error_response(status: StatusCode, started: Instant, error: impl Into<String>
             id: 0,
             status: "error".into(),
             elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
+            warnings: None,
             columns: None,
             row_types: None,
             row_count: None,

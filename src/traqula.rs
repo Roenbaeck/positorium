@@ -571,6 +571,10 @@ pub enum SinkFlow {
 }
 /// Simple sink trait for capturing projected result rows. Returning Stop requests the engine to halt emission early.
 pub trait RowSink {
+    /// Called for each execution warning before rows are emitted.
+    fn on_warning(&mut self, _warning: &ExecutionWarning) -> SinkFlow {
+        SinkFlow::Continue
+    }
     /// Called once when column names become available (return clause parsed) before any rows.
     /// Default is no-op. Returning Stop aborts the search early.
     fn on_meta(&mut self, _columns: &[String]) -> SinkFlow {
@@ -582,6 +586,8 @@ pub trait RowSink {
 
 /// Callback interface for multi-search streaming. Implementors receive framing events for each result set.
 pub trait MultiStreamCallbacks {
+    /// Called once for each script-level execution warning.
+    fn on_warning(&mut self, _warning: &ExecutionWarning) {}
     /// Called once at the beginning of a result set with its index (0-based), column names, and raw search snippet.
     fn on_result_set_start(&mut self, set_index: usize, columns: &[String], search_text: &str);
     /// Called for every row. Return false to request early termination of this result set.
@@ -640,10 +646,19 @@ impl CancellationToken {
     }
 }
 
+/// A non-fatal diagnostic produced while executing a script.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ExecutionWarning {
+    pub code: String,
+    pub message: String,
+    pub rewrite: Option<String>,
+}
+
 /// Values resolved once and shared by every command in a script execution.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionMetadata {
     pub resolved_now: Time,
+    pub warnings: Vec<ExecutionWarning>,
 }
 
 struct ExecutionContext {
@@ -654,7 +669,7 @@ struct ExecutionContext {
 }
 
 impl ExecutionOptions {
-    fn resolve(self) -> Result<ExecutionContext, DatabaseError> {
+    fn resolve(self, source: &str) -> Result<ExecutionContext, DatabaseError> {
         let deadline = self
             .timeout
             .map(|timeout| {
@@ -666,12 +681,69 @@ impl ExecutionOptions {
         Ok(ExecutionContext {
             metadata: ExecutionMetadata {
                 resolved_now: self.now.unwrap_or_default(),
+                warnings: execution_warnings(source),
             },
             deadline,
             cancellation: self.cancellation.unwrap_or_default(),
             max_rows_per_search: self.max_rows_per_search,
         })
     }
+}
+
+fn execution_warnings(source: &str) -> Vec<ExecutionWarning> {
+    let bytes = source.as_bytes();
+    let mut cursor = 0;
+    let mut in_comment = false;
+    let mut in_double_quote = false;
+    let mut in_single_quote = false;
+    let mut escaped = false;
+    while cursor < bytes.len() {
+        let byte = bytes[cursor];
+        let next = bytes.get(cursor + 1).copied();
+        if in_comment {
+            if byte == b'*' && next == Some(b'/') {
+                in_comment = false;
+                cursor += 2;
+                continue;
+            }
+        } else if in_double_quote {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_double_quote = false;
+            }
+        } else if in_single_quote {
+            if byte == b'\'' {
+                in_single_quote = false;
+            }
+        } else if byte == b'/' && next == Some(b'*') {
+            in_comment = true;
+            cursor += 2;
+            continue;
+        } else if byte == b'"' {
+            in_double_quote = true;
+        } else if byte == b'\'' {
+            in_single_quote = true;
+        } else if byte == b'='
+            && next == Some(b'=')
+            && cursor
+                .checked_sub(1)
+                .and_then(|index| bytes.get(index))
+                .copied()
+                != Some(b'=')
+            && bytes.get(cursor + 2).copied() != Some(b'=')
+        {
+            return vec![ExecutionWarning {
+                code: "legacy-double-equals".to_string(),
+                message: "legacy '==' means nominal equality and is deprecated".to_string(),
+                rewrite: Some("replace '==' with '='".to_string()),
+            }];
+        }
+        cursor += 1;
+    }
+    Vec::new()
 }
 
 impl ExecutionContext {
@@ -719,8 +791,13 @@ impl<'en> Engine<'en> {
         sink: &mut S,
         options: ExecutionOptions,
     ) -> Result<(Vec<String>, bool, usize), crate::error::DatabaseError> {
-        let execution = options.resolve()?;
+        let execution = options.resolve(traqula)?;
         execution.check()?;
+        for warning in &execution.metadata.warnings {
+            if let SinkFlow::Stop = sink.on_warning(warning) {
+                return Ok((Vec::new(), false, 0));
+            }
+        }
         let mut variables: Variables = Variables::default();
         let parse_result = TraqulaParser::parse(Rule::traqula, traqula.trim());
         let pairs = match parse_result {
@@ -1139,6 +1216,8 @@ impl<'en> Engine<'en> {
             let token = raw.trim();
             let family = if token.starts_with('"') {
                 LiteralFamily::String
+            } else if token.starts_with('{') {
+                LiteralFamily::Json
             } else if token.ends_with('%') {
                 LiteralFamily::Certainty
             } else if token.contains('.') {
@@ -2136,7 +2215,11 @@ impl<'en> Engine<'en> {
                                         rhs_raw = Some(c.as_str().to_string());
                                     }
                                     // literals
-                                    Rule::certainty | Rule::decimal | Rule::int | Rule::string => {
+                                    Rule::certainty
+                                    | Rule::decimal
+                                    | Rule::int
+                                    | Rule::string
+                                    | Rule::json => {
                                         rhs_raw = Some(c.as_str().to_string());
                                     }
                                     Rule::rhs_value => {
@@ -2164,7 +2247,8 @@ impl<'en> Engine<'en> {
                                                 Rule::certainty
                                                 | Rule::decimal
                                                 | Rule::int
-                                                | Rule::string => {
+                                                | Rule::string
+                                                | Rule::json => {
                                                     rhs_raw = Some(r.as_str().to_string());
                                                 }
                                                 _ => {}
@@ -2253,7 +2337,8 @@ impl<'en> Engine<'en> {
                                                 "<=" => pt.definitely_at_or_before(tcmp),
                                                 ">" => pt.definitely_after(tcmp),
                                                 ">=" => pt.definitely_at_or_after(tcmp),
-                                                "==" | "=" => pt == tcmp,
+                                                "===" | "==" | "=" => pt == tcmp,
+                                                "?=" => pt.overlaps(tcmp),
                                                 _ => false,
                                             };
                                             if !ok {
@@ -2290,7 +2375,8 @@ impl<'en> Engine<'en> {
                                                 "<=" => pt1.definitely_at_or_before(pt2),
                                                 ">" => pt1.definitely_after(pt2),
                                                 ">=" => pt1.definitely_at_or_after(pt2),
-                                                "==" | "=" => pt1 == pt2,
+                                                "===" | "==" | "=" => pt1 == pt2,
+                                                "?=" => pt1.overlaps(pt2),
                                                 _ => false,
                                             };
                                             if !ok {
@@ -2337,6 +2423,10 @@ impl<'en> Engine<'en> {
                                             .map_err(|error| {
                                                 format!("Ordering comparison not allowed: {error}")
                                             })
+                                    } else if op == "===" {
+                                        Ok(lhs.exactly_equals(&rhs))
+                                    } else if op == "?=" {
+                                        lhs.possibly_equals(&rhs)
                                     } else if op == "=" || op == "==" {
                                         lhs.nominally_equals(&rhs)
                                     } else {
@@ -2395,6 +2485,10 @@ impl<'en> Engine<'en> {
                                                 };
                                                 format!("Ordering comparison not allowed: {error}{guidance}")
                                             })
+                                    } else if op == "===" {
+                                        Ok(stored.exactly_equals(rhs))
+                                    } else if op == "?=" {
+                                        stored.possibly_equals(rhs)
                                     } else if op == "=" || op == "==" {
                                         stored.nominally_equals(rhs)
                                     } else {
@@ -2599,7 +2693,7 @@ impl<'en> Engine<'en> {
     }
     /// Parse and execute a Traqula script (one or more commands).
     pub fn execute(&self, traqula: &str) {
-        let Ok(execution) = ExecutionOptions::default().resolve() else {
+        let Ok(execution) = ExecutionOptions::default().resolve(traqula) else {
             return;
         };
         let mut variables: Variables = Variables::default();
@@ -2666,7 +2760,7 @@ impl<'en> Engine<'en> {
         traqula: &str,
         options: ExecutionOptions,
     ) -> Result<CollectedResult, DatabaseError> {
-        let execution = options.resolve()?;
+        let execution = options.resolve(traqula)?;
         execution.check()?;
         let metadata = execution.metadata.clone();
         let mut variables: Variables = Variables::default();
@@ -2793,7 +2887,7 @@ impl<'en> Engine<'en> {
         traqula: &str,
         options: ExecutionOptions,
     ) -> Result<Vec<CollectedResultSet>, DatabaseError> {
-        let execution = options.resolve()?;
+        let execution = options.resolve(traqula)?;
         execution.check()?;
         let metadata = execution.metadata.clone();
         let mut variables: Variables = Variables::default();
@@ -2924,8 +3018,11 @@ impl<'en> Engine<'en> {
         callbacks: &mut C,
         options: ExecutionOptions,
     ) -> Result<(), DatabaseError> {
-        let execution = options.resolve()?;
+        let execution = options.resolve(traqula)?;
         execution.check()?;
+        for warning in &execution.metadata.warnings {
+            callbacks.on_warning(warning);
+        }
         let mut variables: Variables = Variables::default();
         let parse_result = TraqulaParser::parse(Rule::traqula, traqula.trim());
         let pairs = match parse_result {

@@ -92,6 +92,58 @@ fn arbitrary_precision_integer_predicates_are_exact() {
 }
 
 #[test]
+fn literal_operators_keep_identity_nominality_and_compatibility_distinct() {
+    let engine = engine();
+    engine.execute(
+        r#"
+        add role number;
+        add role document;
+        add posit [{(+number, number)}, +0010.00, @NOW];
+        add posit [{(+document, document)}, {"a": 1.00, "b": [true, null]}, @NOW];
+        "#,
+    );
+
+    let exact = engine
+        .execute_collect("search [{(*, number)}, +n, *] where n === +0010.00 return n;")
+        .expect("exact identity predicate");
+    assert_eq!(exact.rows, vec![vec!["+0010.00".to_string()]]);
+
+    let different_spelling = engine
+        .execute_collect("search [{(*, number)}, +n, *] where n === 10.00 return n;")
+        .expect("exact non-match");
+    assert!(different_spelling.rows.is_empty());
+
+    for operator in ["=", "==", "?="] {
+        let result = engine
+            .execute_collect(&format!(
+                "search [{{(*, number)}}, +n, *] where n {operator} 10 return n;"
+            ))
+            .unwrap_or_else(|error| panic!("{operator} comparison failed: {error}"));
+        assert_eq!(result.rows, vec![vec!["+0010.00".to_string()]]);
+        if operator == "==" {
+            assert_eq!(result.metadata.warnings.len(), 1);
+            assert_eq!(result.metadata.warnings[0].code, "legacy-double-equals");
+        } else {
+            assert!(result.metadata.warnings.is_empty());
+        }
+    }
+
+    let exact_json = engine
+        .execute_collect(
+            r#"search [{(*, document)}, +d, *] where d === {"a": 1.00, "b": [true, null]} return d;"#,
+        )
+        .expect("exact JSON identity");
+    assert_eq!(exact_json.rows.len(), 1);
+
+    let reordered_json = engine
+        .execute_collect(
+            r#"search [{(*, document)}, +d, *] where d === { "b": [true,null], "a": 1 } return d;"#,
+        )
+        .expect("presentation-sensitive JSON identity");
+    assert!(reordered_json.rows.is_empty());
+}
+
+#[test]
 fn malformed_structured_literals_fail_without_creating_a_posit() {
     let engine = engine();
     engine.execute("add role value;");
