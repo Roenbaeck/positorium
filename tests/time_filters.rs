@@ -78,12 +78,11 @@ fn time_variable_variable_no_match() {
 #[test]
 fn time_unknown_variable() {
     let engine = setup();
-    // Predicate references unknown time variable x. Expect zero rows due to filter elimination.
+    // Predicate references unknown time variable x. The beta contract rejects it.
     let script = "search [{(*, event)}, +lbl, +t] where x > '2015-01-01' return t;";
-    let res = engine.execute_collect(script).expect("query ok");
-    assert_eq!(
-        res.rows.len(),
-        0,
-        "unknown variable should yield no matches"
-    );
+    let error = engine.execute_collect(script).unwrap_err();
+    assert!(matches!(
+        error,
+        positorium::DatabaseError::UnknownVariable(variable) if variable == "x"
+    ));
 }

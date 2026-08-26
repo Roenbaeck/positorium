@@ -517,6 +517,8 @@ use pest_derive::Parser;
 #[grammar = "traqula.pest"] // relative to src
 struct TraqulaParser;
 
+mod query;
+
 /// Return the number of top-level commands and searches in a validated script.
 #[cfg(feature = "server")]
 pub(crate) fn script_counts(traqula: &str) -> Result<(usize, usize), DatabaseError> {
@@ -554,6 +556,9 @@ pub enum SinkFlow {
 #[serde(rename_all = "snake_case")]
 pub enum ResultCellKind {
     Thing,
+    Role,
+    Posit,
+    AppearanceSet,
     Literal,
     Time,
 }
@@ -1283,6 +1288,23 @@ impl<'en> Engine<'en> {
         Ok(())
     }
     fn search(
+        &self,
+        command: Pair<Rule>,
+        variables: &mut Variables,
+        sink: &mut dyn RowSink,
+        return_columns: &mut Option<Vec<String>>,
+        exec_error: &mut Option<crate::error::DatabaseError>,
+        execution: &ExecutionContext,
+    ) {
+        let _ = variables;
+        if let Err(error) = query::execute(self.database, command, sink, return_columns, execution)
+        {
+            *exec_error = Some(error);
+        }
+    }
+
+    #[allow(dead_code)]
+    fn search_legacy(
         &self,
         command: Pair<Rule>,
         variables: &mut Variables,

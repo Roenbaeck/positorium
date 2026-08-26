@@ -24,6 +24,18 @@ pub enum DatabaseError {
     UnknownRole(String),
     #[error("Invalid appearance set: {0}")]
     InvalidAppearanceSet(String),
+    #[error("Unknown variable: {0}")]
+    UnknownVariable(String),
+    #[error("Query variable '{name}' has incompatible domains: {first} and {second}")]
+    VariableDomain {
+        name: String,
+        first: &'static str,
+        second: &'static str,
+    },
+    #[error("Invalid query recall: {0}")]
+    InvalidRecall(String),
+    #[error("Unsupported comparison: {0}")]
+    Comparison(String),
     #[error("Internal invariant violated: {0}")]
     Invariant(String),
     #[error("Lock poisoned: {0}")]

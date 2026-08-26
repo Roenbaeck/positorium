@@ -544,6 +544,10 @@ fn database_error_response(error: DatabaseError, started: Instant) -> Response {
         DatabaseError::Parse { .. }
         | DatabaseError::UnknownRole(_)
         | DatabaseError::InvalidAppearanceSet(_)
+        | DatabaseError::UnknownVariable(_)
+        | DatabaseError::VariableDomain { .. }
+        | DatabaseError::InvalidRecall(_)
+        | DatabaseError::Comparison(_)
         | DatabaseError::Execution(_) => StatusCode::BAD_REQUEST,
         DatabaseError::Cancelled | DatabaseError::Timeout => StatusCode::REQUEST_TIMEOUT,
         DatabaseError::Config(_)
