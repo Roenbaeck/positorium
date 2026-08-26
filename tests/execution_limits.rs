@@ -62,3 +62,20 @@ fn execution_row_cap_reports_only_actual_truncation() {
     assert_eq!(result.row_count, 1);
     assert!(result.limited);
 }
+
+#[test]
+fn a_failed_command_keeps_earlier_commands_but_publishes_no_partial_posit() {
+    let db = Database::new(PersistenceMode::InMemory).unwrap();
+    let engine = Engine::new(&db);
+    let error = engine
+        .execute("add role committed; add posit [{(+subject, missing)}, \"not committed\", @NOW];")
+        .unwrap_err();
+
+    assert!(matches!(error, DatabaseError::UnknownRole(_)));
+    assert!(db.contains_role("committed").unwrap());
+    assert!(!db.contains_role("missing").unwrap());
+    let result = engine
+        .execute_collect("search [{(*, committed)}, +value, *] return value;")
+        .unwrap();
+    assert!(result.rows.is_empty());
+}

@@ -359,7 +359,7 @@ posit replay.
 
 ## P0: Reliability And Ownership
 
-- [ ] **Propagate boundary failures.**
+- [x] **Propagate boundary failures.**
         - Return persistence, restore, lock, parse, and network errors instead of
             logging and continuing with partial state.
         - Remove panic/`unwrap` paths reachable through scripts, persisted bytes,

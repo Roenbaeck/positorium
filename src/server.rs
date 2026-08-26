@@ -171,11 +171,8 @@ struct ServerState {
     config: ServerConfig,
 }
 
-pub fn router(interface: Arc<QueryInterface>) -> Router {
-    match router_with_config(interface, ServerConfig::default()) {
-        Ok(router) => router,
-        Err(error) => panic!("default server configuration is invalid: {error}"),
-    }
+pub fn router(interface: Arc<QueryInterface>) -> Result<Router, DatabaseError> {
+    router_with_config(interface, ServerConfig::default())
 }
 
 pub fn router_with_config(

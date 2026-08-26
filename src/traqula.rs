@@ -398,31 +398,6 @@ impl std::ops::BitXorAssign<&ResultSet> for ResultSet {
     }
 }
 
-// search functions in order to find posits matching certain circumstances
-/// Collects the identities of all posits whose appearance sets involve the
-/// supplied thing.
-pub fn posits_involving_thing(database: &Database, thing: Thing) -> ResultSet {
-    let mut result_set = ResultSet::new();
-    let thing_lookup = database.thing_to_appearance_lookup.lock().unwrap();
-    if let Some(appearances) = thing_lookup.lookup(&thing) {
-        for appearance in appearances {
-            let appearance_lookup = database.appearance_to_appearance_set_lookup.lock().unwrap();
-            if let Some(appearance_sets) = appearance_lookup.lookup(appearance) {
-                for appearance_set in appearance_sets {
-                    let guard = database
-                        .appearance_set_to_posit_thing_lookup
-                        .lock()
-                        .unwrap();
-                    if let Some(bitmap) = guard.lookup(appearance_set) {
-                        result_set.insert_many(bitmap);
-                    }
-                }
-            }
-        }
-    }
-    result_set
-}
-
 fn parse_lossless_literal(
     rule: Rule,
     token: &str,
@@ -1031,7 +1006,16 @@ impl<'en> Engine<'en> {
                         match component.as_rule() {
                             Rule::insert => {
                                 variable = Some(
-                                    component.into_inner().next().unwrap().as_str().to_string(),
+                                    component
+                                        .into_inner()
+                                        .next()
+                                        .ok_or_else(|| {
+                                            DatabaseError::Invariant(
+                                                "insert node has no variable".to_string(),
+                                            )
+                                        })?
+                                        .as_str()
+                                        .to_string(),
                                 );
                                 //println!("Insert: {:?}", &variable);
                             }
@@ -1043,14 +1027,21 @@ impl<'en> Engine<'en> {
                                                 let local_variable = appearance
                                                     .into_inner()
                                                     .next()
-                                                    .unwrap()
+                                                    .ok_or_else(|| {
+                                                        DatabaseError::Invariant(
+                                                            "appearance insert has no variable"
+                                                                .to_string(),
+                                                        )
+                                                    })?
                                                     .as_str();
                                                 local_variables.push(local_variable);
                                                 let thing = self
                                                     .database
                                                     .thing_generator()
                                                     .lock()
-                                                    .unwrap()
+                                                    .map_err(|error| {
+                                                        DatabaseError::Lock(error.to_string())
+                                                    })?
                                                     .generate();
                                                 match variables.entry(local_variable.to_string()) {
                                                     Entry::Vacant(entry) => {
@@ -1068,14 +1059,23 @@ impl<'en> Engine<'en> {
                                                     appearance
                                                         .into_inner()
                                                         .next()
-                                                        .unwrap()
+                                                        .ok_or_else(|| {
+                                                            DatabaseError::Invariant(
+                                                                "appearance recall has no variable"
+                                                                    .to_string(),
+                                                            )
+                                                        })?
                                                         .as_str(),
                                                 );
                                             }
                                             Rule::role => {
                                                 roles.push(appearance.as_str());
                                             }
-                                            _ => println!("Unknown appearance: {:?}", appearance),
+                                            rule => {
+                                                return Err(DatabaseError::Invariant(format!(
+                                                    "unexpected appearance rule {rule:?}"
+                                                )));
+                                            }
                                         }
                                     }
                                 }
@@ -1097,12 +1097,6 @@ impl<'en> Engine<'en> {
                                                 time_type.as_str(),
                                                 resolved_now,
                                             );
-                                            if time.is_none() {
-                                                eprintln!(
-                                                    "Failed to parse time constant: {}",
-                                                    time_type.as_str()
-                                                );
-                                            }
                                         }
                                         Rule::time => {
                                             //println!("Time: {}", value_type.as_str());
@@ -1110,18 +1104,20 @@ impl<'en> Engine<'en> {
                                                 time_type.as_str(),
                                                 resolved_now,
                                             );
-                                            if time.is_none() {
-                                                eprintln!(
-                                                    "Failed to parse time: {}",
-                                                    time_type.as_str()
-                                                );
-                                            }
                                         }
-                                        _ => println!("Unknown time type: {:?}", time_type),
+                                        rule => {
+                                            return Err(DatabaseError::Invariant(format!(
+                                                "unexpected time rule {rule:?}"
+                                            )));
+                                        }
                                     }
                                 }
                             }
-                            _ => println!("Unknown component: {:?}", component),
+                            rule => {
+                                return Err(DatabaseError::Invariant(format!(
+                                    "unexpected posit component {rule:?}"
+                                )));
+                            }
                         }
                     }
                     let mut variable_to_things = HashMap::new();
@@ -1129,15 +1125,30 @@ impl<'en> Engine<'en> {
                         variable_to_things.insert(*local_variable, Vec::new());
                     }
                     for local_variable in &local_variables {
-                        let things = variable_to_things.get_mut(local_variable).unwrap();
-                        let result_set = variables.get(*local_variable).unwrap();
+                        let things =
+                            variable_to_things.get_mut(local_variable).ok_or_else(|| {
+                                DatabaseError::Invariant(
+                                    "missing variable candidate list".to_string(),
+                                )
+                            })?;
+                        let result_set = variables.get(*local_variable).ok_or_else(|| {
+                            DatabaseError::Invariant("missing allocation binding".to_string())
+                        })?;
                         match result_set.mode {
                             ResultSetMode::Empty => (),
                             ResultSetMode::Thing => {
-                                things.push(result_set.thing.unwrap());
+                                things.push(result_set.thing.ok_or_else(|| {
+                                    DatabaseError::Invariant(
+                                        "single result set has no identity".to_string(),
+                                    )
+                                })?);
                             }
                             ResultSetMode::Multi => {
-                                let multi = result_set.multi.as_ref().unwrap();
+                                let multi = result_set.multi.as_ref().ok_or_else(|| {
+                                    DatabaseError::Invariant(
+                                        "multi result set has no bitmap".to_string(),
+                                    )
+                                })?;
                                 for thing in multi {
                                     things.push(thing);
                                 }
@@ -1146,8 +1157,20 @@ impl<'en> Engine<'en> {
                     }
                     let mut things_for_roles = Vec::new();
                     for local_variable in &local_variables {
-                        let things_for_role = variable_to_things.get(local_variable).unwrap();
+                        let things_for_role =
+                            variable_to_things.get(local_variable).ok_or_else(|| {
+                                DatabaseError::Invariant(
+                                    "missing variable candidate list".to_string(),
+                                )
+                            })?;
                         things_for_roles.push(things_for_role.as_slice());
+                    }
+                    if roles.len() != things_for_roles.len() {
+                        return Err(DatabaseError::Invariant(format!(
+                            "appearance variables/roles mismatch: {} variables, {} roles",
+                            things_for_roles.len(),
+                            roles.len()
+                        )));
                     }
 
                     // Reorder roles and their candidate lists by ascending cardinality to improve iteration locality
@@ -1227,7 +1250,11 @@ impl<'en> Engine<'en> {
                     }
                     result_bindings.push((variable.take(), start..end));
                 }
-                _ => println!("Unknown structure: {:?}", structure),
+                rule => {
+                    return Err(DatabaseError::Invariant(format!(
+                        "unexpected add-posit structure {rule:?}"
+                    )));
+                }
             }
         }
         let kept = self.database.create_literal_posits(pending)?;
@@ -1278,6 +1305,20 @@ impl<'en> Engine<'en> {
                     true
                 }
             }
+        }
+
+        macro_rules! query_lock {
+            ($mutex:expr) => {
+                match $mutex.lock() {
+                    Ok(guard) => guard,
+                    Err(error) => {
+                        if exec_error.is_none() {
+                            *exec_error = Some(DatabaseError::Lock(error.to_string()));
+                        }
+                        return;
+                    }
+                }
+            };
         }
 
         if let Err(error) = execution.check() {
@@ -1635,7 +1676,12 @@ impl<'en> Engine<'en> {
                                                 }
                                             }
                                         }
-                                        _ => println!("Unknown component: {:?}", component),
+                                        rule => {
+                                            *exec_error = Some(DatabaseError::Invariant(format!(
+                                                "unexpected search component {rule:?}"
+                                            )));
+                                            return;
+                                        }
                                     }
                                 }
                                 // Minimal evaluation: compute candidates by role intersection and bind variables
@@ -1643,7 +1689,7 @@ impl<'en> Engine<'en> {
                                     info!(target:"positorium::stream", event="pattern_start", pattern_index=diag_pattern_id, roles=?roles, local_vars=?local_variables, unions=?local_variable_unions.iter().map(|u| u.as_ref().map(|v| v.join("|"))).collect::<Vec<_>>(), as_of_literal=%_as_of_time.as_ref().map(|t|format!("{}",t)).unwrap_or_default());
                                     // Intersect role bitmaps starting from the smallest posting list
                                     let rk = self.database.role_keeper();
-                                    let rk_guard = rk.lock().unwrap();
+                                    let rk_guard = query_lock!(rk);
                                     let mut role_things = Vec::with_capacity(roles.len());
                                     for role_name in &roles {
                                         if interrupted(execution, exec_error) {
@@ -1658,7 +1704,7 @@ impl<'en> Engine<'en> {
                                         role_things.push(role.role());
                                     }
                                     let lk = self.database.role_to_posit_thing_lookup();
-                                    let lk_guard = lk.lock().unwrap();
+                                    let lk_guard = query_lock!(lk);
                                     let mut order: Vec<usize> = (0..role_things.len()).collect();
                                     order.sort_unstable_by_key(|i| {
                                         lk_guard
@@ -1695,7 +1741,7 @@ impl<'en> Engine<'en> {
                                         if let Some(ref t) = _time {
                                             let mut filtered = RoaringTreemap::new();
                                             let tk = self.database.posit_time_lookup();
-                                            let guard = tk.lock().unwrap();
+                                            let guard = query_lock!(tk);
                                             for id in cands.iter() {
                                                 if interrupted(execution, exec_error) {
                                                     return;
@@ -1717,11 +1763,11 @@ impl<'en> Engine<'en> {
                                             && !cands.is_empty()
                                         {
                                             let time_lk = self.database.posit_time_lookup();
-                                            let time_guard = time_lk.lock().unwrap();
+                                            let time_guard = query_lock!(time_lk);
                                             let aset_lk = self
                                                 .database
                                                 .posit_thing_to_appearance_set_lookup();
-                                            let aset_guard = aset_lk.lock().unwrap();
+                                            let aset_guard = query_lock!(aset_lk);
                                             // Keep every maximal applicable posit per appearance set.
                                             use std::collections::HashMap as StdHashMap;
                                             let mut best: StdHashMap<usize, Vec<(Time, Thing)>> =
@@ -1763,7 +1809,7 @@ impl<'en> Engine<'en> {
                                         if let Some(expected) = _value_as_literal.as_ref() {
                                             let mut filtered = RoaringTreemap::new();
                                             let pk = self.database.posit_keeper();
-                                            let mut pk_guard = pk.lock().unwrap();
+                                            let mut pk_guard = query_lock!(pk);
                                             for id in cands.iter() {
                                                 if interrupted(execution, exec_error) {
                                                     return;
@@ -1826,7 +1872,7 @@ impl<'en> Engine<'en> {
                                             let lk = self
                                                 .database
                                                 .posit_thing_to_appearance_set_lookup();
-                                            let aset_guard = lk.lock().unwrap();
+                                            let aset_guard = query_lock!(lk);
                                             let mut filtered = RoaringTreemap::new();
                                             'cand: for id in cands.iter() {
                                                 if interrupted(execution, exec_error) {
@@ -1956,7 +2002,7 @@ impl<'en> Engine<'en> {
                                             let aset_lookup = self
                                                 .database
                                                 .posit_thing_to_appearance_set_lookup();
-                                            let aset_guard = aset_lookup.lock().unwrap();
+                                            let aset_guard = query_lock!(aset_lookup);
                                             let mut candidate_info: Vec<(
                                                 Thing,
                                                 HashMap<String, Thing>,
@@ -2070,7 +2116,7 @@ impl<'en> Engine<'en> {
                                                 // Guards and caches for per-binding snapshot reduction when using variable as-of
                                                 // Acquire time lookup guard; re-use existing aset_guard from candidate enumeration to avoid re-lock deadlock
                                                 let time_lk = self.database.posit_time_lookup();
-                                                let time_guard = time_lk.lock().unwrap();
+                                                let time_guard = query_lock!(time_lk);
                                                 for existing in bindings.iter() {
                                                     if interrupted(execution, exec_error) {
                                                         return;
@@ -2235,7 +2281,12 @@ impl<'en> Engine<'en> {
                                     }
                                 }
                             }
-                            _ => println!("Unknown posit structure: {:?}", structure),
+                            rule => {
+                                *exec_error = Some(DatabaseError::Invariant(format!(
+                                    "unexpected search structure {rule:?}"
+                                )));
+                                return;
+                            }
                         }
                         // local variable debug output suppressed
                     }
@@ -2391,7 +2442,7 @@ impl<'en> Engine<'en> {
                         }
                         if !where_time.is_empty() {
                             let tk = self.database.posit_time_lookup();
-                            let guard_time = tk.lock().unwrap();
+                            let guard_time = query_lock!(tk);
                             bindings.retain(|b| {
                                 if interrupted(execution, exec_error) {
                                     return false;
@@ -2423,7 +2474,7 @@ impl<'en> Engine<'en> {
                         }
                         if !where_time_var.is_empty() {
                             let tk = self.database.posit_time_lookup();
-                            let guard_time = tk.lock().unwrap();
+                            let guard_time = query_lock!(tk);
                             bindings.retain(|b| {
                                 if interrupted(execution, exec_error) {
                                     return false;
@@ -2462,7 +2513,7 @@ impl<'en> Engine<'en> {
                         }
                         if !where_value_var.is_empty() {
                             let posit_keeper = self.database.posit_keeper();
-                            let mut pk_guard = posit_keeper.lock().unwrap();
+                            let mut pk_guard = query_lock!(posit_keeper);
                             bindings.retain(|b| {
                                 if interrupted(execution, exec_error) {
                                     return false;
@@ -2521,7 +2572,7 @@ impl<'en> Engine<'en> {
                         }
                         if !where_value.is_empty() {
                             let posit_keeper = self.database.posit_keeper();
-                            let mut pk_guard = posit_keeper.lock().unwrap();
+                            let mut pk_guard = query_lock!(posit_keeper);
                             bindings.retain(|b| {
                                 if interrupted(execution, exec_error) {
                                     return false;
@@ -2583,11 +2634,10 @@ impl<'en> Engine<'en> {
                         }
                         let posit_keeper = self.database.posit_keeper();
                         let time_lookup = self.database.posit_time_lookup();
-                        let mut pk_guard = posit_keeper.lock().unwrap();
-                        let time_guard = time_lookup.lock().unwrap();
+                        let mut pk_guard = query_lock!(posit_keeper);
+                        let time_guard = query_lock!(time_lookup);
 
-                        // Column-level inference removed; we now collect a per-row types vector.
-                        // Emission handled after full clause scan; see post-clause block.
+                        // Cells carry their own stable kind tag during projection.
                         if !enumeration_started {
                             info!(target:"positorium::stream", event="projection_skipped", reason="no_enumeration", any_clause_failed=any_clause_failed);
                             return;
@@ -2665,7 +2715,12 @@ impl<'en> Engine<'en> {
                     }
                 } // end Rule::return_clause branch
                 Rule::limit_clause => { /* ignored here */ }
-                _ => println!("Unknown clause: {:?}", clause),
+                rule => {
+                    *exec_error = Some(DatabaseError::Invariant(format!(
+                        "unexpected search clause {rule:?}"
+                    )));
+                    return;
+                }
             }
         }
     }
@@ -3153,5 +3208,66 @@ pub fn for_each_cartesian_indices<F: FnMut(&[usize])>(lists: &[&[impl Copy]], mu
         if carry_pos == n {
             break; // overflowed most significant digit; done
         }
+    }
+}
+
+#[cfg(test)]
+mod boundary_tests {
+    use super::*;
+    use crate::construct::PersistenceMode;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    #[test]
+    fn malformed_and_arbitrary_scripts_return_without_panicking() {
+        let curated = [
+            "\0",
+            "add",
+            "add posit [",
+            "search [{(*, missing)}, +value, *] return value",
+            "/* unterminated",
+            "\"\\u{not-unicode}\"",
+            "💥;",
+        ];
+        for source in curated {
+            let database = Database::new(PersistenceMode::InMemory).unwrap();
+            let outcome = catch_unwind(AssertUnwindSafe(|| {
+                let _ = Engine::new(&database).execute_collect_multi(source);
+            }));
+            assert!(outcome.is_ok(), "script panicked: {source:?}");
+        }
+
+        for seed in 0_u16..512 {
+            let length = usize::from(seed % 96);
+            let bytes: Vec<u8> = (0..length)
+                .map(|index| {
+                    seed.wrapping_mul(73)
+                        .wrapping_add((index as u16).wrapping_mul(151)) as u8
+                })
+                .collect();
+            let source = String::from_utf8_lossy(&bytes);
+            let database = Database::new(PersistenceMode::InMemory).unwrap();
+            let outcome = catch_unwind(AssertUnwindSafe(|| {
+                let _ = Engine::new(&database).execute_collect_multi(&source);
+            }));
+            assert!(outcome.is_ok(), "generated script panicked for seed {seed}");
+        }
+    }
+
+    #[test]
+    fn poisoned_catalog_lock_is_returned_as_an_error() {
+        let database = Database::new(PersistenceMode::InMemory).unwrap();
+        std::thread::scope(|scope| {
+            let database = &database;
+            let result = scope.spawn(move || {
+                let _guard = database.role_keeper.lock().unwrap();
+                panic!("poison role catalog for boundary test");
+            });
+            assert!(result.join().is_err());
+        });
+
+        let error = Engine::new(&database)
+            .execute("add role cannotbeadded;")
+            .unwrap_err();
+        assert!(matches!(error, DatabaseError::Lock(_)));
     }
 }
