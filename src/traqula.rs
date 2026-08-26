@@ -452,8 +452,12 @@ fn parse_json_constant(_value: &str) -> Option<JSON> {
 }
 /// Parse a time literal or constant used in Traqula.
 pub fn parse_time(value: &str) -> Option<Time> {
+    parse_time_with_now(value, &Time::new())
+}
+
+fn parse_time_with_now(value: &str, resolved_now: &Time) -> Option<Time> {
     // 1. Fast path for constants (@NOW etc.)
-    if let Some(t) = parse_time_constant(value) {
+    if let Some(t) = parse_time_constant_with_now(value, resolved_now) {
         return Some(t);
     }
 
@@ -516,9 +520,9 @@ pub fn parse_time(value: &str) -> Option<Time> {
 
     None
 }
-fn parse_time_constant(value: &str) -> Option<Time> {
+fn parse_time_constant_with_now(value: &str, resolved_now: &Time) -> Option<Time> {
     match value.replace("@", "").as_str() {
-        "NOW" => Some(Time::new()),
+        "NOW" => Some(resolved_now.clone()),
         "BOT" => Some(Time::new_beginning_of_time()),
         "EOT" => Some(Time::new_end_of_time()),
         _ => None,
@@ -570,6 +574,7 @@ pub struct CollectedResult {
     pub row_types: Vec<Vec<String>>,
     pub row_count: usize,
     pub limited: bool,
+    pub metadata: ExecutionMetadata,
 }
 #[derive(Debug, Clone)]
 pub struct CollectedResultSet {
@@ -579,6 +584,28 @@ pub struct CollectedResultSet {
     pub row_count: usize,
     pub limited: bool,
     pub search: Option<String>,
+    pub metadata: ExecutionMetadata,
+}
+
+/// Options that affect one complete Traqula script execution.
+#[derive(Debug, Clone, Default)]
+pub struct ExecutionOptions {
+    /// Deterministic replacement for every `@NOW` occurrence in the script.
+    pub now: Option<Time>,
+}
+
+/// Values resolved once and shared by every command in a script execution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutionMetadata {
+    pub resolved_now: Time,
+}
+
+impl ExecutionOptions {
+    fn resolve(self) -> ExecutionMetadata {
+        ExecutionMetadata {
+            resolved_now: self.now.unwrap_or_else(Time::new),
+        }
+    }
 }
 impl<'en> Engine<'en> {
     /// Create a new engine borrowing the provided database.
@@ -593,6 +620,7 @@ impl<'en> Engine<'en> {
         traqula: &str,
         sink: &mut S,
     ) -> Result<(Vec<String>, bool, usize), crate::error::DatabaseError> {
+        let resolved_now = Time::new();
         let mut variables: Variables = Variables::default();
         let parse_result = TraqulaParser::parse(Rule::traqula, traqula.trim());
         let pairs = match parse_result {
@@ -635,7 +663,7 @@ impl<'en> Engine<'en> {
         for command in pairs {
             match command.as_rule() {
                 Rule::add_role => self.add_role(command),
-                Rule::add_posit => self.add_posit(command, &mut variables)?,
+                Rule::add_posit => self.add_posit(command, &mut variables, &resolved_now)?,
                 Rule::search => {
                     // limit extraction
                     let mut limit = None;
@@ -694,6 +722,7 @@ impl<'en> Engine<'en> {
                         &mut wrapper,
                         &mut return_columns,
                         &mut err,
+                        &resolved_now,
                     );
                     if let Some(e) = err {
                         return Err(e);
@@ -729,6 +758,7 @@ impl<'en> Engine<'en> {
         &self,
         command: Pair<Rule>,
         variables: &mut Variables,
+        resolved_now: &Time,
     ) -> Result<(), DatabaseError> {
         for structure in command.into_inner() {
             let mut variable: Option<String> = None;
@@ -806,8 +836,10 @@ impl<'en> Engine<'en> {
                                                 parse_json_constant(value_type.as_str());
                                             value_as_string =
                                                 parse_string_constant(value_type.as_str());
-                                            value_as_time =
-                                                parse_time_constant(value_type.as_str());
+                                            value_as_time = parse_time_constant_with_now(
+                                                value_type.as_str(),
+                                                resolved_now,
+                                            );
                                             value_as_certainty =
                                                 parse_certainty_constant(value_type.as_str());
                                             value_as_decimal =
@@ -824,7 +856,10 @@ impl<'en> Engine<'en> {
                                         }
                                         Rule::time => {
                                             //println!("Time: {}", value_type.as_str());
-                                            value_as_time = parse_time(value_type.as_str());
+                                            value_as_time = parse_time_with_now(
+                                                value_type.as_str(),
+                                                resolved_now,
+                                            );
                                         }
                                         Rule::certainty => {
                                             //println!("Certainty: {}", value_type.as_str());
@@ -847,7 +882,10 @@ impl<'en> Engine<'en> {
                                 for time_type in component.into_inner() {
                                     match time_type.as_rule() {
                                         Rule::constant => {
-                                            time = parse_time_constant(time_type.as_str());
+                                            time = parse_time_constant_with_now(
+                                                time_type.as_str(),
+                                                resolved_now,
+                                            );
                                             if time.is_none() {
                                                 eprintln!(
                                                     "Failed to parse time constant: {}",
@@ -857,7 +895,10 @@ impl<'en> Engine<'en> {
                                         }
                                         Rule::time => {
                                             //println!("Time: {}", value_type.as_str());
-                                            time = parse_time(time_type.as_str());
+                                            time = parse_time_with_now(
+                                                time_type.as_str(),
+                                                resolved_now,
+                                            );
                                             if time.is_none() {
                                                 eprintln!(
                                                     "Failed to parse time: {}",
@@ -1033,6 +1074,7 @@ impl<'en> Engine<'en> {
         sink: &mut dyn RowSink,
         return_columns: &mut Option<Vec<String>>,
         exec_error: &mut Option<crate::error::DatabaseError>,
+        resolved_now: &Time,
     ) {
         fn cmp_ordering(ordering: std::cmp::Ordering, op: &str) -> bool {
             use std::cmp::Ordering::{Equal, Greater, Less};
@@ -1321,9 +1363,11 @@ impl<'en> Engine<'en> {
                                                         _value_as_string = parse_string_constant(
                                                             value_type.as_str(),
                                                         );
-                                                        _value_as_time = parse_time_constant(
-                                                            value_type.as_str(),
-                                                        );
+                                                        _value_as_time =
+                                                            parse_time_constant_with_now(
+                                                                value_type.as_str(),
+                                                                resolved_now,
+                                                            );
                                                         _value_as_certainty =
                                                             parse_certainty_constant(
                                                                 value_type.as_str(),
@@ -1346,8 +1390,10 @@ impl<'en> Engine<'en> {
                                                     }
                                                     Rule::time => {
                                                         //println!("Time: {}", value_type.as_str());
-                                                        _value_as_time =
-                                                            parse_time(value_type.as_str());
+                                                        _value_as_time = parse_time_with_now(
+                                                            value_type.as_str(),
+                                                            resolved_now,
+                                                        );
                                                     }
                                                     Rule::certainty => {
                                                         //println!("Certainty: {}", value_type.as_str());
@@ -1394,12 +1440,17 @@ impl<'en> Engine<'en> {
                                                         //println!("wildcard");
                                                     }
                                                     Rule::constant => {
-                                                        _time =
-                                                            parse_time_constant(time_type.as_str());
+                                                        _time = parse_time_constant_with_now(
+                                                            time_type.as_str(),
+                                                            resolved_now,
+                                                        );
                                                     }
                                                     Rule::time => {
                                                         //println!("Time: {}", value_type.as_str());
-                                                        _time = parse_time(time_type.as_str());
+                                                        _time = parse_time_with_now(
+                                                            time_type.as_str(),
+                                                            resolved_now,
+                                                        );
                                                     }
                                                     _ => println!(
                                                         "Unknown time type: {:?}",
@@ -1413,11 +1464,16 @@ impl<'en> Engine<'en> {
                                             for part in component.into_inner() {
                                                 match part.as_rule() {
                                                     Rule::constant => {
-                                                        _as_of_time =
-                                                            parse_time_constant(part.as_str());
+                                                        _as_of_time = parse_time_constant_with_now(
+                                                            part.as_str(),
+                                                            resolved_now,
+                                                        );
                                                     }
                                                     Rule::time => {
-                                                        _as_of_time = parse_time(part.as_str());
+                                                        _as_of_time = parse_time_with_now(
+                                                            part.as_str(),
+                                                            resolved_now,
+                                                        );
                                                     }
                                                     Rule::recall => {
                                                         // Variable as_of: record the variable name for per-binding snapshot reduction.
@@ -2153,14 +2209,18 @@ impl<'en> Engine<'en> {
                                         Rule::comparator => op = Some(c.as_str().to_string()),
                                         Rule::constant => {
                                             // Could be time constant
-                                            if let Some(t) = parse_time_constant(c.as_str()) {
+                                            if let Some(t) = parse_time_constant_with_now(
+                                                c.as_str(),
+                                                resolved_now,
+                                            ) {
                                                 rhs_time = Some(t);
                                                 rhs_is_time = true;
                                             }
                                             rhs_raw = Some(c.as_str().to_string());
                                         }
                                         Rule::time => {
-                                            rhs_time = parse_time(c.as_str());
+                                            rhs_time =
+                                                parse_time_with_now(c.as_str(), resolved_now);
                                             rhs_is_time = true;
                                             rhs_raw = Some(c.as_str().to_string());
                                         }
@@ -2177,7 +2237,10 @@ impl<'en> Engine<'en> {
                                                 match r.as_rule() {
                                                     Rule::constant => {
                                                         if let Some(t) =
-                                                            parse_time_constant(r.as_str())
+                                                            parse_time_constant_with_now(
+                                                                r.as_str(),
+                                                                resolved_now,
+                                                            )
                                                         {
                                                             rhs_time = Some(t);
                                                             rhs_is_time = true;
@@ -2185,7 +2248,10 @@ impl<'en> Engine<'en> {
                                                         rhs_raw = Some(r.as_str().to_string());
                                                     }
                                                     Rule::time => {
-                                                        rhs_time = parse_time(r.as_str());
+                                                        rhs_time = parse_time_with_now(
+                                                            r.as_str(),
+                                                            resolved_now,
+                                                        );
                                                         rhs_is_time = true;
                                                         rhs_raw = Some(r.as_str().to_string());
                                                     }
@@ -2664,7 +2730,7 @@ impl<'en> Engine<'en> {
         }
     }
     // Backwards compatible wrapper retaining original signature (prints rows)
-    fn search_print(&self, command: Pair<Rule>, variables: &mut Variables) {
+    fn search_print(&self, command: Pair<Rule>, variables: &mut Variables, resolved_now: &Time) {
         let mut cols = None;
         let mut err = None;
         struct PrintSink;
@@ -2675,13 +2741,21 @@ impl<'en> Engine<'en> {
             }
         }
         let mut ps = PrintSink;
-        self.search(command, variables, &mut ps, &mut cols, &mut err);
+        self.search(
+            command,
+            variables,
+            &mut ps,
+            &mut cols,
+            &mut err,
+            resolved_now,
+        );
         if let Some(e) = err {
             eprintln!("{}", e);
         }
     }
     /// Parse and execute a Traqula script (one or more commands).
     pub fn execute(&self, traqula: &str) {
+        let resolved_now = Time::new();
         let mut variables: Variables = Variables::default();
         let parse_result = TraqulaParser::parse(Rule::traqula, traqula.trim());
         let traqula = match parse_result {
@@ -2709,14 +2783,14 @@ impl<'en> Engine<'en> {
             match command.as_rule() {
                 Rule::add_role => self.add_role(command),
                 Rule::add_posit => {
-                    if let Err(error) = self.add_posit(command, &mut variables) {
+                    if let Err(error) = self.add_posit(command, &mut variables, &resolved_now) {
                         eprintln!("{error}");
                         return;
                     }
                 }
                 Rule::search => {
                     // reset limit per search
-                    self.search_print(command, &mut variables);
+                    self.search_print(command, &mut variables, &resolved_now);
                 }
                 Rule::EOI => (), // end of input
                 _ => println!("Unknown command: {:?}", command),
@@ -2728,6 +2802,16 @@ impl<'en> Engine<'en> {
     /// Execute a script and collect printed row outputs (one Vec<String> per returned row).
     /// This is a stop-gap until the search pipeline is refactored to emit structured rows directly.
     pub fn execute_collect(&self, traqula: &str) -> Result<CollectedResult, DatabaseError> {
+        self.execute_collect_with_options(traqula, ExecutionOptions::default())
+    }
+
+    /// Execute and collect a script with deterministic execution options.
+    pub fn execute_collect_with_options(
+        &self,
+        traqula: &str,
+        options: ExecutionOptions,
+    ) -> Result<CollectedResult, DatabaseError> {
+        let metadata = options.resolve();
         let mut variables: Variables = Variables::default();
         struct CollectSink {
             rows: Vec<Vec<String>>,
@@ -2791,7 +2875,9 @@ impl<'en> Engine<'en> {
         for command in traqula {
             match command.as_rule() {
                 Rule::add_role => self.add_role(command),
-                Rule::add_posit => self.add_posit(command, &mut variables)?,
+                Rule::add_posit => {
+                    self.add_posit(command, &mut variables, &metadata.resolved_now)?
+                }
                 Rule::search => {
                     search_count += 1;
                     // Extract per-search limit and install into sink (overwrite any prior; only meaningful when one search in script)
@@ -2817,6 +2903,7 @@ impl<'en> Engine<'en> {
                         &mut collector,
                         &mut return_columns,
                         &mut err,
+                        &metadata.resolved_now,
                     );
                     if let Some(e) = err {
                         return Err(e);
@@ -2835,6 +2922,7 @@ impl<'en> Engine<'en> {
             row_types: collector.types,
             row_count,
             limited,
+            metadata,
         })
     }
 
@@ -2844,6 +2932,16 @@ impl<'en> Engine<'en> {
         &self,
         traqula: &str,
     ) -> Result<Vec<CollectedResultSet>, DatabaseError> {
+        self.execute_collect_multi_with_options(traqula, ExecutionOptions::default())
+    }
+
+    /// Execute and collect a multi-search script with deterministic execution options.
+    pub fn execute_collect_multi_with_options(
+        &self,
+        traqula: &str,
+        options: ExecutionOptions,
+    ) -> Result<Vec<CollectedResultSet>, DatabaseError> {
+        let metadata = options.resolve();
         let mut variables: Variables = Variables::default();
         // Track long-lived identity variables introduced via add posit (+var in insert positions)
         let mut stable_vars: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -2883,7 +2981,7 @@ impl<'en> Engine<'en> {
                     // Detect variables created by this add_posit (new insert variables)
                     let before: std::collections::HashSet<String> =
                         variables.keys().cloned().collect();
-                    self.add_posit(command, &mut variables)?;
+                    self.add_posit(command, &mut variables, &metadata.resolved_now)?;
                     for k in variables.keys() {
                         if !before.contains(k) {
                             stable_vars.insert(k.clone());
@@ -2960,6 +3058,7 @@ impl<'en> Engine<'en> {
                         &mut sink,
                         &mut local_return_columns,
                         &mut err,
+                        &metadata.resolved_now,
                     );
                     if let Some(e) = err {
                         return Err(e);
@@ -2974,6 +3073,7 @@ impl<'en> Engine<'en> {
                         row_count,
                         limited,
                         search: Some(raw_search_string),
+                        metadata: metadata.clone(),
                     });
                     // Update preserved variables with those that became non-empty during this search
                     for (k, v) in variables.iter() {
@@ -3000,6 +3100,7 @@ impl<'en> Engine<'en> {
         traqula: &str,
         callbacks: &mut C,
     ) -> Result<(), DatabaseError> {
+        let resolved_now = Time::new();
         let mut variables: Variables = Variables::default();
         // Track long-lived identity variables introduced via add posit (+var in insert positions)
         let mut stable_vars: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -3038,7 +3139,7 @@ impl<'en> Engine<'en> {
                     // Detect variables created by this add_posit (new insert variables)
                     let before: std::collections::HashSet<String> =
                         variables.keys().cloned().collect();
-                    self.add_posit(command, &mut variables)?;
+                    self.add_posit(command, &mut variables, &resolved_now)?;
                     for k in variables.keys() {
                         if !before.contains(k) {
                             stable_vars.insert(k.clone());
@@ -3147,6 +3248,7 @@ impl<'en> Engine<'en> {
                         &mut sink,
                         &mut return_columns,
                         &mut err,
+                        &resolved_now,
                     );
                     if let Some(e) = err {
                         return Err(e);

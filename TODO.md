@@ -71,7 +71,7 @@ The accepted decisions now define the required fixes.
 - [x] **Where-clause numerics go through binary floating point.**
         - `cmp_numeric` compares via `f64` with a `1e-9` epsilon equality
             (src/traqula.rs), contradicting the intended exact typed comparison (D017).
-- [ ] **`@NOW` is evaluated per occurrence.**
+- [x] **`@NOW` is evaluated per occurrence.**
         - `parse_time_constant` constructs `Time::new()` at every parse site, so two
             `@NOW`s in one script differ (src/traqula.rs). Resolve it once per complete
             script, allow an execution-option override, and expose the resolved value
