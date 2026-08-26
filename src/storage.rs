@@ -12,7 +12,7 @@ use crate::literal::{LiteralFamily, LiteralValue};
 use chrono::{Datelike, NaiveDate, Timelike};
 use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 const MANIFEST_NAME: &str = "manifest.pmf";
@@ -147,7 +147,6 @@ struct Manifest {
 
 pub(crate) trait StoreBackend {
     fn append_batch(&mut self, records: &[PendingRecord]) -> Result<Vec<StoredRecord>>;
-    fn replay(&self) -> &[Vec<StoredRecord>];
     fn flush(&mut self) -> Result<()>;
 }
 
@@ -162,6 +161,11 @@ impl MemoryStore {
             batches: Vec::new(),
             next_sequence: 1,
         }
+    }
+
+    #[cfg(test)]
+    fn replay(&self) -> &[Vec<StoredRecord>] {
+        &self.batches
     }
 }
 
@@ -186,10 +190,6 @@ impl StoreBackend for MemoryStore {
         Ok(stored)
     }
 
-    fn replay(&self) -> &[Vec<StoredRecord>] {
-        &self.batches
-    }
-
     fn flush(&mut self) -> Result<()> {
         Ok(())
     }
@@ -200,7 +200,7 @@ pub(crate) struct LogStore {
     _lock: File,
     log: File,
     manifest: Manifest,
-    batches: Vec<Vec<StoredRecord>>,
+    batch_count: usize,
     next_sequence: u64,
     next_batch: u64,
     poisoned: bool,
@@ -220,12 +220,35 @@ pub(crate) struct StoreSnapshot {
     _lock: File,
     log: File,
     manifest: Manifest,
-    batches: Vec<Vec<StoredRecord>>,
+    batch_count: usize,
     file_length: u64,
+}
+
+struct ReplayMetadata {
+    next_sequence: u64,
+    next_batch: u64,
+    batch_count: usize,
 }
 
 impl LogStore {
     pub(crate) fn open(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_internal(path, false).map(|(store, _)| store)
+    }
+
+    pub(crate) fn open_replayed(path: impl AsRef<Path>) -> Result<(Self, ReplayedStore)> {
+        let (store, replayed) = Self::open_internal(path, true)?;
+        Ok((
+            store,
+            replayed.ok_or_else(|| {
+                DatabaseError::Invariant("logical replay was not produced during open".to_string())
+            })?,
+        ))
+    }
+
+    fn open_internal(
+        path: impl AsRef<Path>,
+        decode_logical: bool,
+    ) -> Result<(Self, Option<ReplayedStore>)> {
         let directory = path.as_ref().to_path_buf();
         std::fs::create_dir_all(&directory).map_err(DatabaseError::from_io)?;
         let lock_path = directory.join(LOCK_NAME);
@@ -272,21 +295,32 @@ impl LogStore {
                 .map_err(DatabaseError::from_io)?;
             log.sync_all().map_err(DatabaseError::from_io)?;
         }
-        let (batches, next_sequence, next_batch) =
-            replay_committed(&mut log, manifest.committed_length)?;
+        let (metadata, replayed) = if decode_logical {
+            let (metadata, replayed) =
+                replay_committed_logical(&mut log, manifest.committed_length, manifest.store_uuid)?;
+            (metadata, Some(replayed))
+        } else {
+            (
+                scan_committed(&mut log, manifest.committed_length, |_| Ok(()))?,
+                None,
+            )
+        };
 
-        Ok(Self {
-            directory,
-            _lock: lock,
-            log,
-            manifest,
-            batches,
-            next_sequence,
-            next_batch,
-            poisoned: false,
-            #[cfg(test)]
-            injected_failure: None,
-        })
+        Ok((
+            Self {
+                directory,
+                _lock: lock,
+                log,
+                manifest,
+                batch_count: metadata.batch_count,
+                next_sequence: metadata.next_sequence,
+                next_batch: metadata.next_batch,
+                poisoned: false,
+                #[cfg(test)]
+                injected_failure: None,
+            },
+            replayed,
+        ))
     }
 
     pub(crate) fn store_uuid(&self) -> [u8; 16] {
@@ -297,8 +331,28 @@ impl LogStore {
         self.manifest.committed_length
     }
 
-    pub(crate) fn replay_logical(&self) -> Result<ReplayedStore> {
-        replay_logical(self.manifest.store_uuid, &self.batches)
+    pub(crate) fn replay_logical(&mut self) -> Result<ReplayedStore> {
+        replay_committed_logical(
+            &mut self.log,
+            self.manifest.committed_length,
+            self.manifest.store_uuid,
+        )
+        .map(|(_, replayed)| replayed)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn committed_batches(&mut self) -> Result<Vec<Vec<StoredRecord>>> {
+        let mut batches = Vec::new();
+        scan_committed(&mut self.log, self.manifest.committed_length, |batch| {
+            batches.push(batch.to_vec());
+            Ok(())
+        })?;
+        Ok(batches)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn batch_count(&self) -> usize {
+        self.batch_count
     }
 
     #[cfg(test)]
@@ -309,6 +363,23 @@ impl LogStore {
 
 impl StoreSnapshot {
     pub(crate) fn open(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_internal(path, false).map(|(snapshot, _)| snapshot)
+    }
+
+    pub(crate) fn open_replayed(path: impl AsRef<Path>) -> Result<(Self, ReplayedStore)> {
+        let (snapshot, replayed) = Self::open_internal(path, true)?;
+        Ok((
+            snapshot,
+            replayed.ok_or_else(|| {
+                DatabaseError::Invariant("logical replay was not produced for snapshot".to_string())
+            })?,
+        ))
+    }
+
+    fn open_internal(
+        path: impl AsRef<Path>,
+        decode_logical: bool,
+    ) -> Result<(Self, Option<ReplayedStore>)> {
         let directory = path.as_ref().to_path_buf();
         if !directory.is_dir() {
             return Err(DatabaseError::Persistence(format!(
@@ -343,15 +414,27 @@ impl StoreSnapshot {
                 ),
             });
         }
-        let (batches, _, _) = replay_committed(&mut log, manifest.committed_length)?;
-        Ok(Self {
-            directory,
-            _lock: lock,
-            log,
-            manifest,
-            batches,
-            file_length,
-        })
+        let (metadata, replayed) = if decode_logical {
+            let (metadata, replayed) =
+                replay_committed_logical(&mut log, manifest.committed_length, manifest.store_uuid)?;
+            (metadata, Some(replayed))
+        } else {
+            (
+                scan_committed(&mut log, manifest.committed_length, |_| Ok(()))?,
+                None,
+            )
+        };
+        Ok((
+            Self {
+                directory,
+                _lock: lock,
+                log,
+                manifest,
+                batch_count: metadata.batch_count,
+                file_length,
+            },
+            replayed,
+        ))
     }
 
     pub(crate) fn store_uuid(&self) -> [u8; 16] {
@@ -367,11 +450,16 @@ impl StoreSnapshot {
     }
 
     pub(crate) fn batch_count(&self) -> usize {
-        self.batches.len()
+        self.batch_count
     }
 
-    pub(crate) fn replay_logical(&self) -> Result<ReplayedStore> {
-        replay_logical(self.manifest.store_uuid, &self.batches)
+    pub(crate) fn replay_logical(&mut self) -> Result<ReplayedStore> {
+        replay_committed_logical(
+            &mut self.log,
+            self.manifest.committed_length,
+            self.manifest.store_uuid,
+        )
+        .map(|(_, replayed)| replayed)
     }
 
     pub(crate) fn backup_to(&mut self, destination: impl AsRef<Path>) -> Result<()> {
@@ -600,82 +688,131 @@ fn encode_time(time: &Time, target: &mut Vec<u8>) {
 }
 
 fn replay_logical(store_uuid: [u8; 16], batches: &[Vec<StoredRecord>]) -> Result<ReplayedStore> {
-    let mut roles_by_identity: HashMap<Thing, ReplayedRole> = HashMap::new();
-    let mut identities_by_name: HashMap<String, Thing> = HashMap::new();
-    let mut construct_identities = HashSet::new();
-    let mut propositions = HashSet::new();
-    let mut roles = Vec::new();
-    let mut posits = Vec::new();
-    let mut codecs = HashSet::new();
+    let mut replay = LogicalReplay::new(store_uuid);
     for batch in batches {
+        replay.apply_batch(batch)?;
+    }
+    replay.finish()
+}
+
+type PropositionKey = (Vec<(Thing, Thing)>, LiteralValue, Time);
+
+struct LogicalReplay {
+    store_uuid: [u8; 16],
+    roles_by_identity: HashMap<Thing, ReplayedRole>,
+    identities_by_name: HashMap<String, Thing>,
+    construct_identities: HashSet<Thing>,
+    propositions: HashSet<PropositionKey>,
+    roles: Vec<ReplayedRole>,
+    posits: Vec<ReplayedPosit>,
+    codecs: HashSet<BuiltinCodec>,
+}
+
+impl LogicalReplay {
+    fn new(store_uuid: [u8; 16]) -> Self {
+        Self {
+            store_uuid,
+            roles_by_identity: HashMap::new(),
+            identities_by_name: HashMap::new(),
+            construct_identities: HashSet::new(),
+            propositions: HashSet::new(),
+            roles: Vec::new(),
+            posits: Vec::new(),
+            codecs: HashSet::new(),
+        }
+    }
+
+    fn apply_batch(&mut self, batch: &[StoredRecord]) -> Result<()> {
         for record in batch {
-            match record.record_type {
-                RECORD_ROLE => {
-                    let role = decode_role(&record.payload)?;
-                    if roles_by_identity.contains_key(&role.identity)
-                        || identities_by_name.contains_key(&role.name)
-                        || !construct_identities.insert(role.identity)
-                    {
-                        return record_corruption(record, "duplicate or conflicting Role record");
-                    }
-                    identities_by_name.insert(role.name.clone(), role.identity);
-                    roles_by_identity.insert(role.identity, role.clone());
-                    roles.push(role);
+            self.apply_record(record)?;
+        }
+        Ok(())
+    }
+
+    fn apply_record(&mut self, record: &StoredRecord) -> Result<()> {
+        match record.record_type {
+            RECORD_ROLE => {
+                let role = decode_role(&record.payload)?;
+                if self.roles_by_identity.contains_key(&role.identity)
+                    || self.identities_by_name.contains_key(&role.name)
+                    || !self.construct_identities.insert(role.identity)
+                {
+                    return record_corruption(record, "duplicate or conflicting Role record");
                 }
-                RECORD_CODEC => {
-                    let codec = decode_codec(&record.payload)?;
-                    if !codecs.insert(codec) {
-                        return record_corruption(record, "duplicate Codec record");
-                    }
-                }
-                RECORD_POSIT => {
-                    let posit = decode_posit(&record.payload, &codecs)
-                        .map_err(|error| record_corruption_error(record, error))?;
-                    if !construct_identities.insert(posit.identity) {
-                        return record_corruption(record, "duplicate Role or Posit identity");
-                    }
-                    if posit
-                        .appearances
-                        .iter()
-                        .any(|(role, _)| !roles_by_identity.contains_key(role))
-                    {
-                        return record_corruption(record, "Posit references an unknown Role");
-                    }
-                    let proposition = (
-                        posit.appearances.clone(),
-                        posit.value.clone(),
-                        posit.time.clone(),
-                    );
-                    if !propositions.insert(proposition) {
-                        return record_corruption(record, "duplicate Posit proposition");
-                    }
-                    posits.push(posit);
-                }
-                other => {
-                    return record_corruption(
-                        record,
-                        format!("unsupported logical record type {other}"),
-                    );
+                self.identities_by_name
+                    .insert(role.name.clone(), role.identity);
+                self.roles_by_identity.insert(role.identity, role.clone());
+                self.roles.push(role);
+            }
+            RECORD_CODEC => {
+                let codec = decode_codec(&record.payload)?;
+                if !self.codecs.insert(codec) {
+                    return record_corruption(record, "duplicate Codec record");
                 }
             }
+            RECORD_POSIT => {
+                let posit = decode_posit(&record.payload, &self.codecs)
+                    .map_err(|error| record_corruption_error(record, error))?;
+                if !self.construct_identities.insert(posit.identity) {
+                    return record_corruption(record, "duplicate Role or Posit identity");
+                }
+                if posit
+                    .appearances
+                    .iter()
+                    .any(|(role, _)| !self.roles_by_identity.contains_key(role))
+                {
+                    return record_corruption(record, "Posit references an unknown Role");
+                }
+                let proposition = (
+                    posit.appearances.clone(),
+                    posit.value.clone(),
+                    posit.time.clone(),
+                );
+                if !self.propositions.insert(proposition) {
+                    return record_corruption(record, "duplicate Posit proposition");
+                }
+                self.posits.push(posit);
+            }
+            other => {
+                return record_corruption(
+                    record,
+                    format!("unsupported logical record type {other}"),
+                );
+            }
         }
+        Ok(())
     }
-    let has_required_codecs = BuiltinCodec::ALL
-        .into_iter()
-        .all(|codec| codecs.contains(&codec));
-    if !roles.is_empty() || !posits.is_empty() || !codecs.is_empty() {
-        validate_builtin_role(&roles_by_identity, &identities_by_name, 1, "posit")?;
-        validate_builtin_role(&roles_by_identity, &identities_by_name, 2, "ascertains")?;
-        if !has_required_codecs {
+
+    fn finish(self) -> Result<ReplayedStore> {
+        let has_required_codecs = BuiltinCodec::ALL
+            .into_iter()
+            .all(|codec| self.codecs.contains(&codec));
+        if !self.roles.is_empty() || !self.posits.is_empty() || !self.codecs.is_empty() {
+            validate_builtin_role(
+                &self.roles_by_identity,
+                &self.identities_by_name,
+                1,
+                "posit",
+            )?;
+            validate_builtin_role(
+                &self.roles_by_identity,
+                &self.identities_by_name,
+                2,
+                "ascertains",
+            )?;
+        }
+        if !has_required_codecs
+            && (!self.roles.is_empty() || !self.posits.is_empty() || !self.codecs.is_empty())
+        {
             return corruption("store lacks one or more mandatory v1 codecs");
         }
+        Ok(ReplayedStore {
+            store_uuid: self.store_uuid,
+            roles: self.roles,
+            posits: self.posits,
+            has_required_codecs,
+        })
     }
-    Ok(ReplayedStore {
-        store_uuid,
-        roles,
-        posits,
-        has_required_codecs,
-    })
 }
 
 fn validate_builtin_role(
@@ -978,12 +1115,11 @@ impl StoreBackend for LogStore {
             .next_batch
             .checked_add(1)
             .ok_or_else(|| DatabaseError::Invariant("batch sequence exhausted".to_string()))?;
-        self.batches.push(stored.clone());
+        self.batch_count = self
+            .batch_count
+            .checked_add(1)
+            .ok_or_else(|| DatabaseError::Invariant("batch count exhausted".to_string()))?;
         Ok(stored)
-    }
-
-    fn replay(&self) -> &[Vec<StoredRecord>] {
-        &self.batches
     }
 
     fn flush(&mut self) -> Result<()> {
@@ -1212,17 +1348,31 @@ fn encode_frame(record: &StoredRecord) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn replay_committed(
+fn replay_committed_logical(
     log: &mut File,
     committed_length: u64,
-) -> Result<(Vec<Vec<StoredRecord>>, u64, u64)> {
+    store_uuid: [u8; 16],
+) -> Result<(ReplayMetadata, ReplayedStore)> {
+    let mut logical = LogicalReplay::new(store_uuid);
+    let metadata = scan_committed(log, committed_length, |batch| logical.apply_batch(batch))?;
+    Ok((metadata, logical.finish()?))
+}
+
+fn scan_committed(
+    log: &mut File,
+    committed_length: u64,
+    mut on_batch: impl FnMut(&[StoredRecord]) -> Result<()>,
+) -> Result<ReplayMetadata> {
     let mut offset = u64::from(LOG_HEADER_LEN);
     let mut expected_sequence = 1u64;
     let mut expected_batch = 1u64;
+    let mut batch_count = 0usize;
     let mut staged = Vec::new();
-    let mut batches = Vec::new();
+    log.seek(SeekFrom::Start(offset))
+        .map_err(DatabaseError::from_io)?;
+    let mut reader = BufReader::new(log);
     while offset < committed_length {
-        let (record, next_offset) = read_frame(log, offset, committed_length)?;
+        let (record, next_offset) = read_frame(&mut reader, offset, committed_length)?;
         if record.sequence != expected_sequence {
             return corruption_at(
                 offset,
@@ -1240,7 +1390,11 @@ fn replay_committed(
             RECORD_ROLE | RECORD_CODEC | RECORD_POSIT => staged.push(record),
             RECORD_COMMIT => {
                 validate_commit(&record, expected_batch, &staged, offset)?;
-                batches.push(std::mem::take(&mut staged));
+                on_batch(&staged)?;
+                staged.clear();
+                batch_count = batch_count
+                    .checked_add(1)
+                    .ok_or_else(|| DatabaseError::Invariant("batch count exhausted".to_string()))?;
                 expected_batch = expected_batch.checked_add(1).ok_or_else(|| {
                     DatabaseError::Invariant("batch sequence exhausted".to_string())
                 })?;
@@ -1262,14 +1416,17 @@ fn replay_committed(
             "manifest committed length ends outside a Commit frame",
         );
     }
-    Ok((batches, expected_sequence, expected_batch))
+    Ok(ReplayMetadata {
+        next_sequence: expected_sequence,
+        next_batch: expected_batch,
+        batch_count,
+    })
 }
 
-fn read_frame(log: &mut File, offset: u64, limit: u64) -> Result<(StoredRecord, u64)> {
-    log.seek(SeekFrom::Start(offset))
-        .map_err(DatabaseError::from_io)?;
+fn read_frame(source: &mut impl Read, offset: u64, limit: u64) -> Result<(StoredRecord, u64)> {
     let mut prefix = [0u8; 16];
-    log.read_exact(&mut prefix)
+    source
+        .read_exact(&mut prefix)
         .map_err(|error| frame_io_error(offset, None, error))?;
     if &prefix[0..4] != FRAME_MAGIC {
         return corruption_at(offset, None, "record sync word mismatch");
@@ -1287,7 +1444,7 @@ fn read_frame(log: &mut File, offset: u64, limit: u64) -> Result<(StoredRecord, 
     }
 
     let mut framed = prefix.to_vec();
-    let payload_length = read_uleb128(log, &mut framed, offset, sequence)?;
+    let payload_length = read_uleb128(source, &mut framed, offset, sequence)?;
     let payload_length =
         usize::try_from(payload_length).map_err(|_| DatabaseError::DataCorruption {
             message: format!("log offset {offset}, sequence {sequence}: payload too large"),
@@ -1311,11 +1468,13 @@ fn read_frame(log: &mut File, offset: u64, limit: u64) -> Result<(StoredRecord, 
         );
     }
     let mut payload = vec![0u8; payload_length];
-    log.read_exact(&mut payload)
+    source
+        .read_exact(&mut payload)
         .map_err(|error| frame_io_error(offset, Some(sequence), error))?;
     framed.extend_from_slice(&payload);
     let mut checksum_bytes = [0u8; 4];
-    log.read_exact(&mut checksum_bytes)
+    source
+        .read_exact(&mut checksum_bytes)
         .map_err(|error| frame_io_error(offset, Some(sequence), error))?;
     let stored_checksum = u32::from_le_bytes(checksum_bytes);
     if crc32c(&framed) != stored_checksum {
@@ -1433,7 +1592,7 @@ fn decode_uleb128(bytes: &[u8], cursor: &mut usize) -> Result<u64> {
 }
 
 fn read_uleb128(
-    source: &mut File,
+    source: &mut impl Read,
     framed: &mut Vec<u8>,
     offset: u64,
     sequence: u64,
@@ -1887,12 +2046,13 @@ mod tests {
             (store.store_uuid(), store.committed_length())
         };
 
-        let reopened = LogStore::open(&directory.0).unwrap();
+        let mut reopened = LogStore::open(&directory.0).unwrap();
         assert_eq!(reopened.store_uuid(), uuid);
         assert_eq!(reopened.committed_length(), committed_length);
-        assert_eq!(reopened.replay().len(), 1);
-        assert_eq!(reopened.replay()[0].len(), 3);
-        assert_eq!(reopened.replay()[0][2].payload, b"posit");
+        let batches = reopened.committed_batches().unwrap();
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].len(), 3);
+        assert_eq!(batches[0][2].payload, b"posit");
     }
 
     #[test]
@@ -1928,7 +2088,7 @@ mod tests {
         assert!(std::fs::metadata(&log_path).unwrap().len() > committed_length);
 
         let reopened = LogStore::open(&directory.0).unwrap();
-        assert_eq!(reopened.replay().len(), 1);
+        assert_eq!(reopened.batch_count(), 1);
         assert_eq!(
             std::fs::metadata(&log_path).unwrap().len(),
             committed_length
@@ -2041,7 +2201,7 @@ mod tests {
             std::fs::write(candidate.0.join(LOG_NAME), log).unwrap();
 
             let reopened = LogStore::open(&candidate.0).unwrap();
-            assert_eq!(reopened.replay().len(), 1);
+            assert_eq!(reopened.batch_count(), 1);
             assert_eq!(
                 std::fs::metadata(candidate.0.join(LOG_NAME)).unwrap().len(),
                 base_length

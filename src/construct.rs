@@ -661,8 +661,7 @@ impl Database {
         let (store, replayed) = match mode {
             PersistenceMode::InMemory => (None, None),
             PersistenceMode::File(path) => {
-                let store = LogStore::open(&path)?;
-                let replayed = store.replay_logical()?;
+                let (store, replayed) = LogStore::open_replayed(&path)?;
                 (Some(store), Some(replayed))
             }
         };
@@ -829,6 +828,19 @@ impl Database {
     }
     pub(crate) fn posit_keeper(&self) -> Arc<Mutex<PositKeeper>> {
         Arc::clone(&self.posit_keeper)
+    }
+    pub(crate) fn thing_to_appearance_lookup(
+        &self,
+    ) -> Arc<Mutex<Lookup<Thing, Arc<Appearance>, ThingHasher>>> {
+        Arc::clone(&self.thing_to_appearance_lookup)
+    }
+    pub(crate) fn appearance_to_appearance_set_lookup(&self) -> Arc<Mutex<AppearanceSetLookup>> {
+        Arc::clone(&self.appearance_to_appearance_set_lookup)
+    }
+    pub(crate) fn appearance_set_to_posit_thing_lookup(
+        &self,
+    ) -> Arc<Mutex<ThingLookup<Arc<AppearanceSet>, OtherHasher>>> {
+        Arc::clone(&self.appearance_set_to_posit_thing_lookup)
     }
     pub(crate) fn role_to_posit_thing_lookup(&self) -> Arc<Mutex<ThingLookup<Thing, OtherHasher>>> {
         Arc::clone(&self.role_to_posit_thing_lookup)
@@ -1202,8 +1214,8 @@ mod append_store_tests {
             )
             .unwrap();
 
-        let store = database.store.lock().unwrap();
-        let batches = store.as_ref().unwrap().replay();
+        let mut store = database.store.lock().unwrap();
+        let batches = store.as_mut().unwrap().committed_batches().unwrap();
         assert_eq!(batches.len(), 3, "bootstrap plus two commands");
         assert_eq!(batches[0].len(), 5, "built-ins and v1 codec registry");
         assert_eq!(batches[1].len(), 2, "both roles commit together");

@@ -150,8 +150,7 @@ struct RemapDocument<'a> {
 }
 
 pub fn inspect_store(path: impl AsRef<Path>) -> Result<StoreInspection> {
-    let snapshot = StoreSnapshot::open(path)?;
-    let replayed = snapshot.replay_logical()?;
+    let (snapshot, replayed) = StoreSnapshot::open_replayed(path)?;
     let mut things = HashSet::new();
     for role in &replayed.roles {
         things.insert(role.identity);
@@ -184,8 +183,7 @@ pub fn export_store(
     let store_path = store_path.as_ref();
     let output_path = output_path.as_ref();
     reject_path_inside_store(store_path, output_path, "logical export")?;
-    let snapshot = StoreSnapshot::open(store_path)?;
-    let mut replayed = snapshot.replay_logical()?;
+    let (_snapshot, mut replayed) = StoreSnapshot::open_replayed(store_path)?;
     replayed.roles.sort_unstable_by_key(|role| role.identity);
     replayed.posits.sort_unstable_by_key(|posit| posit.identity);
     let uuid = format_uuid(replayed.store_uuid);
@@ -359,8 +357,7 @@ pub fn backup_store(
     let store_path = store_path.as_ref();
     let destination_path = destination_path.as_ref();
     reject_path_inside_store(store_path, destination_path, "backup")?;
-    let mut snapshot = StoreSnapshot::open(store_path)?;
-    let source = snapshot.replay_logical()?;
+    let (mut snapshot, source) = StoreSnapshot::open_replayed(store_path)?;
     let committed_length = snapshot.committed_length();
     snapshot.backup_to(destination_path)?;
     drop(snapshot);

@@ -1,6 +1,7 @@
 use super::*;
 use crate::construct::{Appearance, AppearanceSet, Posit, Role};
 use pest::iterators::Pair;
+use roaring::RoaringTreemap;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use unicode_normalization::UnicodeNormalization;
@@ -200,18 +201,17 @@ pub(super) fn execute(
     execution.check()?;
     let query = parse_query(command, execution)?;
     let domains = validate_domains(&query)?;
-    let posits = snapshot(database)?;
 
     let mut bindings = Vec::new();
     for branch in &query.branches {
-        let patterns = plan_patterns(branch, &HashSet::new())?;
+        let patterns = plan_patterns(database, branch, &HashSet::new())?;
         let mut branch_bindings = vec![Binding::default()];
         for pattern in patterns {
             let mut joined = Vec::new();
             for binding in &branch_bindings {
                 execution.check()?;
                 joined.extend(evaluate_pattern(
-                    pattern, binding, &posits, &domains, execution,
+                    database, pattern, binding, &domains, execution,
                 )?);
             }
             branch_bindings = joined;
@@ -226,7 +226,7 @@ pub(super) fn execute(
         let mut retained = Vec::with_capacity(bindings.len());
         for binding in bindings {
             execution.check()?;
-            if !block_has_match(absence, &binding, &posits, &domains, execution)? {
+            if !block_has_match(absence, &binding, database, &domains, execution)? {
                 retained.push(binding);
             }
         }
@@ -281,31 +281,6 @@ pub(super) fn execute(
         }
     }
     Ok(())
-}
-
-fn snapshot(database: &Database) -> Result<Vec<Arc<Posit<LiteralValue>>>, DatabaseError> {
-    let reverse = database.posit_thing_to_appearance_set_lookup();
-    let mut identities: Vec<_> = reverse
-        .lock()
-        .map_err(|error| DatabaseError::Lock(error.to_string()))?
-        .keys()
-        .copied()
-        .collect();
-    identities.sort_unstable();
-    let keeper = database.posit_keeper();
-    let mut keeper = keeper
-        .lock()
-        .map_err(|error| DatabaseError::Lock(error.to_string()))?;
-    identities
-        .into_iter()
-        .map(|identity| {
-            keeper.posit::<LiteralValue>(identity).ok_or_else(|| {
-                DatabaseError::Invariant(format!(
-                    "posit index contains identity {identity} without a literal posit"
-                ))
-            })
-        })
-        .collect()
 }
 
 fn parse_query(
@@ -895,6 +870,7 @@ impl PositPattern {
 }
 
 fn plan_patterns<'a>(
+    database: &Database,
     patterns: &'a [PositPattern],
     initially_available: &HashSet<&str>,
 ) -> Result<Vec<&'a PositPattern>, DatabaseError> {
@@ -902,10 +878,16 @@ fn plan_patterns<'a>(
     let mut planned = Vec::with_capacity(patterns.len());
     let mut available = initially_available.clone();
     while !pending.is_empty() {
-        let Some(index) = pending
-            .iter()
-            .position(|pattern| pattern.dependencies().is_subset(&available))
-        else {
+        let mut best = None;
+        for (index, pattern) in pending.iter().enumerate() {
+            if pattern.dependencies().is_subset(&available) {
+                let estimate = estimated_candidate_count(database, pattern)?;
+                if best.is_none_or(|(_, best_estimate)| estimate < best_estimate) {
+                    best = Some((index, estimate));
+                }
+            }
+        }
+        let Some((index, _)) = best else {
             let dependencies: Vec<_> = pending
                 .iter()
                 .flat_map(|pattern| pattern.dependencies())
@@ -923,10 +905,49 @@ fn plan_patterns<'a>(
     Ok(planned)
 }
 
+fn estimated_candidate_count(
+    database: &Database,
+    pattern: &PositPattern,
+) -> Result<u64, DatabaseError> {
+    let named_roles = pattern
+        .appearances
+        .members
+        .iter()
+        .filter_map(|member| match &member.role {
+            RoleSlot::Named(name) => Some(name.as_str()),
+            RoleSlot::Wildcard | RoleSlot::Variable(_) => None,
+        })
+        .collect::<Vec<_>>();
+    if named_roles.is_empty() {
+        return Ok(u64::MAX);
+    }
+    let keeper = database.role_keeper();
+    let keeper = keeper
+        .lock()
+        .map_err(|error| DatabaseError::Lock(error.to_string()))?;
+    let mut identities = Vec::with_capacity(named_roles.len());
+    for name in named_roles {
+        let Some(role) = keeper.get(name) else {
+            return Ok(0);
+        };
+        identities.push(role.role());
+    }
+    drop(keeper);
+    let lookup = database.role_to_posit_thing_lookup();
+    let lookup = lookup
+        .lock()
+        .map_err(|error| DatabaseError::Lock(error.to_string()))?;
+    Ok(identities
+        .into_iter()
+        .map(|identity| lookup.lookup(&identity).map_or(0, RoaringTreemap::len))
+        .min()
+        .unwrap_or(u64::MAX))
+}
+
 fn evaluate_pattern(
+    database: &Database,
     pattern: &PositPattern,
     input: &Binding,
-    posits: &[Arc<Posit<LiteralValue>>],
     domains: &HashMap<String, Domain>,
     execution: &ExecutionContext,
 ) -> Result<Vec<Binding>, DatabaseError> {
@@ -946,8 +967,9 @@ fn evaluate_pattern(
         },
     };
 
+    let posits = candidate_posits(database, pattern, input, execution)?;
     let mut structural = Vec::new();
-    for posit in posits {
+    for posit in &posits {
         execution.check()?;
         if cutoff
             .as_ref()
@@ -989,6 +1011,242 @@ fn evaluate_pattern(
         matched
     };
     Ok(matched.into_iter().map(|matched| matched.binding).collect())
+}
+
+fn candidate_posits(
+    database: &Database,
+    pattern: &PositPattern,
+    input: &Binding,
+    execution: &ExecutionContext,
+) -> Result<Vec<Arc<Posit<LiteralValue>>>, DatabaseError> {
+    let candidates = indexed_candidate_identities(database, pattern, input)?;
+    let identities = if let Some(candidates) = candidates {
+        candidates.into_iter().collect::<Vec<_>>()
+    } else {
+        let reverse = database.posit_thing_to_appearance_set_lookup();
+        let mut identities = reverse
+            .lock()
+            .map_err(|error| DatabaseError::Lock(error.to_string()))?
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        identities.sort_unstable();
+        identities
+    };
+    let keeper = database.posit_keeper();
+    let mut keeper = keeper
+        .lock()
+        .map_err(|error| DatabaseError::Lock(error.to_string()))?;
+    identities
+        .into_iter()
+        .map(|identity| {
+            execution.check()?;
+            keeper.posit::<LiteralValue>(identity).ok_or_else(|| {
+                DatabaseError::Invariant(format!(
+                    "posit index contains identity {identity} without a literal posit"
+                ))
+            })
+        })
+        .collect()
+}
+
+fn indexed_candidate_identities(
+    database: &Database,
+    pattern: &PositPattern,
+    input: &Binding,
+) -> Result<Option<RoaringTreemap>, DatabaseError> {
+    let mut postings = Vec::new();
+
+    if let Some(name) = &pattern.posit {
+        match input.get(name) {
+            Some(BoundValue::Thing(identity) | BoundValue::Posit(identity)) => {
+                postings.push(singleton(*identity));
+            }
+            Some(other) => {
+                return Err(DatabaseError::VariableDomain {
+                    name: name.clone(),
+                    first: other.domain().label(),
+                    second: Domain::Posit.label(),
+                });
+            }
+            None => {}
+        }
+    }
+
+    if let Some(name) = &pattern.appearances.binding {
+        match input.get(name) {
+            Some(BoundValue::AppearanceSet(appearance_set)) => {
+                let lookup = database.appearance_set_to_posit_thing_lookup();
+                let posting = lookup
+                    .lock()
+                    .map_err(|error| DatabaseError::Lock(error.to_string()))?
+                    .lookup(appearance_set)
+                    .cloned()
+                    .unwrap_or_default();
+                postings.push(posting);
+            }
+            Some(other) => {
+                return Err(DatabaseError::VariableDomain {
+                    name: name.clone(),
+                    first: other.domain().label(),
+                    second: Domain::AppearanceSet.label(),
+                });
+            }
+            None => {}
+        }
+    }
+
+    for member in &pattern.appearances.members {
+        let (role_is_constrained, role) = indexed_role(database, &member.role, input)?;
+        if role_is_constrained {
+            let Some(role) = role.as_ref() else {
+                return Ok(Some(RoaringTreemap::new()));
+            };
+            let lookup = database.role_to_posit_thing_lookup();
+            let posting = lookup
+                .lock()
+                .map_err(|error| DatabaseError::Lock(error.to_string()))?
+                .lookup(&role.role())
+                .cloned()
+                .unwrap_or_default();
+            postings.push(posting);
+        }
+
+        if let Some(things) = indexed_things(&member.thing, input)? {
+            let posting = posit_posting_for_things(database, &things, role.as_ref())?;
+            postings.push(posting);
+        }
+    }
+    postings.sort_unstable_by_key(RoaringTreemap::len);
+    let mut postings = postings.into_iter();
+    let Some(mut candidates) = postings.next() else {
+        return Ok(None);
+    };
+    for posting in postings {
+        candidates &= posting;
+        if candidates.is_empty() {
+            break;
+        }
+    }
+    Ok(Some(candidates))
+}
+
+fn indexed_role(
+    database: &Database,
+    slot: &RoleSlot,
+    input: &Binding,
+) -> Result<(bool, Option<Arc<Role>>), DatabaseError> {
+    match slot {
+        RoleSlot::Wildcard => Ok((false, None)),
+        RoleSlot::Named(name) => {
+            let keeper = database.role_keeper();
+            let role = keeper
+                .lock()
+                .map_err(|error| DatabaseError::Lock(error.to_string()))?
+                .get(name);
+            Ok((true, role))
+        }
+        RoleSlot::Variable(name) => match input.get(name) {
+            Some(BoundValue::Role(role)) => Ok((true, Some(Arc::clone(role)))),
+            Some(other) => Err(DatabaseError::VariableDomain {
+                name: name.clone(),
+                first: other.domain().label(),
+                second: Domain::Role.label(),
+            }),
+            None => Ok((false, None)),
+        },
+    }
+}
+
+fn indexed_things(slot: &ThingSlot, input: &Binding) -> Result<Option<Vec<Thing>>, DatabaseError> {
+    match slot {
+        ThingSlot::Wildcard => Ok(None),
+        ThingSlot::Variable(name) | ThingSlot::LegacyVariable(name) => match input.get(name) {
+            Some(BoundValue::Thing(identity) | BoundValue::Posit(identity)) => {
+                Ok(Some(vec![*identity]))
+            }
+            Some(other) => Err(DatabaseError::VariableDomain {
+                name: name.clone(),
+                first: other.domain().label(),
+                second: Domain::Thing.label(),
+            }),
+            None => Ok(None),
+        },
+        ThingSlot::OneOf(names) => {
+            let mut things = Vec::with_capacity(names.len());
+            for name in names {
+                match input.get(name) {
+                    Some(BoundValue::Thing(identity) | BoundValue::Posit(identity)) => {
+                        things.push(*identity);
+                    }
+                    Some(other) => {
+                        return Err(DatabaseError::VariableDomain {
+                            name: name.clone(),
+                            first: other.domain().label(),
+                            second: Domain::Thing.label(),
+                        });
+                    }
+                    None => return Err(DatabaseError::InvalidRecall(name.clone())),
+                }
+            }
+            Ok(Some(things))
+        }
+    }
+}
+
+fn posit_posting_for_things(
+    database: &Database,
+    things: &[Thing],
+    role: Option<&Arc<Role>>,
+) -> Result<RoaringTreemap, DatabaseError> {
+    let appearance_lookup = database.thing_to_appearance_lookup();
+    let appearance_lookup = appearance_lookup
+        .lock()
+        .map_err(|error| DatabaseError::Lock(error.to_string()))?;
+    let mut appearances = HashSet::new();
+    for thing in things {
+        if let Some(found) = appearance_lookup.lookup(thing) {
+            appearances.extend(
+                found
+                    .iter()
+                    .filter(|appearance| {
+                        role.is_none_or(|role| appearance.role().role() == role.role())
+                    })
+                    .cloned(),
+            );
+        }
+    }
+    drop(appearance_lookup);
+
+    let set_lookup = database.appearance_to_appearance_set_lookup();
+    let set_lookup = set_lookup
+        .lock()
+        .map_err(|error| DatabaseError::Lock(error.to_string()))?;
+    let mut appearance_sets = HashSet::new();
+    for appearance in appearances {
+        if let Some(found) = set_lookup.lookup(&appearance) {
+            appearance_sets.extend(found.iter().cloned());
+        }
+    }
+    drop(set_lookup);
+
+    let posit_lookup = database.appearance_set_to_posit_thing_lookup();
+    let posit_lookup = posit_lookup
+        .lock()
+        .map_err(|error| DatabaseError::Lock(error.to_string()))?;
+    let mut posting = RoaringTreemap::new();
+    for appearance_set in appearance_sets {
+        if let Some(found) = posit_lookup.lookup(&appearance_set) {
+            posting |= found;
+        }
+    }
+    Ok(posting)
+}
+
+fn singleton(identity: Thing) -> RoaringTreemap {
+    let mut identities = RoaringTreemap::new();
+    identities.insert(identity);
+    identities
 }
 
 fn match_appearance_set(
@@ -1149,19 +1407,19 @@ fn maximal(matches: Vec<StructuralMatch>) -> Vec<StructuralMatch> {
 fn block_has_match(
     patterns: &[PositPattern],
     outer: &Binding,
-    posits: &[Arc<Posit<LiteralValue>>],
+    database: &Database,
     domains: &HashMap<String, Domain>,
     execution: &ExecutionContext,
 ) -> Result<bool, DatabaseError> {
     let available: HashSet<_> = outer.0.keys().map(String::as_str).collect();
-    let planned = plan_patterns(patterns, &available)?;
+    let planned = plan_patterns(database, patterns, &available)?;
     let mut bindings = vec![outer.clone()];
     for pattern in planned {
         let mut joined = Vec::new();
         for binding in &bindings {
             execution.check()?;
             joined.extend(evaluate_pattern(
-                pattern, binding, posits, domains, execution,
+                database, pattern, binding, domains, execution,
             )?);
         }
         bindings = joined;
@@ -1326,4 +1584,98 @@ fn ordering_matches(ordering: std::cmp::Ordering, operator: &str) -> bool {
         (ordering, operator),
         (Less, "<" | "<=") | (Equal, "<=" | ">=") | (Greater, ">" | ">=")
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::construct::PersistenceMode;
+
+    fn pattern(thing: ThingSlot, role: RoleSlot) -> PositPattern {
+        PositPattern {
+            posit: None,
+            appearances: AppearanceSetPattern {
+                binding: None,
+                members: vec![AppearancePattern { thing, role }],
+                open: false,
+                any: false,
+            },
+            value: ValueSlot::Wildcard,
+            time: TimeSlot::Wildcard,
+            cutoff: None,
+            latest_matching: false,
+        }
+    }
+
+    #[test]
+    fn candidate_planning_uses_role_and_bound_thing_indexes() {
+        let database = Database::new(PersistenceMode::InMemory).unwrap();
+        let engine = Engine::new(&database);
+        engine
+            .execute(
+                "add role common, rare; add posit \
+                 [{(+a, common)}, 1, @NOW], [{(a, rare)}, 1, @NOW], \
+                 [{(+b, common)}, 2, @NOW], [{(+c, common)}, 3, @NOW], \
+                 [{(c, rare)}, 1, @NOW];",
+            )
+            .unwrap();
+
+        let rare = pattern(
+            ThingSlot::Variable("entity".to_string()),
+            RoleSlot::Named("rare".to_string()),
+        );
+        let rare_candidates = indexed_candidate_identities(&database, &rare, &Binding::default())
+            .unwrap()
+            .unwrap();
+        assert_eq!(rare_candidates.len(), 2);
+
+        let pattern_order = [
+            pattern(
+                ThingSlot::Variable("entity".to_string()),
+                RoleSlot::Named("common".to_string()),
+            ),
+            rare.clone(),
+        ];
+        let planned = plan_patterns(&database, &pattern_order, &HashSet::new()).unwrap();
+        assert!(matches!(
+            &planned[0].appearances.members[0].role,
+            RoleSlot::Named(name) if name == "rare"
+        ));
+
+        let first = engine
+            .execute_collect(
+                "search [{(?entity, rare)}, *, *] return ?entity order by ?entity limit 1;",
+            )
+            .unwrap();
+        let identity = first.rows[0][0].as_str().parse::<Thing>().unwrap();
+        let mut binding = Binding::default();
+        assert!(binding.bind("entity", BoundValue::Thing(identity)).unwrap());
+        let common = pattern(
+            ThingSlot::Variable("entity".to_string()),
+            RoleSlot::Named("common".to_string()),
+        );
+        let bound_candidates = indexed_candidate_identities(&database, &common, &binding)
+            .unwrap()
+            .unwrap();
+        assert_eq!(bound_candidates.len(), 1);
+
+        let unconstrained = PositPattern {
+            posit: None,
+            appearances: AppearanceSetPattern {
+                binding: None,
+                members: Vec::new(),
+                open: false,
+                any: true,
+            },
+            value: ValueSlot::Wildcard,
+            time: TimeSlot::Wildcard,
+            cutoff: None,
+            latest_matching: false,
+        };
+        assert!(
+            indexed_candidate_identities(&database, &unconstrained, &Binding::default())
+                .unwrap()
+                .is_none()
+        );
+    }
 }
