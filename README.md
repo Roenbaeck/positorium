@@ -20,9 +20,13 @@ This makes Positorium well‑suited for master data management, regulated domain
 
 ## Traqula DSL
 
-Traqula is Positorium's domain-specific language for defining roles, positing facts with time, and querying data through pattern matching. It supports variables that persist across commands, allowing complex multi-step operations.
+Traqula is Positorium's domain-specific language for defining roles, positing facts with time, and querying data through pattern matching. Query variables are lexical to one `search`; allocation bindings remain available only to later mutation commands in the same script.
 
 For the complete language reference, examples, and details on posits, variables, and search patterns, see [TRAQULA.md](TRAQULA.md).
+
+The normative design for the append-only beta store is in [STORAGE.md](STORAGE.md).
+The current file-backed implementation remains the SQLite prototype while that
+format is implemented and migration tooling is built.
 
 ## Build and run
 

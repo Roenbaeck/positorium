@@ -270,7 +270,7 @@ compact sequential writes and deterministic posit replay.
             `LiteralValue`, semantic interpreter capabilities, and private codecs.
         - Remove `rusqlite` types, storage UIDs, and conversion methods from the
             logical value and query interfaces.
-- [ ] **Write the storage format specification before implementing it.**
+- [x] **Write the storage format specification before implementing it.**
         - Define a small manifest containing the immutable store UUID, format version,
             feature flags, and active log-file list. Give every log file a fixed header
             with magic, version, byte order, feature flags, and the same store UUID
