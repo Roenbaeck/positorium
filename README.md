@@ -26,7 +26,8 @@ For the complete language reference, examples, and details on posits, variables,
 
 ## Build and run
 
-Prereqs: Rust toolchain and a C toolchain for rusqlite (bundled is enabled).
+Prereqs: rustup and a C toolchain for rusqlite (bundled is enabled). The
+repository selects the stable Rust toolchain declared in `rust-toolchain.toml`.
 
 Build:
 

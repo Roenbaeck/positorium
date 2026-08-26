@@ -11,7 +11,8 @@ without silently changing existing data or queries.
 The first beta is a single-process, single-writer transitional database with:
 
 - immutable things, roles, appearances, appearance sets, and posits;
-- a versioned role catalog and append-only posit log as the durable source of truth;
+- a versioned manifest and interleaved append-only log for catalog metadata,
+  posits, and commit frames as the durable source of truth;
 - deterministic replay into in-memory keepers and bitmap indexes;
 - specified Traqula binding, temporal, and result semantics;
 - a trusted/local HTTP interface and an in-memory WASM build; and
@@ -21,11 +22,16 @@ Beta does not mean an Internet-facing, production-ready service. Authentication,
 replication, distributed execution, and container packaging are outside this
 milestone unless they become necessary for a concrete deployment.
 
+All beta-gating decisions D001-D030 in `DECISIONS.md` were accepted on
+2026-08-26. The unchecked items below track remaining specification,
+implementation, documentation, and test work; decision acceptance alone does not
+complete them. Decision identifiers are included where they clarify the governing
+contract.
+
 ## P0: Defects Found In Review (2026-08-20)
 
-Concrete issues observed in the current code while annotating DECISIONS.md.
-Several make existing roadmap items concrete; fix them regardless of which
-decision options are accepted.
+Concrete issues observed in the current code while annotating `DECISIONS.md`.
+The accepted decisions now define the required fixes.
 
 - [ ] **Equality/ordering law violations in core constructs.**
         - `Role::Hash` hashes `name.to_uppercase()` and includes `reserved`, while
@@ -67,7 +73,9 @@ decision options are accepted.
             (src/traqula.rs), contradicting the intended exact typed comparison (D017).
 - [ ] **`@NOW` is evaluated per occurrence.**
         - `parse_time_constant` constructs `Time::new()` at every parse site, so two
-            `@NOW`s in one script differ (src/traqula.rs). Align with D011 once decided.
+            `@NOW`s in one script differ (src/traqula.rs). Resolve it once per complete
+            script, allow an execution-option override, and expose the resolved value
+            in execution metadata (D011).
 - [ ] **Server/interface gaps.**
         - `timeout_ms` is accepted and ignored (`let _timeout`, src/server.rs);
             `QueryOptions::timeout` is only checked for zero before start
@@ -89,13 +97,15 @@ decision options are accepted.
             separately assigned Thing identity.
         - Define role equality by immutable role identity while enforcing one
             canonical catalog name per role and one role per canonical name.
+        - Make role names case-sensitive and NFC-normalize them at parser and catalog
+            boundaries. A rename creates a new role; aliases are ordinary posits (D001).
         - Make `Eq`, `Hash`, and `Ord` obey the same logical identity rules. In
             particular, posit ordering must not include fields excluded from posit
             equality, and role hashing must not include mutable/non-identity metadata.
         - State which invariants are enforced on write and which are query policies.
 - [ ] **Define appearance-set cardinality and value-slot semantics.**
         - State that an appearance set contains at most one Thing for each Role and
-            therefore models named positions rather than repeatable labels.
+            therefore models named positions rather than repeatable labels (D005).
         - Treat each exact appearance set as one value-bearing transition slot over
             time; later values do not mutate earlier posits.
         - Document that simultaneous multi-valued attributes, repeated participants,
@@ -105,9 +115,10 @@ decision options are accepted.
 - [ ] **Implement the WYSIWYG literal-value contract.**
         - Preserve the user-visible literal and its expressed precision, scale,
             spelling, or structure independently of its physical encoding.
-        - Specify the lexical-fidelity boundary: decide whether leading zeros,
-            explicit signs, JSON whitespace/key order, and escape spelling are
-            identity-bearing within a value token.
+        - Preserve the complete UTF-8 value token as identity-bearing, including
+            leading zeros, explicit signs, string escapes, and JSON whitespace, key
+            order, number spelling, and escape choices. Exclude comments and whitespace
+            outside the token, and do not normalize literal Unicode (D002).
         - Require `render(decode(encode(literal))) = literal` for every codec and
             exclude codec choice, integer width, and compression from posit identity.
         - Keep user-facing datatypes and casts out of the core model. Use constraints
@@ -115,23 +126,30 @@ decision options are accepted.
         - Separate exact literal identity, nominal equality (`=`), and compatible
             possible-value overlap (`?=`).
 - [ ] **Formalize temporal precision and ordering.**
-        - Represent year, year-month, date, and datetime precision without discarding
-            the uncertainty it conveys; prefer interval/granule semantics over
-            silently coercing every value to a precise point.
-        - Make equality and ordering consistent across mixed temporal precisions.
-        - Define explicit `definitely`, `possibly`, and overlap relations, or reject
-            comparisons that are ambiguous under the chosen partial order.
+        - Represent every year, year-month, date, and datetime as a half-open UTC
+            interval at its stated precision. Do not support local-time/offset coercion
+            or leap seconds in beta; treat `@BOT` and `@EOT` as unbounded sentinels
+            (D007).
+        - Make stored-time equality require identical value and precision. Define `<`,
+            `<=`, `>`, and `>=` as conservative definite relations, with explicit
+            `possibly before`, `possibly after`, `overlaps`, `contains`, and `within`
+            predicates. Indeterminate definite comparisons return false (D008).
         - Define snapshots as all maximal applicable posits, preserving equal-time
             conflicts and incomparable candidates rather than choosing by identity or
-            append order.
+            append order. Applicability at a cutoff uses the definite `<=` relation
+            (D009).
+        - Resolve `@NOW` once per complete script at full supported UTC datetime
+            precision; support a deterministic execution-option override and report the
+            resolved value in execution metadata (D011).
 - [ ] **Keep `as of` as derived Traqula syntax only.**
         - Define it as latest ordinary posit(s) per appearance set at or before a
             cutoff, with identical behavior for literal and variable cutoffs.
-        - Specify operator order: a state query reduces all values for each matching
-            appearance set before applying a value predicate. Provide a distinct way
-            to ask for the latest historical posit that already matches a value.
-        - Add a general query operation, such as grouping/maximum or an anti-join,
-            through which the same query can be written without `as of`.
+        - For ordinary `[pattern] as of T`, select appearance sets by structure, reduce
+            each to all maximal applicable posits, and only then apply value and other
+            posit-field predicates (D010).
+        - Implement `latest [pattern] as of T` for filter-first, latest-matching-history
+            semantics. Desugar both forms through grouping and partial-order maximal
+            selection in the beta algebra.
         - Add equivalence tests between the shorthand and its expanded query.
         - Do not make `as of` implicitly inspect assertions, positors, or certainty.
 - [ ] **Stabilize binding and result semantics.**
@@ -139,17 +157,22 @@ decision options are accepted.
             cross-search binding lifetime, multiplicity, projection, and limits.
         - Separate ordered script commands from declarative search semantics; pattern
             evaluation order must not change the meaning of a search.
-        - Specify errors for unknown variables, incompatible types, and invalid recalls.
+        - Return typed errors for unknown variables, incompatible variable domains,
+            invalid recalls, and unsupported comparisons.
 - [ ] **Freeze the reserved role vocabulary.**
-        - Reconcile `classification` in the engine with `class`, `named`, `thing`,
-            `posit`, and `ascertains` in the theory and documentation.
-        - Treat reserved names and identities as persisted compatibility data.
+        - Reserve only `posit` and `ascertains` for beta, with fixed identities and
+            names persisted as compatibility data (D006).
+        - Treat `thing`, `class`, `classification`, `named`, `subclass`, and
+            `superclass` as ordinary roles until a class model is specified.
         - Dedicated keyword syntax is not required for beta.
 - [ ] **Document external identification.**
         - Explain that identification is a modeling/query concern built from posits,
             not a second mutable key system inside the engine.
         - Forbid destructive identity merging in the beta format; represent proposed
             equivalence using posits and resolve it through explicit query policy.
+        - Document equivalence as a reified identification Thing with one membership
+            posit per identified Thing and separate evidence/certainty posits. Do not
+            add storage-layer aliases or new built-in roles (D004).
         - Define Things as store-local identities and require import/export to carry a
             store UUID and perform explicit collision-free identity remapping.
 - [ ] **Validate core certainty behavior.**
@@ -163,58 +186,76 @@ freezing its surface syntax. Every shorthand must have an equivalent expansion i
 this algebra.
 
 - [ ] **Define structural variable domains and declarative unification.**
-    - Distinguish Thing, Role, Posit, AppearanceSet, Value, and Time variables
-            and reject reuse of one variable across incompatible domains.
+        - Distinguish Thing, Role, Posit, AppearanceSet, LiteralValue, and Time
+            variables and reject reuse across incompatible domains.
         - Use one unification rule for query variables: the first occurrence binds and
             repeated occurrences constrain, independent of pattern order.
-        - Reserve allocation syntax such as `+x` or `new x` for `add`; give search
-            variables a non-allocating syntax such as `?x`.
-        - Bind a posit identity explicitly, for example `?p = [...]`, so it cannot be
-            confused with a Thing variable inside an appearance.
+        - Use `+x` only for allocation in `add`, `?x` for non-allocating query
+            variables, and `?p = [...]` for explicit posit-identity binding (D012).
 - [ ] **Make variable scope explicit.**
-        - Scope ordinary query variables to one search.
-        - Replace implicit cross-search binding retention with an explicit `let`,
-            named result, subquery, or `using` construct.
+        - Scope ordinary query variables lexically to one `search`; migrate tests that
+            currently retain search bindings across commands (D013).
+        - Keep allocation binders from `add` script-visible to later mutation commands,
+            but do not turn them into query variables. Defer `let`, named results, and
+            `using` until a concrete post-beta workflow requires them.
         - Keep command order meaningful for scripts without making join order part of
             declarative search semantics.
 - [ ] **Distinguish exact and open appearance-set matching.**
-        - Provide exact equality and contains/subset modes. A possible notation is
-            `{(?thing, role)}` for exact matching and `{(?thing, role), ...}` for an
-            open appearance set.
-        - Allow a variable to bind the complete appearance set.
-        - Allow Role variables, such as `(?thing, ?role)`, for schema-free exploration.
+        - Make `{(?thing, role)}` exact and a trailing ellipsis, as in
+            `{(?thing, role), ...}`, open for subset matching (D014).
+        - Bind a complete stored set with `?appearances = { ... }`, allow Role variables
+            such as `(?thing, ?role)`, make `*` consume one anonymous field, and make
+            `...` permit zero or more additional members.
         - Define grouping for snapshot reduction by the complete stored appearance
             set, even when the query pattern is open.
 - [ ] **Implement the beta query-algebra nucleus.**
-    - Provide scans, natural joins, selection, projection, union, safe
+        - Provide scans, natural joins, selection, projection, union, safe
             anti-join/`NOT EXISTS`, grouping/maximum, distinctness, ordering, and limit.
         - Define `NOT EXISTS` as absence of recorded evidence under an open-world
             model; it must never mean that the matched proposition is false.
-        - Add OPTIONAL/left join only if beta use cases require it; its absence does
-            not block the core snapshot algebra.
+        - Defer OPTIONAL/left join and general aggregation until after beta; consider
+            `count` first if a concrete need appears (D015).
+        - Implement safe `not exists { <patterns> }`: correlated variables must be
+            bound outside, inner variables are local, and no inner binding escapes.
+            It means absence of recorded evidence, never a false proposition (D016).
 - [ ] **Specify literal comparison and lossless result cells.**
         - Return the entered literal representation consistently across Rust, HTTP,
             SSE, and WASM; internal codec IDs are not user-facing result metadata.
         - Define `=` as nominal equality under supported semantic interpretation and
             `?=` as intersection of declared possible-value sets, never a hidden
             epsilon or implementation-defined tolerance.
-        - Keep exact literal identity as a separate relation and choose its syntax.
-        - Compare numeric interpretations with exact arithmetic regardless of physical
-            integer/decimal codec, and define JSON nominal versus literal equality.
-        - Define whether unsupported semantic comparison is false/unknown or a query
-            error when unconstrained values are heterogeneous.
+        - Use `===` for exact literal identity. The legacy `==` spelling means nominal
+            `=` only in the explicitly selected compatibility grammar and emits a
+            deprecation warning (D017).
+        - Compare integers and decimals with exact arbitrary-precision arithmetic;
+            compare certainty only with certainty by exact percentage; support string
+            equality without normalization but no string ordering in beta.
+        - Make JSON nominal equality structural: ignore object key order and
+            insignificant whitespace, preserve array order, compare numbers exactly,
+            and reject duplicate object keys. Keep exact identity
+            presentation-sensitive.
+        - Keep constraints conformance-only in beta. Fail unsupported operand pairs,
+            including heterogeneous-role pairs, with a typed comparison error.
 - [ ] **Specify result cardinality and ordering.**
-        - Choose and document set or bag semantics for joins and projection, with an
-            explicit `DISTINCT` operation if bags are retained.
-        - Guarantee row order only through an explicit ordering clause.
-        - Apply `LIMIT` after filtering, projection/distinctness, and ordering, and
-            define how streaming reports that more rows were available.
+        - Give joins bag semantics and require explicit `DISTINCT` for duplicate
+            elimination (D018).
+        - Leave row order unspecified without `ORDER BY`; never promise index or append
+            order.
+        - Apply filtering, then projection/`DISTINCT`, then `ORDER BY`, then `LIMIT`.
+            Set the versioned SSE end event's `limited: true` exactly when more rows
+            existed.
 - [ ] **Define stable role and literal syntax.**
-        - Specify role-name normalization and case sensitivity.
-        - Add an unambiguous quoted/escaped form for role names, including names with
-            spaces, punctuation, or future namespace qualifiers.
-        - Separate query parameters from query variables so clients can bind values
-            without constructing Traqula source text.
+        - Make role names case-sensitive and NFC-normalized at parser and catalog
+            boundaries (D001).
+        - Keep identifier-like bare role names and use backticks for literal role names
+            containing whitespace, punctuation, or reserved words. Reserve unquoted
+            `::`; content inside backticks, including `::`, is always literal (D019).
+        - Use `$name` for typed literal/time parameters supplied in a separate API
+            object. Parameters never substitute source text, roles, variables, or
+            syntax.
+        - Provide the D012/D014/D017 legacy Traqula version for one beta minor release,
+            with deprecation warnings and mechanical rewrite hints, and update the Pest
+            and both VS Code grammars together.
 
 ## P0: Append-Only Persistence
 
@@ -230,22 +271,29 @@ compact sequential writes and deterministic posit replay.
         - Remove `rusqlite` types, storage UIDs, and conversion methods from the
             logical value and query interfaces.
 - [ ] **Write the storage format specification before implementing it.**
-        - Give every file a magic value, format version, byte order, and feature flags.
-        - Give the database and every member file the same immutable store UUID so a
-            role catalog, posit log, snapshot, or index from another store is rejected.
-        - Give every record a type, version, sequence number, length, and checksum.
+        - Define a small manifest containing the immutable store UUID, format version,
+            feature flags, and active log-file list. Give every log file a fixed header
+            with magic, version, byte order, feature flags, and the same store UUID
+            (D003, D023, D024).
+        - Use one interleaved append-only log containing all ordered metadata, posit,
+            and commit records; allow future rotation into immutable segments.
+        - Give every record a type, version, sequence number, unsigned-LEB128 length,
+            and CRC32C checksum. Limit a complete framed record to 16 MiB and validate
+            its size with checked arithmetic before allocation.
         - Define stable binary encodings for identities, appearance sets, hidden codec
             identifiers, lossless literal payloads, and all time precisions.
-        - Never use Rust memory layouts or `Display` output as persisted encodings.
-- [ ] **Store roles in a separate append-only catalog.**
-        - Persist role identity, name, reserved status, and record version.
+        - Use hand-specified endian-independent payloads with little-endian fixed
+            integers; never persist Rust memory layouts or `Display` output.
+- [ ] **Persist catalog metadata in the interleaved log.**
+        - Persist role identity, canonical name, reserved status, and record version as
+            metadata records in the same log.
         - Preserve the fact that role identities are also Thing identities.
-        - Include a monotonic catalog sequence/high-water mark that posit commits can
-            reference and validate during replay.
-        - Make a catalog entry durable before committing a posit that references it;
-            an unused durable role is acceptable, but a dangling role reference is not.
-        - Define where the closed registry of built-in physical codec identifiers and
-            versions lives; defer plugin/custom codecs beyond beta.
+        - Order role and codec metadata before dependent posit records within the same
+            command batch. Commit the command atomically, so an unused durable role is
+            acceptable but a dangling role reference is not (D021, D023).
+        - Specify a closed registry of built-in `(codec identifier, codec version)`
+            pairs with immutable decoding semantics. Require a raw UTF-8 token fallback
+            for every beta literal family and defer custom codecs (D026).
 - [ ] **Define the posit log record model.**
         - Persist posit identity, sorted appearances as `(thing, role)` identities,
             hidden value codec identifier, lossless literal payload, and appearance
@@ -257,45 +305,59 @@ compact sequential writes and deterministic posit replay.
         - Log canonical constructs rather than API calls. Re-adding an existing posit
             is idempotent and does not become new evidence; provenance is modeled with
             assertion posits.
-        - Decide whether standalone/unreferenced Thing allocation is durable. If it
-            is, include an explicit identity-allocation record; otherwise narrow the
-            public persistence promise.
+        - Exclude standalone durable Thing allocation from the public beta API. Make an
+            identity durable only when a committed role or posit first references it;
+            permit gaps but never recycle released identities (D020).
         - Preserve duplicate detection and canonical reconstruction during replay.
 - [ ] **Define commit and acknowledgment semantics.**
-        - Enforce one writer with an operating-system file lock.
-        - Define atomic command or script batches using commit records or an
-            equivalent framing rule.
-        - Offer explicit durability modes and document when data is flushed with
-            `fsync` before success is returned.
+        - Enforce one writer/owner for the complete store with one operating-system
+            lock covering the manifest and every active or sealed log (D023).
+        - Make each semicolon-delimited command one atomic batch delimited by a commit
+            frame. Every role, referenced Thing, and posit created by a multi-posit
+            command commits together or not at all; earlier successful commands remain
+            committed if a later command fails (D021).
+        - Provide one persistent durability level for beta. Return success only after
+            the command, required metadata, and commit frame are durably flushed,
+            including manifest, new-file, and directory-entry changes needed to reopen
+            the commit. In-memory execution makes no disk-durability claim (D022).
         - Update in-memory state only after the durable append succeeds, or provide a
             complete rollback path.
-        - Define cross-file atomicity explicitly: a failed batch may leave an unused
-            durable catalog entry, but never a committed posit with a missing role.
 - [ ] **Implement deterministic recovery.**
-        - Ignore or safely truncate only a torn, uncommitted tail record.
-        - Refuse to serve on checksum failure or corruption in committed history.
-        - Reject unknown mandatory record versions and unknown required codecs rather than
+        - On writable recovery, truncate only bytes after the last valid commit frame.
+            A read-only open may ignore that uncommitted tail (D025).
+        - Fail startup with byte offset and record sequence on checksum failure,
+            malformed data, dangling references, or other corruption in committed
+            history.
+        - Reject unknown mandatory record versions and required codec pairs rather than
             silently skipping data.
         - Rebuild the identity generator, keepers, and all indexes identically on
             every replay.
-- [ ] **Redesign the integrity chain for the new log.**
-        - Decide whether per-record checksums are sufficient or whether a rolling
-            hash is also required.
-        - If retained, hash every committed record in explicit sequence order rather
-            than hashing a textual projection of posit rows.
+- [ ] **Implement framed-record integrity for the new log.**
+        - Verify CRC32C over each complete framed record except its checksum field
+            (D024).
+        - Do not require a rolling cryptographic chain in beta. Reserve a manifest
+            feature flag for a future optional BLAKE3 chain over committed framed bytes
+            in sequence order, without calling it tamper-proof absent a trusted anchor.
 - [ ] **Provide migration and inspection tools.**
         - Build a one-way importer from the prototype SQLite schema to the first log
             format and verify role/thing/posit counts plus representative queries.
-        - Provide a stable logical export/dump format for offline inspection and
-            future migrations; the physical log need not be pleasant to query directly.
-        - Keep SQLite support only in the importer until the migration window closes.
-        - Treat the manifest, catalog, and log as one backup unit; take backups under
-            a consistent read lock or a documented snapshot protocol.
+        - Provide a stable logical export/dump format using `(store UUID, local u64)`
+            for external identities. Import must remap every identity and internal
+            reference; foreign local identifiers are never retained verbatim (D003).
+        - Keep SQLite support only in the importer through the beta series. At the first
+            stable release, remove it and `rusqlite` from the engine while archiving the
+            last beta importer (D027).
+        - Hold the store's read/backup lock while copying the manifest and logs through
+            a recorded committed length; exclude uncommitted tail bytes (D023).
 - [ ] **Plan format evolution without premature compaction work.**
         - Reserve a path for snapshots, indexes, and compaction without requiring
             them for the first beta.
-        - Require a migration or compatibility reader whenever the format version
-            changes.
+        - Make every engine read its current format and at least the immediately
+            preceding beta format. Keep published standalone migrators available for a
+            stepwise path from older beta stores (D027).
+        - Make a breaking migration write and validate a new store beside the source,
+            never mutate the old files, and activate the new store only after
+            validation.
 
 ## P0: Reliability And Ownership
 
@@ -308,32 +370,50 @@ compact sequential writes and deterministic posit replay.
 - [ ] **Enforce a single database owner.**
         - Serialize scripts through one worker/command queue so queries cannot observe
             half-updated keepers or indexes.
-        - Specify command and multi-command script atomicity.
+        - Enforce command-level atomicity: each semicolon-delimited command commits all
+            of its changes or none, while earlier commands remain committed after a
+            later failure. Defer explicit script transactions until after beta (D021).
         - Add cooperative cancellation points inside query evaluation.
 - [ ] **Make startup and shutdown explicit.**
         - Fail startup on committed corruption, unsupported formats, or failed replay.
-        - Flush according to the selected durability mode during graceful shutdown.
+        - Flush according to the single persistent durability contract during graceful
+            shutdown (D022).
         - Do not run destructive database recreation by default.
 
 ## P0: Compatibility Boundaries
 
 - [ ] **Version every external contract.**
-        - Version the log/catalog format, Traqula grammar, HTTP endpoint and streaming
+        - Version the manifest/log format, Traqula grammar, HTTP endpoint and streaming
             events, WASM interface, and logical export format independently.
-        - Publish which contracts are beta-stable and how deprecations are handled.
+        - Use 0.x SemVer: minor releases may contain documented beta breaks and patch
+            releases remain compatible. Embed independent storage, Traqula, HTTP/SSE,
+            and WASM versions in the applicable files and interfaces (D030).
+        - Preserve roles, referenced Things, posits, assertions, exact literal tokens,
+            and times through a supported direct or stepwise migration path. Where
+            practical, warn for one beta minor release with mechanical migration
+            guidance before removing published syntax or APIs.
+        - Permit immediate, release-noted changes for security fixes, corruption fixes,
+            and behavior that was never part of a published contract (D030).
 - [ ] **Narrow the Rust public API.**
-        - Put keepers, lookups, and persistence details behind stable database and
-            query interfaces, or clearly mark them unstable.
-        - Correct public naming mistakes such as `create_apperance` through a planned
-            deprecation rather than an unannounced break.
+        - Stabilize only high-level `Database` open/construction and command/query entry
+            points; opaque logical/external identity handles; execution options;
+            lossless result and stream-event types; storage configuration; and
+            `DatabaseError` (D028).
+        - Keep keepers, indexes/lookups, `ThingGenerator`, parser/AST/planner internals,
+            `Persistor`, physical records/codecs, and public fields exposing those
+            details explicitly unstable.
+        - Rename `create_apperance` to `create_appearance` while narrowing the API and
+            apply the D030 deprecation policy to any already-published surface.
 - [ ] **Unify structured results.**
         - Use one lossless literal result model for Rust, HTTP, streaming, and WASM
             instead of mixing normalized values, datatype names, and tab-separated text.
 - [ ] **Stabilize physical codec identifiers.**
-        - Record the hidden built-in codec registry and add checks that prevent ID reuse.
+        - Record the closed hidden registry of immutable `(codec identifier, codec
+            version)` pairs and add checks that prevent pair reuse (D026).
         - Require every codec to reconstruct the same logical literal regardless of
             storage optimization, migration, or compaction.
-        - Define codec migration and hard-failure behavior for unsupported codec IDs.
+        - Require raw UTF-8 fallback support for every beta literal family and hard-fail
+            replay on an unknown required codec pair.
 
 ## P1: Beta Validation
 
@@ -346,7 +426,9 @@ compact sequential writes and deterministic posit replay.
             lengths, checksum failures, and unknown codecs.
         - Simulate truncation at every byte boundary near the log tail and verify that
             only uncommitted tail data can be discarded.
-        - Verify role-catalog-before-posit ordering and SQLite import fidelity.
+        - Verify metadata-before-dependent-posit ordering in the interleaved log,
+            command-level atomicity, strict acknowledgment durability, backup committed
+            lengths, identity remapping, and SQLite import fidelity.
 - [ ] **Language contract tests.**
         - Cover mixed time precision, equal-time ties, literal and variable `as of`,
             shorthand expansion equivalence, binding multiplicity, and deterministic
@@ -355,6 +437,9 @@ compact sequential writes and deterministic posit replay.
             variable-domain errors, lexical scope, pattern reordering, safe negation,
             literal identity, nominal `=`, compatible `?=`, DISTINCT, and ordered
             LIMIT behavior.
+        - Cover script-scoped and overridden `@NOW`, typed unsupported-comparison
+            errors, exact numeric and structural JSON comparison, and the one-minor
+            legacy grammar with its rewrite warnings.
 - [ ] **Core equality/property tests.**
         - Verify the `Eq`/`Hash` and `Eq`/`Ord` laws for Role, Appearance,
             AppearanceSet, literal values, Time, and Posit.
@@ -377,9 +462,17 @@ compact sequential writes and deterministic posit replay.
 - [ ] **Harden the trusted/local HTTP beta.**
         - Make HTTP status codes match response bodies and streaming errors.
         - Implement or remove the advertised timeout and cancellation options.
-        - Define request/result limits, CORS defaults, and the versioned SSE schema.
-        - Keep loopback binding as the secure default and document that authentication
-            is not included in the first beta.
+        - Enforce a 1 MiB default request body with a 16 MiB hard maximum and at most
+            1,000 commands per script. Use a 5-second default runtime; let `timeout_ms`
+            lower it and configuration raise it only to a 30-second hard maximum
+            (D029).
+        - Return at most 100,000 rows per search across buffered and streaming
+            responses.
+        - Bind to `127.0.0.1` by default. Use same-origin CORS, allow only explicitly
+            configured exact loopback origins, and forbid wildcard origins.
+        - Document that even an explicitly configured non-loopback bind remains a
+            trusted interface with no authentication or safe-Internet-exposure claim.
+            Return structured errors or a `limited` completion when limits are exceeded.
 - [ ] **Add multi-platform CI.**
         - Build and test the default, no-persistence/in-memory, and WASM feature sets
             on Linux, macOS, and Windows.
@@ -399,9 +492,9 @@ compact sequential writes and deterministic posit replay.
 - [ ] **Write beta documentation.**
         - Update `TRAQULA.md` to distinguish history, ordinary snapshots, assertions,
             and assertion-resolution policies.
-        - Document exact/open set matching, structural query-variable domains, posit identity
-            binding, script versus search scope, open-world negation, and result
-            cardinality/order.
+        - Document exact/open set matching, structural query-variable domains, posit
+            identity binding, script versus search scope, open-world negation, and
+            result cardinality/order.
         - Explain the WYSIWYG value model, hidden physical codecs, exact retrieval,
             nominal `=`, compatible `?=`, and constraints as the conformance mechanism.
         - Correct examples that use a four-slot posit pattern, describe identity
@@ -410,6 +503,9 @@ compact sequential writes and deterministic posit replay.
         - Add a cookbook for correction, disagreement, external identification,
             multi-valued attributes, repeated relation roles, backup/restore, and
             SQLite migration.
+        - Document the exact reserved-role vocabulary, command atomicity and durability,
+            trust/resource limits, beta compatibility window, and the manifest plus
+            interleaved-log backup unit.
 
 ## Post-Beta Formalism And Ecosystem
 
@@ -419,8 +515,9 @@ compact sequential writes and deterministic posit replay.
             deterministic conflict/tie handling.
         - Keep manual assertion joins possible and do not redefine ordinary `as of`.
 - [ ] **Class layer.**
-        - Implement the agreed `named`/`thing`/`class` model and optional subclass
-            transitive closure after the reserved vocabulary is stable.
+        - Specify a class model before reserving any vocabulary, then consider
+            `named`/`thing`/`class` roles and optional subclass transitive closure.
+            Those names remain ordinary roles in beta (D006).
 - [ ] **Constraint layer.**
         - Implement subjective cardinality policies and "Decisive Fulfillment" after
             core query and assertion semantics are stable.
