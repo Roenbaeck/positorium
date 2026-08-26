@@ -153,7 +153,7 @@ pub fn router(interface: Arc<QueryInterface>) -> Router {
                         Err(e) => Err(e),
                     }
                 } else {
-                    engine.execute_collect(&script).map(|single| Ok(single))
+                    engine.execute_collect(&script).map(Ok)
                 }
             }).await.map_err(|e| {
                 warn!(error=%e, "Join error");

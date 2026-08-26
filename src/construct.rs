@@ -96,6 +96,12 @@ pub struct ThingGenerator {
     retained: HashSet<Thing, ThingHasher>,
 }
 
+impl Default for ThingGenerator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ThingGenerator {
     /// Creates a fresh generator with the lower bound set to [`GENESIS`].
     pub fn new() -> Self {
@@ -191,6 +197,12 @@ pub struct RoleKeeper {
     kept: HashMap<String, Arc<Role>, OtherHasher>,
     lookup: HashMap<Thing, Arc<Role>, ThingHasher>, // double indexing, but roles should be few so it's not a big deal
 }
+impl Default for RoleKeeper {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RoleKeeper {
     pub fn new() -> Self {
         Self {
@@ -224,6 +236,9 @@ impl RoleKeeper {
     }
     pub fn len(&self) -> usize {
         self.kept.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.kept.is_empty()
     }
 }
 
@@ -264,6 +279,12 @@ impl fmt::Display for Appearance {
 pub struct AppearanceKeeper {
     kept: HashSet<Arc<Appearance>, OtherHasher>,
 }
+impl Default for AppearanceKeeper {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AppearanceKeeper {
     pub fn new() -> Self {
         Self {
@@ -280,6 +301,9 @@ impl AppearanceKeeper {
     }
     pub fn len(&self) -> usize {
         self.kept.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.kept.is_empty()
     }
 }
 
@@ -325,6 +349,12 @@ impl fmt::Display for AppearanceSet {
 pub struct AppearanceSetKeeper {
     kept: HashSet<Arc<AppearanceSet>, OtherHasher>,
 }
+impl Default for AppearanceSetKeeper {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AppearanceSetKeeper {
     pub fn new() -> Self {
         Self {
@@ -341,6 +371,9 @@ impl AppearanceSetKeeper {
     }
     pub fn len(&self) -> usize {
         self.kept.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.kept.is_empty()
     }
 }
 
@@ -421,6 +454,12 @@ pub struct PositKeeper {
     kept: TypeMap,
     length: usize,
 }
+impl Default for PositKeeper {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PositKeeper {
     pub fn new() -> Self {
         Self {
@@ -481,6 +520,9 @@ impl PositKeeper {
     pub fn len(&self) -> usize {
         self.length
     }
+    pub fn is_empty(&self) -> bool {
+        self.length == 0
+    }
 }
 
 // ------------- Lookups -------------
@@ -488,6 +530,12 @@ impl PositKeeper {
 pub struct Lookup<K, V, H = RandomState> {
     index: HashMap<K, HashSet<V>, H>,
 }
+impl<K: Eq + Hash, V: Eq + Hash, H: BuildHasher + Default> Default for Lookup<K, V, H> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<K: Eq + Hash, V: Eq + Hash, H: BuildHasher + Default> Lookup<K, V, H> {
     pub fn new() -> Self {
         Self {
@@ -495,7 +543,7 @@ impl<K: Eq + Hash, V: Eq + Hash, H: BuildHasher + Default> Lookup<K, V, H> {
         }
     }
     pub fn insert(&mut self, key: K, value: V) {
-        let map = self.index.entry(key).or_insert(HashSet::<V>::new());
+        let map = self.index.entry(key).or_default();
         map.insert(value);
     }
     pub fn lookup(&self, key: &K) -> Option<&HashSet<V>> {
@@ -508,6 +556,12 @@ impl<K: Eq + Hash, V: Eq + Hash, H: BuildHasher + Default> Lookup<K, V, H> {
 pub struct ThingLookup<K, H = RandomState> {
     index: HashMap<K, RoaringTreemap, H>,
 }
+impl<K: Eq + Hash, H: BuildHasher + Default> Default for ThingLookup<K, H> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<K: Eq + Hash, H: BuildHasher + Default> ThingLookup<K, H> {
     pub fn new() -> Self {
         Self {
@@ -515,7 +569,7 @@ impl<K: Eq + Hash, H: BuildHasher + Default> ThingLookup<K, H> {
         }
     }
     pub fn insert(&mut self, key: K, thing: Thing) {
-        let set = self.index.entry(key).or_insert(RoaringTreemap::new());
+        let set = self.index.entry(key).or_default();
         set.insert(thing);
     }
     pub fn remove(&mut self, key: &K, thing: Thing) {
@@ -530,6 +584,9 @@ impl<K: Eq + Hash, H: BuildHasher + Default> ThingLookup<K, H> {
 
 // ------------- Database -------------
 // This sets up the database with the necessary structures
+
+pub type RoleAppearanceLookup = Lookup<Arc<Role>, Arc<Appearance>, OtherHasher>;
+pub type AppearanceSetLookup = Lookup<Arc<Appearance>, Arc<AppearanceSet>, OtherHasher>;
 
 /// Persistence configuration for the database engine.
 pub enum PersistenceMode {
@@ -564,9 +621,8 @@ pub struct Database {
     pub posit_keeper: Arc<Mutex<PositKeeper>>,
     // owns lookups between constructs (similar to database indexes)
     pub thing_to_appearance_lookup: Arc<Mutex<Lookup<Thing, Arc<Appearance>, ThingHasher>>>,
-    pub role_to_appearance_lookup: Arc<Mutex<Lookup<Arc<Role>, Arc<Appearance>, OtherHasher>>>,
-    pub appearance_to_appearance_set_lookup:
-        Arc<Mutex<Lookup<Arc<Appearance>, Arc<AppearanceSet>, OtherHasher>>>,
+    pub role_to_appearance_lookup: Arc<Mutex<RoleAppearanceLookup>>,
+    pub appearance_to_appearance_set_lookup: Arc<Mutex<AppearanceSetLookup>>,
     pub appearance_set_to_posit_thing_lookup:
         Arc<Mutex<ThingLookup<Arc<AppearanceSet>, OtherHasher>>>,
     pub role_to_posit_thing_lookup: Arc<Mutex<ThingLookup<Thing, OtherHasher>>>,
@@ -605,9 +661,6 @@ impl Database {
         let posit_thing_to_appearance_set_lookup: HashMap<Thing, Arc<AppearanceSet>, ThingHasher> =
             HashMap::default();
         let posit_time_lookup: HashMap<Thing, Time, ThingHasher> = HashMap::default();
-        #[cfg(feature = "persistence")]
-        let persistor = persistor;
-
         // Create the database so that we can prime it before returning it
         let database = Database {
             thing_generator: Arc::new(Mutex::new(thing_generator)),
@@ -672,9 +725,7 @@ impl Database {
     ) -> Arc<Mutex<Lookup<Thing, Arc<Appearance>, ThingHasher>>> {
         Arc::clone(&self.thing_to_appearance_lookup)
     }
-    pub fn role_to_appearance_lookup(
-        &self,
-    ) -> Arc<Mutex<Lookup<Arc<Role>, Arc<Appearance>, OtherHasher>>> {
+    pub fn role_to_appearance_lookup(&self) -> Arc<Mutex<RoleAppearanceLookup>> {
         Arc::clone(&self.role_to_appearance_lookup)
     }
     pub fn role_name_to_data_type_lookup(
@@ -682,9 +733,7 @@ impl Database {
     ) -> Arc<Mutex<Lookup<Vec<String>, String, OtherHasher>>> {
         Arc::clone(&self.role_name_to_data_type_lookup)
     }
-    pub fn appearance_to_appearance_set_lookup(
-        &self,
-    ) -> Arc<Mutex<Lookup<Arc<Appearance>, Arc<AppearanceSet>, OtherHasher>>> {
+    pub fn appearance_to_appearance_set_lookup(&self) -> Arc<Mutex<AppearanceSetLookup>> {
         Arc::clone(&self.appearance_to_appearance_set_lookup)
     }
     pub fn appearance_set_to_posit_thing_lookup(

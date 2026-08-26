@@ -130,6 +130,7 @@ impl LogStore {
         let lock_path = directory.join(LOCK_NAME);
         let lock = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(&lock_path)

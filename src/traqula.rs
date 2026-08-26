@@ -78,6 +78,12 @@ pub struct ResultSet {
     pub thing: Option<Thing>,
     pub multi: Option<RoaringTreemap>,
 }
+impl Default for ResultSet {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ResultSet {
     pub fn new() -> Self {
         Self {
@@ -173,10 +179,10 @@ impl ResultSet {
             return;
         }
         match (self.mode, other.mode) {
-            (ResultSetMode::Thing, ResultSetMode::Thing) => {
-                if self.thing.unwrap() != other.thing.unwrap() {
-                    self.empty();
-                }
+            (ResultSetMode::Thing, ResultSetMode::Thing)
+                if self.thing.unwrap() != other.thing.unwrap() =>
+            {
+                self.empty();
             }
             (ResultSetMode::Thing, ResultSetMode::Multi) => {
                 let t = self.thing.unwrap();
@@ -418,10 +424,7 @@ fn parse_string_constant(_value: &str) -> Option<String> {
     None
 }
 fn parse_i64(value: &str) -> Option<i64> {
-    match value.parse::<i64>() {
-        Ok(v) => Some(v),
-        Err(_) => None,
-    }
+    value.parse::<i64>().ok()
 }
 fn parse_i64_constant(_value: &str) -> Option<i64> {
     None
@@ -439,13 +442,13 @@ fn parse_certainty_constant(_value: &str) -> Option<Certainty> {
     None
 }
 fn parse_decimal(value: &str) -> Option<Decimal> {
-    Decimal::from_str(value)
+    value.parse::<Decimal>().ok()
 }
 fn parse_decimal_constant(_value: &str) -> Option<Decimal> {
     None
 }
 fn parse_json(value: &str) -> Option<JSON> {
-    JSON::from_str(value)
+    value.parse::<JSON>().ok()
 }
 fn parse_json_constant(_value: &str) -> Option<JSON> {
     None
@@ -464,7 +467,7 @@ fn parse_time_with_now(value: &str, resolved_now: &Time) -> Option<Time> {
     // 2. Sanitize: trim whitespace & trailing syntax punctuation, remove surrounding single quotes if any
     let mut stripped = value
         .trim()
-        .trim_end_matches(|c: char| matches!(c, ',' | ';' | ']' | ')'))
+        .trim_end_matches([',', ';', ']', ')'])
         .trim()
         .to_string();
     if stripped.starts_with('\'') && stripped.ends_with('\'') && stripped.len() >= 2 {
@@ -488,27 +491,26 @@ fn parse_time_with_now(value: &str, resolved_now: &Time) -> Option<Time> {
     }
 
     // 4. Date (YYYY-MM-DD)
-    if stripped.len() >= 8 && stripped.matches('-').count() == 2 && !stripped.contains(':') {
-        if stripped.parse::<NaiveDate>().is_ok() {
-            return Some(Time::new_date_from(&stripped));
-        }
+    if stripped.len() >= 8
+        && stripped.matches('-').count() == 2
+        && !stripped.contains(':')
+        && stripped.parse::<NaiveDate>().is_ok()
+    {
+        return Some(Time::new_date_from(&stripped));
     }
 
     // 5. Year-month (YYYY-MM)
     if stripped.matches('-').count() == 1 && stripped.len() >= 6 && !stripped.contains(':') {
         // basic shape check: split and ensure month 1-12
-        if let Some((y, m)) = stripped.split_once('-') {
-            if y.chars().all(|c| c == '-' || c.is_ascii_digit())
-                && m.chars().all(|c| c.is_ascii_digit())
-            {
-                if m.parse::<u8>()
-                    .ok()
-                    .filter(|mm| (1..=12).contains(mm))
-                    .is_some()
-                {
-                    return Some(Time::new_year_month_from(&stripped));
-                }
-            }
+        if let Some((y, m)) = stripped.split_once('-')
+            && y.chars().all(|c| c == '-' || c.is_ascii_digit())
+            && m.chars().all(|c| c.is_ascii_digit())
+            && m.parse::<u8>()
+                .ok()
+                .filter(|mm| (1..=12).contains(mm))
+                .is_some()
+        {
+            return Some(Time::new_year_month_from(&stripped));
         }
     }
 
@@ -603,7 +605,7 @@ pub struct ExecutionMetadata {
 impl ExecutionOptions {
     fn resolve(self) -> ExecutionMetadata {
         ExecutionMetadata {
-            resolved_now: self.now.unwrap_or_else(Time::new),
+            resolved_now: self.now.unwrap_or_default(),
         }
     }
 }
@@ -631,14 +633,13 @@ impl<'en> Engine<'en> {
                     positives,
                     negatives: _,
                 } = err.variant
+                    && !positives.is_empty()
                 {
-                    if !positives.is_empty() {
-                        let mut expected: Vec<&'static str> =
-                            positives.iter().map(|r| friendly_rule_name(*r)).collect();
-                        expected.sort();
-                        expected.dedup();
-                        msg.push_str(&format!("\nExpected one of: {}", expected.join(", ")));
-                    }
+                    let mut expected: Vec<&'static str> =
+                        positives.iter().map(|r| friendly_rule_name(*r)).collect();
+                    expected.sort();
+                    expected.dedup();
+                    msg.push_str(&format!("\nExpected one of: {}", expected.join(", ")));
                 }
                 return Err(crate::error::DatabaseError::Parse {
                     message: msg,
@@ -690,20 +691,20 @@ impl<'en> Engine<'en> {
                             self.inner.on_meta(columns)
                         }
                         fn push(&mut self, row: Vec<String>, types: Vec<String>) -> SinkFlow {
-                            if let Some(l) = self.limit {
-                                if self.count >= l {
-                                    self.limited = true;
-                                    return SinkFlow::Stop;
-                                }
+                            if let Some(l) = self.limit
+                                && self.count >= l
+                            {
+                                self.limited = true;
+                                return SinkFlow::Stop;
                             }
                             match self.inner.push(row, types) {
                                 SinkFlow::Continue => {
                                     self.count += 1;
-                                    if let Some(l) = self.limit {
-                                        if self.count >= l {
-                                            self.limited = true;
-                                            return SinkFlow::Stop;
-                                        }
+                                    if let Some(l) = self.limit
+                                        && self.count >= l
+                                    {
+                                        self.limited = true;
+                                        return SinkFlow::Stop;
                                     }
                                     SinkFlow::Continue
                                 }
@@ -918,9 +919,9 @@ impl<'en> Engine<'en> {
                     for local_variable in &local_variables {
                         variable_to_things.insert(*local_variable, Vec::new());
                     }
-                    for i in 0..local_variables.len() {
-                        let things = variable_to_things.get_mut(local_variables[i]).unwrap();
-                        let result_set = variables.get(local_variables[i]).unwrap();
+                    for local_variable in &local_variables {
+                        let things = variable_to_things.get_mut(local_variable).unwrap();
+                        let result_set = variables.get(*local_variable).unwrap();
                         match result_set.mode {
                             ResultSetMode::Empty => (),
                             ResultSetMode::Thing => {
@@ -935,8 +936,8 @@ impl<'en> Engine<'en> {
                         }
                     }
                     let mut things_for_roles = Vec::new();
-                    for i in 0..local_variables.len() {
-                        let things_for_role = variable_to_things.get(local_variables[i]).unwrap();
+                    for local_variable in &local_variables {
+                        let things_for_role = variable_to_things.get(local_variable).unwrap();
                         things_for_roles.push(things_for_role.as_slice());
                     }
 
@@ -1034,7 +1035,7 @@ impl<'en> Engine<'en> {
                         } else if value_as_i64.is_some() {
                             let kept_posit = self.database.create_posit(
                                 appearance_set,
-                                value_as_i64.clone().unwrap(),
+                                value_as_i64.unwrap(),
                                 time_value.clone(),
                             );
                             posits.push(kept_posit.posit());
@@ -1048,8 +1049,8 @@ impl<'en> Engine<'en> {
                 }
                 _ => println!("Unknown structure: {:?}", structure),
             }
-            if variable.is_some() {
-                match variables.entry(variable.unwrap()) {
+            if let Some(variable) = variable {
+                match variables.entry(variable) {
                     Entry::Vacant(entry) => {
                         let mut result_set = ResultSet::new();
                         for posit in posits {
@@ -1132,10 +1133,10 @@ impl<'en> Engine<'en> {
         fn parse_certainty_literal(raw: &str) -> Option<i8> {
             let s = raw.trim();
             if s.ends_with('%') {
-                if let Ok(v) = s.trim_end_matches('%').parse::<i16>() {
-                    if (-100..=100).contains(&v) {
-                        return Some(v as i8);
-                    }
+                if let Ok(v) = s.trim_end_matches('%').parse::<i16>()
+                    && (-100..=100).contains(&v)
+                {
+                    return Some(v as i8);
                 }
                 return None;
             }
@@ -1248,15 +1249,11 @@ impl<'en> Engine<'en> {
                                                             local_variable_unions.push(None);
                                                             inserted_id_vars_this_pattern
                                                                 .push(local_variable.to_string());
-                                                            match variables
+                                                            if let Entry::Vacant(entry) = variables
                                                                 .entry(local_variable.to_string())
                                                             {
-                                                                Entry::Vacant(entry) => {
-                                                                    let result_set =
-                                                                        ResultSet::new();
-                                                                    entry.insert(result_set);
-                                                                }
-                                                                _ => (),
+                                                                let result_set = ResultSet::new();
+                                                                entry.insert(result_set);
                                                             }
                                                             active_vars
                                                                 .insert(local_variable.to_string());
@@ -1549,10 +1546,10 @@ impl<'en> Engine<'en> {
                                             let tk = self.database.posit_time_lookup();
                                             let guard = tk.lock().unwrap();
                                             for id in cands.iter() {
-                                                if let Some(pt) = guard.get(&id) {
-                                                    if pt == t {
-                                                        filtered.insert(id);
-                                                    }
+                                                if let Some(pt) = guard.get(&id)
+                                                    && pt == t
+                                                {
+                                                    filtered.insert(id);
                                                 }
                                             }
                                             cands = filtered;
@@ -1562,56 +1559,47 @@ impl<'en> Engine<'en> {
                                             }
                                         }
                                         // Optional per-clause 'as of' reduction: keep latest time <= as_of for each appearance set
-                                        if let Some(ref as_of) = _as_of_time {
-                                            if !cands.is_empty() {
-                                                let time_lk = self.database.posit_time_lookup();
-                                                let time_guard = time_lk.lock().unwrap();
-                                                let aset_lk = self
-                                                    .database
-                                                    .posit_thing_to_appearance_set_lookup();
-                                                let aset_guard = aset_lk.lock().unwrap();
-                                                // Keep every maximal applicable posit per appearance set.
-                                                use std::collections::HashMap as StdHashMap;
-                                                let mut best: StdHashMap<
-                                                    usize,
-                                                    Vec<(Time, Thing)>,
-                                                > = StdHashMap::new();
-                                                for pid in cands.iter() {
-                                                    if let Some(pt) = time_guard.get(&pid) {
-                                                        if pt.definitely_at_or_before(as_of) {
-                                                            if let Some(aset) = aset_guard.get(&pid)
-                                                            {
-                                                                let key =
-                                                                    Arc::as_ptr(aset) as usize;
-                                                                let maxima =
-                                                                    best.entry(key).or_default();
-                                                                if maxima.iter().any(
-                                                                    |(existing, _)| {
-                                                                        existing
-                                                                            .definitely_after(pt)
-                                                                    },
-                                                                ) {
-                                                                    continue;
-                                                                }
-                                                                maxima.retain(|(existing, _)| {
-                                                                    !pt.definitely_after(existing)
-                                                                });
-                                                                maxima.push((pt.clone(), pid));
-                                                            }
-                                                        }
+                                        if let Some(ref as_of) = _as_of_time
+                                            && !cands.is_empty()
+                                        {
+                                            let time_lk = self.database.posit_time_lookup();
+                                            let time_guard = time_lk.lock().unwrap();
+                                            let aset_lk = self
+                                                .database
+                                                .posit_thing_to_appearance_set_lookup();
+                                            let aset_guard = aset_lk.lock().unwrap();
+                                            // Keep every maximal applicable posit per appearance set.
+                                            use std::collections::HashMap as StdHashMap;
+                                            let mut best: StdHashMap<usize, Vec<(Time, Thing)>> =
+                                                StdHashMap::new();
+                                            for pid in cands.iter() {
+                                                if let Some(pt) = time_guard.get(&pid)
+                                                    && pt.definitely_at_or_before(as_of)
+                                                    && let Some(aset) = aset_guard.get(&pid)
+                                                {
+                                                    let key = Arc::as_ptr(aset) as usize;
+                                                    let maxima = best.entry(key).or_default();
+                                                    if maxima.iter().any(|(existing, _)| {
+                                                        existing.definitely_after(pt)
+                                                    }) {
+                                                        continue;
                                                     }
+                                                    maxima.retain(|(existing, _)| {
+                                                        !pt.definitely_after(existing)
+                                                    });
+                                                    maxima.push((pt.clone(), pid));
                                                 }
-                                                let mut reduced = RoaringTreemap::new();
-                                                for maxima in best.into_values() {
-                                                    for (_, id) in maxima {
-                                                        reduced.insert(id);
-                                                    }
+                                            }
+                                            let mut reduced = RoaringTreemap::new();
+                                            for maxima in best.into_values() {
+                                                for (_, id) in maxima {
+                                                    reduced.insert(id);
                                                 }
-                                                cands = reduced;
-                                                info!(target:"positorium::stream", event="snapshot_reduced", remaining=cands.len(), as_of=%format!("{}", as_of));
-                                                if cands.is_empty() {
-                                                    any_clause_failed = true;
-                                                }
+                                            }
+                                            cands = reduced;
+                                            info!(target:"positorium::stream", event="snapshot_reduced", remaining=cands.len(), as_of=%format!("{}", as_of));
+                                            if cands.is_empty() {
+                                                any_clause_failed = true;
                                             }
                                         }
                                         // Optional value filter for any role when a literal/constant value is provided
@@ -1645,71 +1633,50 @@ impl<'en> Engine<'en> {
                                                         continue;
                                                     };
                                                     let mut matches = false;
-                                                    if let Some(ref val) = _value_as_string {
-                                                        if allowed.contains("String") {
-                                                            if let Some(p) =
-                                                                pk_guard.posit::<String>(id)
-                                                            {
-                                                                if p.value() == val {
-                                                                    matches = true;
-                                                                }
-                                                            }
-                                                        }
+                                                    if let Some(ref val) = _value_as_string
+                                                        && allowed.contains("String")
+                                                        && let Some(p) =
+                                                            pk_guard.posit::<String>(id)
+                                                        && p.value() == val
+                                                    {
+                                                        matches = true;
                                                     }
-                                                    if let Some(val) = _value_as_i64 {
-                                                        if allowed.contains("i64") {
-                                                            if let Some(p) =
-                                                                pk_guard.posit::<i64>(id)
-                                                            {
-                                                                if p.value() == &val {
-                                                                    matches = true;
-                                                                }
-                                                            }
-                                                        }
+                                                    if let Some(val) = _value_as_i64
+                                                        && allowed.contains("i64")
+                                                        && let Some(p) = pk_guard.posit::<i64>(id)
+                                                        && p.value() == &val
+                                                    {
+                                                        matches = true;
                                                     }
-                                                    if let Some(ref val) = _value_as_decimal {
-                                                        if allowed.contains("Decimal") {
-                                                            if let Some(p) =
-                                                                pk_guard.posit::<Decimal>(id)
-                                                            {
-                                                                if p.value() == val {
-                                                                    matches = true;
-                                                                }
-                                                            }
-                                                        }
+                                                    if let Some(ref val) = _value_as_decimal
+                                                        && allowed.contains("Decimal")
+                                                        && let Some(p) =
+                                                            pk_guard.posit::<Decimal>(id)
+                                                        && p.value() == val
+                                                    {
+                                                        matches = true;
                                                     }
-                                                    if let Some(ref val) = _value_as_certainty {
-                                                        if allowed.contains("Certainty") {
-                                                            if let Some(p) =
-                                                                pk_guard.posit::<Certainty>(id)
-                                                            {
-                                                                if p.value() == val {
-                                                                    matches = true;
-                                                                }
-                                                            }
-                                                        }
+                                                    if let Some(ref val) = _value_as_certainty
+                                                        && allowed.contains("Certainty")
+                                                        && let Some(p) =
+                                                            pk_guard.posit::<Certainty>(id)
+                                                        && p.value() == val
+                                                    {
+                                                        matches = true;
                                                     }
-                                                    if let Some(ref val) = _value_as_time {
-                                                        if allowed.contains("Time") {
-                                                            if let Some(p) =
-                                                                pk_guard.posit::<Time>(id)
-                                                            {
-                                                                if p.value() == val {
-                                                                    matches = true;
-                                                                }
-                                                            }
-                                                        }
+                                                    if let Some(ref val) = _value_as_time
+                                                        && allowed.contains("Time")
+                                                        && let Some(p) = pk_guard.posit::<Time>(id)
+                                                        && p.value() == val
+                                                    {
+                                                        matches = true;
                                                     }
-                                                    if let Some(ref val) = _value_as_json {
-                                                        if allowed.contains("JSON") {
-                                                            if let Some(p) =
-                                                                pk_guard.posit::<JSON>(id)
-                                                            {
-                                                                if p.value() == val {
-                                                                    matches = true;
-                                                                }
-                                                            }
-                                                        }
+                                                    if let Some(ref val) = _value_as_json
+                                                        && allowed.contains("JSON")
+                                                        && let Some(p) = pk_guard.posit::<JSON>(id)
+                                                        && p.value() == val
+                                                    {
+                                                        matches = true;
                                                     }
                                                     if matches {
                                                         filtered.insert(id);
@@ -2024,42 +1991,28 @@ impl<'en> Engine<'en> {
                                                         for cid in cands.iter() {
                                                             if let Some(aset_c) =
                                                                 aset_guard.get(&cid)
-                                                            {
-                                                                if let Some(ct) =
+                                                                && let Some(ct) =
                                                                     time_guard.get(&cid)
-                                                                {
-                                                                    if ct.definitely_at_or_before(
-                                                                        as_of_time,
-                                                                    ) {
-                                                                        let key =
-                                                                            Arc::as_ptr(aset_c)
-                                                                                as usize;
-                                                                        let maxima = cache
-                                                                            .entry(key)
-                                                                            .or_default();
-                                                                        if maxima.iter().any(
-                                                                            |(existing, _)| {
-                                                                                existing
-                                                                                    .definitely_after(
-                                                                                        ct,
-                                                                                    )
-                                                                            },
-                                                                        ) {
-                                                                            continue;
-                                                                        }
-                                                                        maxima.retain(
-                                                                            |(existing, _)| {
-                                                                                !ct.definitely_after(
-                                                                                    existing,
-                                                                                )
-                                                                            },
-                                                                        );
-                                                                        maxima.push((
-                                                                            ct.clone(),
-                                                                            cid,
-                                                                        ));
-                                                                    }
+                                                                && ct.definitely_at_or_before(
+                                                                    as_of_time,
+                                                                )
+                                                            {
+                                                                let key =
+                                                                    Arc::as_ptr(aset_c) as usize;
+                                                                let maxima =
+                                                                    cache.entry(key).or_default();
+                                                                if maxima.iter().any(
+                                                                    |(existing, _)| {
+                                                                        existing
+                                                                            .definitely_after(ct)
+                                                                    },
+                                                                ) {
+                                                                    continue;
                                                                 }
+                                                                maxima.retain(|(existing, _)| {
+                                                                    !ct.definitely_after(existing)
+                                                                });
+                                                                maxima.push((ct.clone(), cid));
                                                             }
                                                         }
                                                         info!(target:"positorium::stream", event="snapshot_reduced_per_binding", aset_count=cache.len());
@@ -2073,11 +2026,10 @@ impl<'en> Engine<'en> {
                                                         for (k, v) in id_map.iter() {
                                                             if let Some(prev) =
                                                                 existing.identities.get(k)
+                                                                && prev != v
                                                             {
-                                                                if prev != v {
-                                                                    ok = false;
-                                                                    break;
-                                                                }
+                                                                ok = false;
+                                                                break;
                                                             }
                                                         }
                                                         if !ok {
@@ -2086,56 +2038,44 @@ impl<'en> Engine<'en> {
                                                         // If variable as-of is in effect and bound for this row, enforce snapshot: pid must be the latest <= as_of among cands for its appearance set
                                                         if let (Some(_), Some(cache)) =
                                                             (&binding_as_of_time, &best_cache)
-                                                        {
-                                                            if let Some(aset_of_pid) =
+                                                            && let Some(aset_of_pid) =
                                                                 aset_guard.get(pid)
-                                                            {
-                                                                let key = Arc::as_ptr(aset_of_pid)
-                                                                    as usize;
-                                                                if let Some(maxima) =
-                                                                    cache.get(&key)
-                                                                {
-                                                                    if !maxima.iter().any(
-                                                                        |(_, best_pid)| {
-                                                                            pid == best_pid
-                                                                        },
-                                                                    ) {
-                                                                        continue;
-                                                                    }
-                                                                } else {
+                                                        {
+                                                            let key =
+                                                                Arc::as_ptr(aset_of_pid) as usize;
+                                                            if let Some(maxima) = cache.get(&key) {
+                                                                if !maxima.iter().any(
+                                                                    |(_, best_pid)| pid == best_pid,
+                                                                ) {
                                                                     continue;
                                                                 }
+                                                            } else {
+                                                                continue;
                                                             }
                                                         }
                                                         // Posit variable compatibility
-                                                        if let Some(ref pn) = posit_var_name {
-                                                            if let Some(prev) =
+                                                        if let Some(ref pn) = posit_var_name
+                                                            && let Some(prev) =
                                                                 existing.posit_vars.get(pn)
-                                                            {
-                                                                if prev != pid {
-                                                                    continue;
-                                                                }
-                                                            }
+                                                            && prev != pid
+                                                        {
+                                                            continue;
                                                         }
                                                         // Value variable compatibility
-                                                        if let Some(ref vn) = value_var_name {
-                                                            if let Some((prev_pid, _)) =
+                                                        if let Some(ref vn) = value_var_name
+                                                            && let Some((prev_pid, _)) =
                                                                 existing.value_slots.get(vn)
-                                                            {
-                                                                if prev_pid != pid {
-                                                                    continue;
-                                                                }
-                                                            }
+                                                            && prev_pid != pid
+                                                        {
+                                                            continue;
                                                         }
                                                         // Time variable compatibility
-                                                        if let Some(ref tn) = time_var_name {
-                                                            if let Some((prev_pid, _)) =
+                                                        if let Some(ref tn) = time_var_name
+                                                            && let Some((prev_pid, _)) =
                                                                 existing.value_slots.get(tn)
-                                                            {
-                                                                if prev_pid != pid {
-                                                                    continue;
-                                                                }
-                                                            }
+                                                            && prev_pid != pid
+                                                        {
+                                                            continue;
                                                         }
                                                         // Merge
                                                         let mut merged = existing.clone();
@@ -2186,138 +2126,118 @@ impl<'en> Engine<'en> {
                     // Unsupported (non-time) conditions are currently parsed but not evaluated: we log once if encountered.
                     // (Previously logged unsupported conditions; now we capture generics silently.)
                     for part in clause.into_inner() {
-                        match part.as_rule() {
-                            Rule::condition => {
-                                let mut lhs_var: Option<String> = None;
-                                let mut op: Option<String> = None;
-                                let mut rhs_time: Option<Time> = None;
-                                let mut rhs_is_time = false;
-                                let mut rhs_raw: Option<String> = None; // generic string form
-                                let mut rhs_var: Option<String> = None;
-                                for c in part.into_inner() {
-                                    match c.as_rule() {
-                                        Rule::recall => {
-                                            if lhs_var.is_none() {
-                                                lhs_var = Some(
-                                                    c.into_inner()
-                                                        .next()
-                                                        .unwrap()
-                                                        .as_str()
-                                                        .to_string(),
-                                                );
-                                            } else if rhs_var.is_none() {
-                                                rhs_var = Some(
-                                                    c.into_inner()
-                                                        .next()
-                                                        .unwrap()
-                                                        .as_str()
-                                                        .to_string(),
-                                                );
-                                            }
+                        if part.as_rule() == Rule::condition {
+                            let mut lhs_var: Option<String> = None;
+                            let mut op: Option<String> = None;
+                            let mut rhs_time: Option<Time> = None;
+                            let mut rhs_is_time = false;
+                            let mut rhs_raw: Option<String> = None; // generic string form
+                            let mut rhs_var: Option<String> = None;
+                            for c in part.into_inner() {
+                                match c.as_rule() {
+                                    Rule::recall => {
+                                        if lhs_var.is_none() {
+                                            lhs_var = Some(
+                                                c.into_inner().next().unwrap().as_str().to_string(),
+                                            );
+                                        } else if rhs_var.is_none() {
+                                            rhs_var = Some(
+                                                c.into_inner().next().unwrap().as_str().to_string(),
+                                            );
                                         }
-                                        Rule::comparator => op = Some(c.as_str().to_string()),
-                                        Rule::constant => {
-                                            // Could be time constant
-                                            if let Some(t) = parse_time_constant_with_now(
-                                                c.as_str(),
-                                                resolved_now,
-                                            ) {
-                                                rhs_time = Some(t);
-                                                rhs_is_time = true;
-                                            }
-                                            rhs_raw = Some(c.as_str().to_string());
-                                        }
-                                        Rule::time => {
-                                            rhs_time =
-                                                parse_time_with_now(c.as_str(), resolved_now);
+                                    }
+                                    Rule::comparator => op = Some(c.as_str().to_string()),
+                                    Rule::constant => {
+                                        // Could be time constant
+                                        if let Some(t) =
+                                            parse_time_constant_with_now(c.as_str(), resolved_now)
+                                        {
+                                            rhs_time = Some(t);
                                             rhs_is_time = true;
-                                            rhs_raw = Some(c.as_str().to_string());
                                         }
-                                        // literals
-                                        Rule::certainty
-                                        | Rule::decimal
-                                        | Rule::int
-                                        | Rule::string => {
-                                            rhs_raw = Some(c.as_str().to_string());
-                                        }
-                                        Rule::rhs_value => {
-                                            // unwrap one level
-                                            for r in c.into_inner() {
-                                                match r.as_rule() {
-                                                    Rule::constant => {
-                                                        if let Some(t) =
-                                                            parse_time_constant_with_now(
-                                                                r.as_str(),
-                                                                resolved_now,
-                                                            )
-                                                        {
-                                                            rhs_time = Some(t);
-                                                            rhs_is_time = true;
-                                                        }
-                                                        rhs_raw = Some(r.as_str().to_string());
-                                                    }
-                                                    Rule::time => {
-                                                        rhs_time = parse_time_with_now(
-                                                            r.as_str(),
-                                                            resolved_now,
-                                                        );
+                                        rhs_raw = Some(c.as_str().to_string());
+                                    }
+                                    Rule::time => {
+                                        rhs_time = parse_time_with_now(c.as_str(), resolved_now);
+                                        rhs_is_time = true;
+                                        rhs_raw = Some(c.as_str().to_string());
+                                    }
+                                    // literals
+                                    Rule::certainty | Rule::decimal | Rule::int | Rule::string => {
+                                        rhs_raw = Some(c.as_str().to_string());
+                                    }
+                                    Rule::rhs_value => {
+                                        // unwrap one level
+                                        for r in c.into_inner() {
+                                            match r.as_rule() {
+                                                Rule::constant => {
+                                                    if let Some(t) = parse_time_constant_with_now(
+                                                        r.as_str(),
+                                                        resolved_now,
+                                                    ) {
+                                                        rhs_time = Some(t);
                                                         rhs_is_time = true;
-                                                        rhs_raw = Some(r.as_str().to_string());
                                                     }
-                                                    Rule::certainty
-                                                    | Rule::decimal
-                                                    | Rule::int
-                                                    | Rule::string => {
-                                                        rhs_raw = Some(r.as_str().to_string());
-                                                    }
-                                                    _ => {}
+                                                    rhs_raw = Some(r.as_str().to_string());
                                                 }
+                                                Rule::time => {
+                                                    rhs_time = parse_time_with_now(
+                                                        r.as_str(),
+                                                        resolved_now,
+                                                    );
+                                                    rhs_is_time = true;
+                                                    rhs_raw = Some(r.as_str().to_string());
+                                                }
+                                                Rule::certainty
+                                                | Rule::decimal
+                                                | Rule::int
+                                                | Rule::string => {
+                                                    rhs_raw = Some(r.as_str().to_string());
+                                                }
+                                                _ => {}
                                             }
                                         }
-                                        _ => {}
                                     }
-                                }
-                                if rhs_is_time {
-                                    if let (Some(v), Some(o), Some(t)) =
-                                        (lhs_var.clone(), op.clone(), rhs_time)
-                                    {
-                                        where_time.push((v, o, t));
-                                    }
-                                } else if let (Some(lv), Some(o)) = (lhs_var.clone(), op.clone()) {
-                                    if let Some(rv) = rhs_var.clone() {
-                                        // Defer classification: push to both time_var and value_var lists; execution will keep the valid kind.
-                                        where_time_var.push((lv.clone(), o.clone(), rv.clone()));
-                                        where_value_var.push((lv, o, rv));
-                                    } else if let Some(raw) = rhs_raw.clone() {
-                                        let trimmed = raw.trim();
-                                        let rhs_kind = if trimmed.starts_with('"')
-                                            && trimmed.ends_with('"')
-                                        {
-                                            RhsValueKind::String(
-                                                trimmed.trim_matches('"').to_string(),
-                                            )
-                                        } else if trimmed.ends_with('%') {
-                                            if let Some(cpct) = parse_certainty_literal(trimmed) {
-                                                RhsValueKind::Cert(cpct)
-                                            } else {
-                                                RhsValueKind::Const(trimmed.to_string())
-                                            }
-                                        } else if trimmed.contains('.')
-                                            && trimmed
-                                                .chars()
-                                                .all(|c| c.is_ascii_digit() || c == '.' || c == '-')
-                                        {
-                                            RhsValueKind::Decimal(trimmed.to_string())
-                                        } else if let Ok(iv) = trimmed.parse::<i64>() {
-                                            RhsValueKind::Int(iv)
-                                        } else {
-                                            RhsValueKind::Const(trimmed.to_string())
-                                        };
-                                        where_value.push((lv, o, rhs_kind));
-                                    }
+                                    _ => {}
                                 }
                             }
-                            _ => {}
+                            if rhs_is_time {
+                                if let (Some(v), Some(o), Some(t)) =
+                                    (lhs_var.clone(), op.clone(), rhs_time)
+                                {
+                                    where_time.push((v, o, t));
+                                }
+                            } else if let (Some(lv), Some(o)) = (lhs_var.clone(), op.clone()) {
+                                if let Some(rv) = rhs_var.clone() {
+                                    // Defer classification: push to both time_var and value_var lists; execution will keep the valid kind.
+                                    where_time_var.push((lv.clone(), o.clone(), rv.clone()));
+                                    where_value_var.push((lv, o, rv));
+                                } else if let Some(raw) = rhs_raw.clone() {
+                                    let trimmed = raw.trim();
+                                    let rhs_kind = if trimmed.starts_with('"')
+                                        && trimmed.ends_with('"')
+                                    {
+                                        RhsValueKind::String(trimmed.trim_matches('"').to_string())
+                                    } else if trimmed.ends_with('%') {
+                                        if let Some(cpct) = parse_certainty_literal(trimmed) {
+                                            RhsValueKind::Cert(cpct)
+                                        } else {
+                                            RhsValueKind::Const(trimmed.to_string())
+                                        }
+                                    } else if trimmed.contains('.')
+                                        && trimmed
+                                            .chars()
+                                            .all(|c| c.is_ascii_digit() || c == '.' || c == '-')
+                                    {
+                                        RhsValueKind::Decimal(trimmed.to_string())
+                                    } else if let Ok(iv) = trimmed.parse::<i64>() {
+                                        RhsValueKind::Int(iv)
+                                    } else {
+                                        RhsValueKind::Const(trimmed.to_string())
+                                    };
+                                    where_value.push((lv, o, rhs_kind));
+                                }
+                            }
                         }
                     }
                 }
@@ -2334,12 +2254,11 @@ impl<'en> Engine<'en> {
                         *return_columns = Some(returns.clone());
                     }
                     // Emit meta as soon as we know the column set (only once per search)
-                    if first_time {
-                        if let Some(cols) = return_columns.as_ref() {
-                            if let SinkFlow::Stop = sink.on_meta(cols) {
-                                return;
-                            }
-                        }
+                    if first_time
+                        && let Some(cols) = return_columns.as_ref()
+                        && let SinkFlow::Stop = sink.on_meta(cols)
+                    {
+                        return;
                     }
                     if any_clause_failed {
                         return;
@@ -2472,7 +2391,6 @@ impl<'en> Engine<'en> {
                                         if op != "=" && op != "==" { if exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Unsupported comparison operator '{}' for value variables", op))); } false }
                                         else if l_type=="Certainty" && r_type=="Certainty" { l_text==r_text }
                                         else if (l_type=="i64"||l_type=="Decimal") && (r_type=="i64"||r_type=="Decimal") { use bigdecimal::BigDecimal; use std::str::FromStr; match (BigDecimal::from_str(&l_text), BigDecimal::from_str(&r_text)) { (Ok(lhs), Ok(rhs)) => cmp_bigdecimal(&lhs, &rhs, op), _ => false } }
-                                        else if l_type=="String" && r_type=="String" { l_text==r_text }
                                         else { l_text==r_text }
                                     };
                                     if !pass { return false; }
@@ -2535,12 +2453,11 @@ impl<'en> Engine<'en> {
                                     let lhs_val = if let Some(v) = val_string_opt { v } else { return false; };
                                     // Detect ordering mismatch: certainty value (by display pattern) vs int/decimal RHS lacking %.
                                     let ordering = matches!(op.as_str(), "<"|"<="|">"|">=");
-                                    if ordering {
-                                        if matches!(rhs, RhsValueKind::Int(_) | RhsValueKind::Decimal(_)) && (lhs_val == "1" || lhs_val == "-1" || lhs_val == "0" || lhs_val.starts_with("0.") || lhs_val.starts_with("-0.")) {
+                                    if ordering
+                                        && matches!(rhs, RhsValueKind::Int(_) | RhsValueKind::Decimal(_)) && (lhs_val == "1" || lhs_val == "-1" || lhs_val == "0" || lhs_val.starts_with("0.") || lhs_val.starts_with("-0.")) {
                                             if exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Ordering comparison requires a percent sign (%) for certainty variable '{}' (e.g. 75%)", lhs))); }
                                             return false;
                                         }
-                                    }
                                     // Comparison dispatch
                                     let pass = match rhs {
                                         RhsValueKind::Int(r) => {
@@ -2630,67 +2547,51 @@ impl<'en> Engine<'en> {
                                                         break;
                                                     }
                                                 } else {
-                                                    if allowed.contains("String") {
-                                                        if let Some(p) =
+                                                    if allowed.contains("String")
+                                                        && let Some(p) =
                                                             pk_guard.posit::<String>(*pid)
-                                                        {
-                                                            captured =
-                                                                Some(format!("{}", p.value()));
-                                                            types_row.push("String".into());
-                                                        }
+                                                    {
+                                                        captured = Some(p.value().to_string());
+                                                        types_row.push("String".into());
                                                     }
                                                     if captured.is_none()
                                                         && allowed.contains("JSON")
-                                                    {
-                                                        if let Some(p) =
+                                                        && let Some(p) =
                                                             pk_guard.posit::<JSON>(*pid)
-                                                        {
-                                                            captured =
-                                                                Some(format!("{}", p.value()));
-                                                            types_row.push("JSON".into());
-                                                        }
+                                                    {
+                                                        captured = Some(format!("{}", p.value()));
+                                                        types_row.push("JSON".into());
                                                     }
                                                     if captured.is_none()
                                                         && allowed.contains("Decimal")
-                                                    {
-                                                        if let Some(p) =
+                                                        && let Some(p) =
                                                             pk_guard.posit::<Decimal>(*pid)
-                                                        {
-                                                            captured =
-                                                                Some(format!("{}", p.value()));
-                                                            types_row.push("Decimal".into());
-                                                        }
-                                                    }
-                                                    if captured.is_none() && allowed.contains("i64")
                                                     {
-                                                        if let Some(p) = pk_guard.posit::<i64>(*pid)
-                                                        {
-                                                            captured =
-                                                                Some(format!("{}", p.value()));
-                                                            types_row.push("i64".into());
-                                                        }
+                                                        captured = Some(format!("{}", p.value()));
+                                                        types_row.push("Decimal".into());
+                                                    }
+                                                    if captured.is_none()
+                                                        && allowed.contains("i64")
+                                                        && let Some(p) = pk_guard.posit::<i64>(*pid)
+                                                    {
+                                                        captured = Some(format!("{}", p.value()));
+                                                        types_row.push("i64".into());
                                                     }
                                                     if captured.is_none()
                                                         && allowed.contains("Certainty")
-                                                    {
-                                                        if let Some(p) =
+                                                        && let Some(p) =
                                                             pk_guard.posit::<Certainty>(*pid)
-                                                        {
-                                                            captured =
-                                                                Some(format!("{}", p.value()));
-                                                            types_row.push("Certainty".into());
-                                                        }
+                                                    {
+                                                        captured = Some(format!("{}", p.value()));
+                                                        types_row.push("Certainty".into());
                                                     }
                                                     if captured.is_none()
                                                         && allowed.contains("Time")
-                                                    {
-                                                        if let Some(p) =
+                                                        && let Some(p) =
                                                             pk_guard.posit::<Time>(*pid)
-                                                        {
-                                                            captured =
-                                                                Some(format!("{}", p.value()));
-                                                            types_row.push("Time".into());
-                                                        }
+                                                    {
+                                                        captured = Some(format!("{}", p.value()));
+                                                        types_row.push("Time".into());
                                                     }
                                                 }
                                                 if let Some(cell) = captured {
@@ -2723,10 +2624,8 @@ impl<'en> Engine<'en> {
                                     }
                                 }
                             }
-                            if row_ok {
-                                if let SinkFlow::Stop = sink.push(row, types_row) {
-                                    break;
-                                }
+                            if row_ok && let SinkFlow::Stop = sink.push(row, types_row) {
+                                break;
                             }
                         }
                         info!(target:"positorium::stream", event="projection_complete");
@@ -2776,14 +2675,13 @@ impl<'en> Engine<'en> {
                     positives,
                     negatives: _,
                 } = err.variant
+                    && !positives.is_empty()
                 {
-                    if !positives.is_empty() {
-                        let mut expected: Vec<&'static str> =
-                            positives.iter().map(|r| friendly_rule_name(*r)).collect();
-                        expected.sort();
-                        expected.dedup();
-                        eprintln!("Expected one of: {}", expected.join(", "));
-                    }
+                    let mut expected: Vec<&'static str> =
+                        positives.iter().map(|r| friendly_rule_name(*r)).collect();
+                    expected.sort();
+                    expected.dedup();
+                    eprintln!("Expected one of: {}", expected.join(", "));
                 }
                 return;
             }
@@ -2831,19 +2729,19 @@ impl<'en> Engine<'en> {
         }
         impl RowSink for CollectSink {
             fn push(&mut self, row: Vec<String>, types: Vec<String>) -> SinkFlow {
-                if let Some(l) = self.limit {
-                    if self.rows.len() >= l {
-                        self.limited = true;
-                        return SinkFlow::Stop;
-                    }
+                if let Some(l) = self.limit
+                    && self.rows.len() >= l
+                {
+                    self.limited = true;
+                    return SinkFlow::Stop;
                 }
                 self.rows.push(row);
                 self.types.push(types);
-                if let Some(l) = self.limit {
-                    if self.rows.len() >= l {
-                        self.limited = true;
-                        return SinkFlow::Stop;
-                    }
+                if let Some(l) = self.limit
+                    && self.rows.len() >= l
+                {
+                    self.limited = true;
+                    return SinkFlow::Stop;
                 }
                 SinkFlow::Continue
             }
@@ -2865,14 +2763,13 @@ impl<'en> Engine<'en> {
                     positives,
                     negatives: _,
                 } = err.variant
+                    && !positives.is_empty()
                 {
-                    if !positives.is_empty() {
-                        let mut expected: Vec<&'static str> =
-                            positives.iter().map(|r| friendly_rule_name(*r)).collect();
-                        expected.sort();
-                        expected.dedup();
-                        msg.push_str(&format!("\nExpected one of: {}", expected.join(", ")));
-                    }
+                    let mut expected: Vec<&'static str> =
+                        positives.iter().map(|r| friendly_rule_name(*r)).collect();
+                    expected.sort();
+                    expected.dedup();
+                    msg.push_str(&format!("\nExpected one of: {}", expected.join(", ")));
                 }
                 return Err(DatabaseError::Parse {
                     message: msg,
@@ -2964,14 +2861,13 @@ impl<'en> Engine<'en> {
                     positives,
                     negatives: _,
                 } = err.variant
+                    && !positives.is_empty()
                 {
-                    if !positives.is_empty() {
-                        let mut expected: Vec<&'static str> =
-                            positives.iter().map(|r| friendly_rule_name(*r)).collect();
-                        expected.sort();
-                        expected.dedup();
-                        msg.push_str(&format!("\nExpected one of: {}", expected.join(", ")));
-                    }
+                    let mut expected: Vec<&'static str> =
+                        positives.iter().map(|r| friendly_rule_name(*r)).collect();
+                    expected.sort();
+                    expected.dedup();
+                    msg.push_str(&format!("\nExpected one of: {}", expected.join(", ")));
                 }
                 return Err(DatabaseError::Parse {
                     message: msg,
@@ -2997,19 +2893,19 @@ impl<'en> Engine<'en> {
                     }
                     impl RowSink for LocalSink {
                         fn push(&mut self, row: Vec<String>, types: Vec<String>) -> SinkFlow {
-                            if let Some(l) = self.limit {
-                                if self.rows.len() >= l {
-                                    self.limited = true;
-                                    return SinkFlow::Stop;
-                                }
+                            if let Some(l) = self.limit
+                                && self.rows.len() >= l
+                            {
+                                self.limited = true;
+                                return SinkFlow::Stop;
                             }
                             self.rows.push(row);
                             self.types.push(types);
-                            if let Some(l) = self.limit {
-                                if self.rows.len() >= l {
-                                    self.limited = true;
-                                    return SinkFlow::Stop;
-                                }
+                            if let Some(l) = self.limit
+                                && self.rows.len() >= l
+                            {
+                                self.limited = true;
+                                return SinkFlow::Stop;
                             }
                             SinkFlow::Continue
                         }
@@ -3087,14 +2983,13 @@ impl<'en> Engine<'en> {
                     positives,
                     negatives: _,
                 } = err.variant
+                    && !positives.is_empty()
                 {
-                    if !positives.is_empty() {
-                        let mut expected: Vec<&'static str> =
-                            positives.iter().map(|r| friendly_rule_name(*r)).collect();
-                        expected.sort();
-                        expected.dedup();
-                        msg.push_str(&format!("\nExpected one of: {}", expected.join(", ")));
-                    }
+                    let mut expected: Vec<&'static str> =
+                        positives.iter().map(|r| friendly_rule_name(*r)).collect();
+                    expected.sort();
+                    expected.dedup();
+                    msg.push_str(&format!("\nExpected one of: {}", expected.join(", ")));
                 }
                 return Err(DatabaseError::Parse {
                     message: msg,
@@ -3159,20 +3054,20 @@ impl<'en> Engine<'en> {
                             self.inner.on_meta(columns)
                         }
                         fn push(&mut self, row: Vec<String>, types: Vec<String>) -> SinkFlow {
-                            if let Some(l) = self.limit {
-                                if self.count >= l {
-                                    self.limited = true;
-                                    return SinkFlow::Stop;
-                                }
+                            if let Some(l) = self.limit
+                                && self.count >= l
+                            {
+                                self.limited = true;
+                                return SinkFlow::Stop;
                             }
                             match self.inner.push(row, types) {
                                 SinkFlow::Continue => {
                                     self.count += 1;
-                                    if let Some(l) = self.limit {
-                                        if self.count >= l {
-                                            self.limited = true;
-                                            return SinkFlow::Stop;
-                                        }
+                                    if let Some(l) = self.limit
+                                        && self.count >= l
+                                    {
+                                        self.limited = true;
+                                        return SinkFlow::Stop;
                                     }
                                     SinkFlow::Continue
                                 }

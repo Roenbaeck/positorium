@@ -199,12 +199,11 @@ impl DataType for Time {
 #[derive(Eq, PartialEq, PartialOrd, Ord, Clone)]
 pub struct JSON(Json);
 
-impl JSON {
-    pub fn from_str(s: &str) -> Option<JSON> {
-        match Json::from_str(s) {
-            Ok(json) => Some(JSON(json)),
-            _ => None,
-        }
+impl FromStr for JSON {
+    type Err = <Json as FromStr>::Err;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Json::from_str(s).map(JSON)
     }
 }
 #[cfg(feature = "persistence")]
@@ -288,13 +287,7 @@ pub struct Certainty {
 impl Certainty {
     pub fn new<T: Into<f64>>(a: T) -> Self {
         let a = a.into();
-        let a = if a < -1. {
-            -1.
-        } else if a > 1. {
-            1.
-        } else {
-            a
-        };
+        let a = a.clamp(-1., 1.);
         Self {
             alpha: (100f64 * a) as i8,
         }
@@ -381,7 +374,7 @@ impl From<Certainty> for f64 {
         r.alpha as f64 / 100f64
     }
 }
-impl<'a> From<&'a Certainty> for f64 {
+impl From<&Certainty> for f64 {
     fn from(r: &Certainty) -> f64 {
         r.alpha as f64 / 100f64
     }
@@ -405,12 +398,11 @@ impl FromSql for Certainty {
 #[derive(Eq, PartialEq, Hash, PartialOrd, Ord, Clone)]
 pub struct Decimal(BigDecimal);
 
-impl Decimal {
-    pub fn from_str(s: &str) -> Option<Decimal> {
-        match BigDecimal::from_str(s) {
-            Ok(decimal) => Some(Decimal(decimal)),
-            _ => None,
-        }
+impl FromStr for Decimal {
+    type Err = <BigDecimal as FromStr>::Err;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        BigDecimal::from_str(s).map(Decimal)
     }
 }
 impl fmt::Display for Decimal {
@@ -447,7 +439,7 @@ impl ops::DerefMut for Decimal {
 // TODO: We will use a specialized time type instead of the
 // trait constrained generic
 /// Hierarchical temporal points (abstract sentinels + concrete resolutions).
-#[derive(Eq, PartialEq, Ord, Debug, Hash, Clone)]
+#[derive(Eq, PartialEq, PartialOrd, Ord, Debug, Hash, Clone)]
 pub enum TimeType {
     // abstract time points
     BeginningOfTime,
@@ -457,12 +449,6 @@ pub enum TimeType {
     YearMonth(i32, u8),
     Date(NaiveDate),
     DateTime(NaiveDateTime),
-}
-
-impl PartialOrd for TimeType {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
 }
 
 /// Public temporal wrapper used in posits. Provides helper constructors.
@@ -730,28 +716,29 @@ impl Time {
                 return Some(Time::from_naive_datetime(dt));
             }
         }
-        if s.matches('-').count() == 2 && !s.contains(':') {
-            if NaiveDate::from_str(s).is_ok() {
-                return Some(Time::new_date_from(s));
-            }
+        if s.matches('-').count() == 2 && !s.contains(':') && NaiveDate::from_str(s).is_ok() {
+            return Some(Time::new_date_from(s));
         }
-        if s.matches('-').count() == 1 && !s.contains(':') {
-            if let Some((y, m)) = s.split_once('-') {
-                if y.chars().all(|c| c == '-' || c.is_ascii_digit())
-                    && m.chars().all(|c| c.is_ascii_digit())
-                {
-                    if let Ok(mm) = m.parse::<u8>() {
-                        if (1..=12).contains(&mm) {
-                            return Some(Time::new_year_month_from(s));
-                        }
-                    }
-                }
-            }
+        if s.matches('-').count() == 1
+            && !s.contains(':')
+            && let Some((y, m)) = s.split_once('-')
+            && y.chars().all(|c| c == '-' || c.is_ascii_digit())
+            && m.chars().all(|c| c.is_ascii_digit())
+            && let Ok(mm) = m.parse::<u8>()
+            && (1..=12).contains(&mm)
+        {
+            return Some(Time::new_year_month_from(s));
         }
         if s.chars().all(|c| c == '-' || c.is_ascii_digit()) && (4..=8).contains(&s.len()) {
             return Some(Time::new_year_from(s));
         }
         None
+    }
+}
+
+impl Default for Time {
+    fn default() -> Self {
+        Self::new()
     }
 }
 impl fmt::Display for Time {

@@ -25,8 +25,14 @@ use crate::traqula::Engine;
 pub struct Row(pub String);
 
 /// Cancellation token shared with the worker thread.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CancelToken(Arc<AtomicBool>);
+impl Default for CancelToken {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CancelToken {
     pub fn new() -> Self {
         Self(Arc::new(AtomicBool::new(false)))
@@ -36,9 +42,6 @@ impl CancelToken {
     }
     pub fn is_cancelled(&self) -> bool {
         self.0.load(Ordering::Relaxed)
-    }
-    pub fn clone(&self) -> Self {
-        Self(Arc::clone(&self.0))
     }
 }
 
@@ -138,10 +141,10 @@ impl QueryInterface {
         let join = std::thread::spawn(move || {
             let engine = Engine::new(&db);
             // For now, execute monolithically; cancellation checked pre/post.
-            if let Some(d) = timeout {
-                if d.is_zero() || cancel_for_thread.is_cancelled() {
-                    return;
-                }
+            if let Some(d) = timeout
+                && (d.is_zero() || cancel_for_thread.is_cancelled())
+            {
+                return;
             }
             engine.execute(&script);
             let _ = tx; // placeholder to avoid unused warning when not streaming
