@@ -47,7 +47,7 @@
 //! `persist.rs` (see MAINTENANCE comments there).
 // used for persistence
 #[cfg(feature = "persistence")]
-use rusqlite::types::{FromSql, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
+use rusqlite::types::{FromSql, FromSqlResult, ToSql, ToSqlOutput, Value, ValueRef};
 
 // used for timestamps in the database
 use chrono::{Datelike, NaiveDate, NaiveDateTime, Timelike, Utc};
@@ -65,6 +65,7 @@ use std::hash::{Hash, Hasher};
 // used to overload common operations for datatypes
 use std::ops;
 
+use crate::literal::{LiteralFamily, LiteralValue};
 #[cfg(feature = "persistence")]
 use crate::traqula::parse_time;
 
@@ -191,6 +192,31 @@ impl DataType for Time {
         Time::parse_persisted(raw)
             .or_else(|| parse_time(raw))
             .ok_or_else(|| format!("unrecognized persisted time literal '{raw}'"))
+    }
+}
+impl DataType for LiteralValue {
+    const UID: u8 = 9;
+    const DATA_TYPE: &'static str = "LiteralValue";
+    #[cfg(feature = "persistence")]
+    fn convert(value: &ValueRef) -> std::result::Result<LiteralValue, String> {
+        let encoded = value.as_blob().map_err(|error| error.to_string())?;
+        let (&family, token) = encoded
+            .split_first()
+            .ok_or_else(|| "empty LiteralValue encoding".to_string())?;
+        let family = LiteralFamily::from_identifier(family)
+            .ok_or_else(|| format!("unknown literal family {family}"))?;
+        let token = std::str::from_utf8(token).map_err(|error| error.to_string())?;
+        LiteralValue::new(token, family)
+    }
+}
+
+#[cfg(feature = "persistence")]
+impl ToSql for LiteralValue {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        let mut encoded = Vec::with_capacity(self.token().len() + 1);
+        encoded.push(self.family().identifier());
+        encoded.extend_from_slice(self.token().as_bytes());
+        Ok(ToSqlOutput::Owned(Value::Blob(encoded)))
     }
 }
 

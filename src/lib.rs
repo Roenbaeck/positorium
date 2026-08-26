@@ -64,6 +64,7 @@ pub mod construct;
 pub mod datatype;
 pub mod error;
 pub mod interface;
+pub mod literal;
 #[cfg(feature = "persistence")]
 pub mod persist;
 #[cfg(feature = "server")]

@@ -38,6 +38,7 @@ const GENESIS_HASH: &str = "0000000000000000000000000000000000000000000000000000
 // our own stuff
 use crate::construct::{Appearance, AppearanceSet, Database, Posit, Role, Thing};
 use crate::datatype::{Certainty, DataType, Decimal, JSON, Time};
+use crate::literal::LiteralValue;
 use chrono::{NaiveDate, NaiveDateTime};
 
 // ------------- Persistence -------------
@@ -467,6 +468,16 @@ impl Persistor {
                     let v = <Certainty as DataType>::convert(&value_ref).map_err(|error| {
                         DatabaseError::DataCorruption {
                             message: format!("Bad Certainty value for posit {thing}: {error}"),
+                        }
+                    })?;
+                    db.keep_posit(Posit::new(thing, kept_appearance_set, v, time.clone()));
+                }
+                LiteralValue::DATA_TYPE => {
+                    let v = <LiteralValue as DataType>::convert(&value_ref).map_err(|error| {
+                        DatabaseError::DataCorruption {
+                            message: format!(
+                                "Bad lossless literal value for posit {thing}: {error}"
+                            ),
                         }
                     })?;
                     db.keep_posit(Posit::new(thing, kept_appearance_set, v, time.clone()));

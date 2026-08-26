@@ -66,6 +66,38 @@ fn file_mode_persists_and_has_ledger() {
 
 #[test]
 #[cfg(feature = "persistence")]
+fn lossless_literal_token_survives_sqlite_prototype_restart() {
+    use positorium::datatype::Time;
+    use positorium::literal::{LiteralFamily, LiteralValue};
+
+    let path = temporary_database_path("literal-token");
+    let posit_id = {
+        let db = Database::new(PersistenceMode::File(path.clone())).expect("create database");
+        let (role, _) = db.create_role("amount".to_string(), false);
+        let thing = db.create_thing();
+        let (appearance, _) = db.create_appearance(*thing, role);
+        let (appearance_set, _) = db.create_appearance_set(vec![appearance]).unwrap();
+        let literal = LiteralValue::new("+001.00", LiteralFamily::Decimal).unwrap();
+        db.create_posit(appearance_set, literal, Time::new_date_from("2026-08-26"))
+            .posit()
+    };
+
+    let restored = Database::new(PersistenceMode::File(path.clone())).expect("restore database");
+    let restored_literal = restored
+        .posit_keeper()
+        .lock()
+        .unwrap()
+        .posit::<LiteralValue>(posit_id)
+        .expect("lossless literal posit restored");
+    assert_eq!(restored_literal.value().token(), "+001.00");
+    assert_eq!(restored_literal.value().family(), LiteralFamily::Decimal);
+
+    drop(restored);
+    remove_database_files(&path);
+}
+
+#[test]
+#[cfg(feature = "persistence")]
 fn restores_all_builtin_date_value_types() {
     use chrono::{NaiveDate, NaiveDateTime};
 
