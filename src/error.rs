@@ -31,11 +31,3 @@ pub enum DatabaseError {
 }
 
 pub type Result<T> = std::result::Result<T, DatabaseError>;
-
-// Helper conversions
-#[cfg(feature = "persistence")]
-impl From<rusqlite::Error> for DatabaseError {
-    fn from(e: rusqlite::Error) -> Self {
-        Self::Persistence(e.to_string())
-    }
-}

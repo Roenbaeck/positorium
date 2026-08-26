@@ -45,7 +45,7 @@
 //! are currently parsed but not yet materialized into final query outputs.
 //! Debug logging is gated behind `cfg(debug_assertions)` where appropriate.
 use crate::construct::{Database, OtherHasher, Thing};
-use crate::datatype::{Certainty, Decimal, JSON, Time};
+use crate::datatype::Time;
 use crate::error::DatabaseError;
 use crate::literal::{LiteralFamily, LiteralValue};
 use chrono::NaiveDateTime; // needed for defensive datetime validation in parse_time
@@ -839,7 +839,7 @@ impl<'en> Engine<'en> {
         for command in pairs {
             execution.check()?;
             match command.as_rule() {
-                Rule::add_role => self.add_role(command),
+                Rule::add_role => self.add_role(command)?,
                 Rule::add_posit => self.add_posit(
                     command,
                     &mut variables,
@@ -914,11 +914,16 @@ impl<'en> Engine<'en> {
         Ok((return_columns.unwrap_or_default(), limited, total_rows))
     }
     /// Handle an `add role` command.
-    fn add_role(&self, command: Pair<Rule>) {
+    fn add_role(&self, command: Pair<Rule>) -> Result<(), DatabaseError> {
+        let names: Vec<String> = command
+            .into_inner()
+            .map(|role| role.as_str().trim().to_string())
+            .collect();
+        let kept = self
+            .database
+            .create_roles(names.iter().cloned().map(|name| (name, false)).collect())?;
         let mut added = 0usize;
-        for role in command.into_inner() {
-            let name = role.as_str().trim();
-            let (_r, existed) = self.database.create_role(name.to_string(), false);
+        for (name, (_role, existed)) in names.iter().zip(kept) {
             if !existed {
                 added += 1;
                 info!(target: "positorium::traqula", event="add_role", role=name, "role added");
@@ -929,6 +934,7 @@ impl<'en> Engine<'en> {
         if added > 0 {
             info!(target: "positorium::traqula", event="add_role_batch", added, "roles batch added");
         }
+        Ok(())
     }
     /// Handle an `add posit` command producing one or more posits.
     fn add_posit(
@@ -938,10 +944,11 @@ impl<'en> Engine<'en> {
         resolved_now: &Time,
         execution: &ExecutionContext,
     ) -> Result<(), DatabaseError> {
+        let mut pending = Vec::new();
+        let mut result_bindings = Vec::new();
         for structure in command.into_inner() {
             execution.check()?;
             let mut variable: Option<String> = None;
-            let mut posits: Vec<Thing> = Vec::new();
             let mut value: Option<LiteralValue> = None;
             let mut time: Option<Time> = None;
             let mut local_variables = Vec::new();
@@ -1129,38 +1136,42 @@ impl<'en> Engine<'en> {
                         )
                     })?;
 
+                    let start = pending.len();
                     for appearance_set in appearance_sets {
                         execution.check()?;
-                        let kept_posit = self.database.create_posit(
-                            appearance_set,
-                            value.clone(),
-                            time_value.clone(),
-                        );
-                        posits.push(kept_posit.posit());
+                        pending.push((appearance_set, value.clone(), time_value.clone()));
                     }
-                    if !posits.is_empty() {
-                        info!(target: "positorium::traqula", event="add_posit", created=posits.len(), roles=%roles_ord.join(","), value_family=?value.family(), "posits created");
+                    let end = pending.len();
+                    if end > start {
+                        info!(target: "positorium::traqula", event="add_posit_queued", count=end - start, roles=%roles_ord.join(","), value_family=?value.family(), "posits queued for command commit");
                     }
+                    result_bindings.push((variable.take(), start..end));
                 }
                 _ => println!("Unknown structure: {:?}", structure),
             }
+        }
+        let kept = self.database.create_literal_posits(pending)?;
+        for (variable, range) in result_bindings {
             if let Some(variable) = variable {
                 match variables.entry(variable) {
                     Entry::Vacant(entry) => {
                         let mut result_set = ResultSet::new();
-                        for posit in posits {
-                            result_set.insert(posit);
+                        for posit in &kept[range.clone()] {
+                            result_set.insert(posit.posit());
                         }
                         entry.insert(result_set);
                     }
                     Entry::Occupied(mut entry) => {
                         let result_set = entry.get_mut();
-                        for posit in posits {
-                            result_set.insert(posit);
+                        for posit in &kept[range] {
+                            result_set.insert(posit.posit());
                         }
                     }
                 }
             }
+        }
+        if !kept.is_empty() {
+            info!(target: "positorium::traqula", event="add_posit_commit", count=kept.len(), "posit command committed");
         }
         Ok(())
     }
@@ -1672,48 +1683,24 @@ impl<'en> Engine<'en> {
                                         if let Some(expected) = _value_as_literal.as_ref() {
                                             let mut filtered = RoaringTreemap::new();
                                             let pk = self.database.posit_keeper();
-                                            let tp = self.database.role_name_to_data_type_lookup();
                                             let mut pk_guard = pk.lock().unwrap();
-                                            let tp_guard = tp.lock().unwrap();
-                                            let aset_lk = self
-                                                .database
-                                                .posit_thing_to_appearance_set_lookup();
-                                            let aset_guard = aset_lk.lock().unwrap();
                                             for id in cands.iter() {
                                                 if interrupted(execution, exec_error) {
                                                     return;
                                                 }
-                                                if let Some(aset) = aset_guard.get(&id) {
-                                                    let mut role_names: Vec<String> = aset
-                                                        .appearances()
-                                                        .iter()
-                                                        .map(|a| a.role().name().to_string())
-                                                        .collect();
-                                                    role_names.sort();
-                                                    let Some(allowed) =
-                                                        tp_guard.lookup(&role_names)
-                                                    else {
-                                                        continue;
-                                                    };
-                                                    let matches = if allowed
-                                                        .contains("LiteralValue")
-                                                        && let Some(p) =
-                                                            pk_guard.posit::<LiteralValue>(id)
-                                                    {
-                                                        match p.value().nominally_equals(expected) {
-                                                            Ok(matches) => matches,
-                                                            Err(error) => {
-                                                                *exec_error = Some(
-                                                                    DatabaseError::Execution(error),
-                                                                );
-                                                                return;
-                                                            }
+                                                if let Some(p) = pk_guard.posit::<LiteralValue>(id)
+                                                {
+                                                    match p.value().nominally_equals(expected) {
+                                                        Ok(true) => {
+                                                            filtered.insert(id);
                                                         }
-                                                    } else {
-                                                        false
-                                                    };
-                                                    if matches {
-                                                        filtered.insert(id);
+                                                        Ok(false) => {}
+                                                        Err(error) => {
+                                                            *exec_error = Some(
+                                                                DatabaseError::Execution(error),
+                                                            );
+                                                            return;
+                                                        }
                                                     }
                                                 }
                                             }
@@ -2515,12 +2502,8 @@ impl<'en> Engine<'en> {
                             }
                         }
                         let posit_keeper = self.database.posit_keeper();
-                        let aset_lookup = self.database.posit_thing_to_appearance_set_lookup();
-                        let type_partitions = self.database.role_name_to_data_type_lookup();
                         let time_lookup = self.database.posit_time_lookup();
                         let mut pk_guard = posit_keeper.lock().unwrap();
-                        let aset_guard = aset_lookup.lock().unwrap();
-                        let tp_guard = type_partitions.lock().unwrap();
                         let time_guard = time_lookup.lock().unwrap();
 
                         // Column-level inference removed; we now collect a per-row types vector.
@@ -2554,91 +2537,25 @@ impl<'en> Engine<'en> {
                                     }
                                     Some(VarKind::Value) | Some(VarKind::Time) => {
                                         if let Some((pid, kind)) = b.value_slots.get(rv) {
-                                            if let Some(appset) = aset_guard.get(pid) {
-                                                let roles = appset.roles();
-                                                let allowed = tp_guard
-                                                    .lookup(&roles)
-                                                    .cloned()
-                                                    .unwrap_or_default();
-                                                let mut captured: Option<String> = None;
-                                                if *kind == VarKind::Time {
-                                                    if let Some(pt) = time_guard.get(pid) {
-                                                        captured = Some(format!("{}", pt));
-                                                        types_row.push("Time".into());
-                                                    } else {
-                                                        row_ok = false; // missing time (should not happen)
-                                                        break;
-                                                    }
+                                            let captured = if *kind == VarKind::Time {
+                                                if let Some(pt) = time_guard.get(pid) {
+                                                    types_row.push("Time".into());
+                                                    Some(pt.to_string())
                                                 } else {
-                                                    if allowed.contains("LiteralValue")
-                                                        && let Some(p) =
-                                                            pk_guard.posit::<LiteralValue>(*pid)
-                                                    {
-                                                        captured =
-                                                            Some(p.value().token().to_string());
-                                                        types_row.push("Literal".into());
-                                                    }
-                                                    if captured.is_none()
-                                                        && allowed.contains("String")
-                                                        && let Some(p) =
-                                                            pk_guard.posit::<String>(*pid)
-                                                    {
-                                                        captured = Some(p.value().to_string());
-                                                        types_row.push("String".into());
-                                                    }
-                                                    if captured.is_none()
-                                                        && allowed.contains("JSON")
-                                                        && let Some(p) =
-                                                            pk_guard.posit::<JSON>(*pid)
-                                                    {
-                                                        captured = Some(format!("{}", p.value()));
-                                                        types_row.push("JSON".into());
-                                                    }
-                                                    if captured.is_none()
-                                                        && allowed.contains("Decimal")
-                                                        && let Some(p) =
-                                                            pk_guard.posit::<Decimal>(*pid)
-                                                    {
-                                                        captured = Some(format!("{}", p.value()));
-                                                        types_row.push("Decimal".into());
-                                                    }
-                                                    if captured.is_none()
-                                                        && allowed.contains("i64")
-                                                        && let Some(p) = pk_guard.posit::<i64>(*pid)
-                                                    {
-                                                        captured = Some(format!("{}", p.value()));
-                                                        types_row.push("i64".into());
-                                                    }
-                                                    if captured.is_none()
-                                                        && allowed.contains("Certainty")
-                                                        && let Some(p) =
-                                                            pk_guard.posit::<Certainty>(*pid)
-                                                    {
-                                                        captured = Some(format!("{}", p.value()));
-                                                        types_row.push("Certainty".into());
-                                                    }
-                                                    if captured.is_none()
-                                                        && allowed.contains("Time")
-                                                        && let Some(p) =
-                                                            pk_guard.posit::<Time>(*pid)
-                                                    {
-                                                        captured = Some(format!("{}", p.value()));
-                                                        types_row.push("Time".into());
-                                                    }
+                                                    None
                                                 }
-                                                if let Some(cell) = captured {
-                                                    row.push(cell);
-                                                    if types_row.len() < row.len() {
-                                                        types_row.push("Unknown".into());
-                                                    }
-                                                } else {
-                                                    info!(target:"positorium::stream", event="row_skip", reason="no_capture", var=%rv);
-                                                    row_ok = false;
-                                                    break;
-                                                }
+                                            } else if let Some(p) =
+                                                pk_guard.posit::<LiteralValue>(*pid)
+                                            {
+                                                types_row.push("Literal".into());
+                                                Some(p.value().token().to_string())
                                             } else {
-                                                // aset_guard.get(pid) None
-                                                info!(target:"positorium::stream", event="row_skip", reason="missing_aset", pid=*pid, var=%rv);
+                                                None
+                                            };
+                                            if let Some(cell) = captured {
+                                                row.push(cell);
+                                            } else {
+                                                info!(target:"positorium::stream", event="row_skip", reason="no_capture", var=%rv);
                                                 row_ok = false;
                                                 break;
                                             }
@@ -2724,7 +2641,12 @@ impl<'en> Engine<'en> {
                 return;
             }
             match command.as_rule() {
-                Rule::add_role => self.add_role(command),
+                Rule::add_role => {
+                    if let Err(error) = self.add_role(command) {
+                        eprintln!("{error}");
+                        return;
+                    }
+                }
                 Rule::add_posit => {
                     if let Err(error) = self.add_posit(
                         command,
@@ -2819,7 +2741,7 @@ impl<'en> Engine<'en> {
         for command in traqula {
             execution.check()?;
             match command.as_rule() {
-                Rule::add_role => self.add_role(command),
+                Rule::add_role => self.add_role(command)?,
                 Rule::add_posit => {
                     self.add_posit(command, &mut variables, &metadata.resolved_now, &execution)?;
                 }
@@ -2920,7 +2842,7 @@ impl<'en> Engine<'en> {
         for command in traqula {
             execution.check()?;
             match command.as_rule() {
-                Rule::add_role => self.add_role(command),
+                Rule::add_role => self.add_role(command)?,
                 Rule::add_posit => {
                     self.add_posit(command, &mut variables, &metadata.resolved_now, &execution)?;
                 }
@@ -3052,7 +2974,7 @@ impl<'en> Engine<'en> {
         for command in pairs {
             execution.check()?;
             match command.as_rule() {
-                Rule::add_role => self.add_role(command),
+                Rule::add_role => self.add_role(command)?,
                 Rule::add_posit => {
                     self.add_posit(
                         command,

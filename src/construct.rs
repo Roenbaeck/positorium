@@ -20,20 +20,23 @@
 //! ```
 //! use positorium::construct::{Database, PersistenceMode};
 //! use positorium::datatype::Time;
-//! // Pure in-memory (no SQLite persistence)
+//! // Pure in-memory (no file persistence)
 //! let db = Database::new(PersistenceMode::InMemory).unwrap();
-//! let (role, _) = db.create_role("person".to_string(), false);
-//! let thing = db.create_thing();
+//! let (role, _) = db.create_role("person".to_string(), false).unwrap();
+//! let thing = db.create_thing().unwrap();
 //! let (appearance, _) = db.create_appearance(*thing, role);
 //! let (appearance_set, _) = db.create_appearance_set(vec![appearance]).unwrap();
 //! let time = Time::new();
-//! let posit = db.create_posit(appearance_set, String::from("Alice"), time.clone());
+//! let posit = db.create_posit(appearance_set, String::from("Alice"), time.clone()).unwrap();
 //! assert_eq!(posit.value(), &"Alice".to_string());
 //! ```
 use crate::datatype::{DataType, Time};
 use crate::error::DatabaseError;
+use crate::literal::LiteralValue;
 #[cfg(feature = "persistence")]
-use crate::persist::Persistor;
+use crate::storage::{
+    LogStore, ReplayedStore, StoreBackend, posit_record_parts, raw_codec_record, role_record,
+};
 use bimap::BiMap;
 use core::hash::{BuildHasher, BuildHasherDefault, Hasher};
 use roaring::RoaringTreemap;
@@ -46,8 +49,6 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::hash::Hash;
 use std::sync::{Arc, Mutex};
-#[cfg(feature = "persistence")]
-use tracing::warn;
 use unicode_normalization::UnicodeNormalization;
 
 /// Internal heterogeneous map keyed by `TypeId` used for storing per-value
@@ -440,10 +441,7 @@ impl<V: DataType> fmt::Display for Posit<V> {
         write!(
             f,
             "{} [{}, {}, {}]",
-            self.posit,
-            self.appearance_set,
-            self.value.to_string() + "::<" + self.value.data_type() + ">",
-            self.time.to_string() + "::<" + self.time.data_type() + ">"
+            self.posit, self.appearance_set, self.value, self.time
         )
     }
 }
@@ -468,6 +466,13 @@ impl PositKeeper {
         }
     }
     pub fn keep<V: 'static + DataType>(&mut self, posit: Posit<V>) -> (Arc<Posit<V>>, bool) {
+        self.keep_arc(Arc::new(posit))
+    }
+
+    fn keep_arc<V: 'static + DataType>(
+        &mut self,
+        keepsake: Arc<Posit<V>>,
+    ) -> (Arc<Posit<V>>, bool) {
         // ensure the map can work with this particular type combo
         let map = if let Some(m) = self.kept.get_mut::<BiMap<Arc<Posit<V>>, Thing>>() {
             m
@@ -476,8 +481,7 @@ impl PositKeeper {
                 .insert::<BiMap<Arc<Posit<V>>, Thing>>(BiMap::<Arc<Posit<V>>, Thing>::new());
             self.kept.get_mut::<BiMap<Arc<Posit<V>>, Thing>>().unwrap()
         };
-        let keepsake_thing = posit.posit();
-        let keepsake = Arc::new(posit);
+        let keepsake_thing = keepsake.posit();
         let mut previously_kept = false;
         let thing = match map.get_by_left(&keepsake) {
             Some(kept_thing) => {
@@ -494,6 +498,21 @@ impl PositKeeper {
             Arc::clone(map.get_by_right(thing).unwrap()),
             previously_kept,
         )
+    }
+
+    fn existing<V: 'static + DataType>(
+        &mut self,
+        candidate: &Arc<Posit<V>>,
+    ) -> Option<Arc<Posit<V>>> {
+        let identity = self
+            .kept
+            .get_mut::<BiMap<Arc<Posit<V>>, Thing>>()
+            .and_then(|map| map.get_by_left(candidate))
+            .copied()?;
+        self.kept
+            .get_mut::<BiMap<Arc<Posit<V>>, Thing>>()?
+            .get_by_right(&identity)
+            .map(Arc::clone)
     }
     /// Returns the Thing id for a kept posit, or None if not found in the keeper.
     pub fn thing<V: 'static + DataType>(&mut self, posit: Arc<Posit<V>>) -> Option<Thing> {
@@ -592,7 +611,7 @@ pub type AppearanceSetLookup = Lookup<Arc<Appearance>, Arc<AppearanceSet>, Other
 pub enum PersistenceMode {
     /// Ephemeral engine: nothing is written, all data lost when dropped.
     InMemory,
-    /// File-backed persistence using a SQLite database at the provided path.
+    /// File-backed persistence using the append-only store directory at the provided path.
     #[cfg(feature = "persistence")]
     File(String),
 }
@@ -629,20 +648,23 @@ pub struct Database {
     /// Reverse lookup: posit thing -> its appearance set (type-erased from value/time).
     pub posit_thing_to_appearance_set_lookup:
         Arc<Mutex<HashMap<Thing, Arc<AppearanceSet>, ThingHasher>>>,
-    pub role_name_to_data_type_lookup: Arc<Mutex<Lookup<Vec<String>, String, OtherHasher>>>,
     /// Type-erased index: posit thing -> its time (for generic time filtering)
     pub posit_time_lookup: Arc<Mutex<HashMap<Thing, Time, ThingHasher>>>,
-    // responsible for the the persistence layer
+    // Append-only persistence owner. `None` is the in-memory mode.
     #[cfg(feature = "persistence")]
-    pub persistor: Arc<Mutex<Persistor>>,
+    store: Arc<Mutex<Option<LogStore>>>,
 }
 
 impl Database {
     pub fn new(mode: PersistenceMode) -> Result<Database, DatabaseError> {
         #[cfg(feature = "persistence")]
-        let persistor = match mode {
-            PersistenceMode::InMemory => Persistor::new_no_persistence(),
-            PersistenceMode::File(path) => Persistor::new_from_file(&path)?,
+        let (store, replayed) = match mode {
+            PersistenceMode::InMemory => (None, None),
+            PersistenceMode::File(path) => {
+                let store = LogStore::open(&path)?;
+                let replayed = store.replay_logical()?;
+                (Some(store), Some(replayed))
+            }
         };
         #[cfg(not(feature = "persistence"))]
         let _ = mode;
@@ -657,7 +679,6 @@ impl Database {
         let appearance_to_appearance_set_lookup = Lookup::new();
         let appearance_set_to_posit_thing_lookup = ThingLookup::new();
         let role_to_posit_thing_lookup = ThingLookup::new();
-        let role_name_to_data_type_lookup = Lookup::new();
         let posit_thing_to_appearance_set_lookup: HashMap<Thing, Arc<AppearanceSet>, ThingHasher> =
             HashMap::default();
         let posit_time_lookup: HashMap<Thing, Time, ThingHasher> = HashMap::default();
@@ -680,29 +701,122 @@ impl Database {
             posit_thing_to_appearance_set_lookup: Arc::new(Mutex::new(
                 posit_thing_to_appearance_set_lookup,
             )),
-            role_name_to_data_type_lookup: Arc::new(Mutex::new(role_name_to_data_type_lookup)),
             posit_time_lookup: Arc::new(Mutex::new(posit_time_lookup)),
             #[cfg(feature = "persistence")]
-            persistor: Arc::new(Mutex::new(persistor)),
+            store: Arc::new(Mutex::new(store)),
         };
 
-        // Restore is all-or-error: never return a partially hydrated database.
         #[cfg(feature = "persistence")]
+        if let Some(replayed) = replayed {
+            if replayed.roles.is_empty() && replayed.posits.is_empty() && !replayed.has_raw_codec {
+                database.bootstrap_append_store()?;
+            } else {
+                database.restore_append_store(replayed)?;
+            }
+        }
+        #[cfg(not(feature = "persistence"))]
         {
-            let mut persistor = database
-                .persistor
-                .lock()
-                .map_err(|e| DatabaseError::Lock(e.to_string()))?;
-            persistor.restore_things(&database)?;
-            persistor.restore_roles(&database)?;
-            persistor.restore_posits(&database)?;
-            persistor.verify_integrity()?;
+            database.ensure_builtin_role(POSIT_ROLE_ID, "posit")?;
+            database.ensure_builtin_role(ASCERTAINS_ROLE_ID, "ascertains")?;
+        }
+        #[cfg(feature = "persistence")]
+        if database
+            .role_keeper
+            .lock()
+            .map_err(|error| DatabaseError::Lock(error.to_string()))?
+            .is_empty()
+        {
+            database.ensure_builtin_role(POSIT_ROLE_ID, "posit")?;
+            database.ensure_builtin_role(ASCERTAINS_ROLE_ID, "ascertains")?;
         }
 
-        database.ensure_builtin_role(POSIT_ROLE_ID, "posit")?;
-        database.ensure_builtin_role(ASCERTAINS_ROLE_ID, "ascertains")?;
-
         Ok(database)
+    }
+
+    #[cfg(feature = "persistence")]
+    fn bootstrap_append_store(&self) -> Result<(), DatabaseError> {
+        let posit = Role::new(POSIT_ROLE_ID, "posit".to_string(), true);
+        let ascertains = Role::new(ASCERTAINS_ROLE_ID, "ascertains".to_string(), true);
+        let records = vec![
+            role_record(&posit),
+            role_record(&ascertains),
+            raw_codec_record(),
+        ];
+        self.store
+            .lock()
+            .map_err(|error| DatabaseError::Lock(error.to_string()))?
+            .as_mut()
+            .ok_or_else(|| DatabaseError::Invariant("persistent store is absent".to_string()))?
+            .append_batch(&records)?;
+        self.thing_generator
+            .lock()
+            .map_err(|error| DatabaseError::Lock(error.to_string()))?
+            .retain(POSIT_ROLE_ID);
+        self.thing_generator
+            .lock()
+            .map_err(|error| DatabaseError::Lock(error.to_string()))?
+            .retain(ASCERTAINS_ROLE_ID);
+        self.keep_role(posit);
+        self.keep_role(ascertains);
+        Ok(())
+    }
+
+    #[cfg(feature = "persistence")]
+    fn restore_append_store(&self, replayed: ReplayedStore) -> Result<(), DatabaseError> {
+        if !replayed.has_raw_codec {
+            return Err(DatabaseError::DataCorruption {
+                message: "append-only store lacks the mandatory raw codec".to_string(),
+            });
+        }
+        for role in replayed.roles {
+            self.thing_generator
+                .lock()
+                .map_err(|error| DatabaseError::Lock(error.to_string()))?
+                .retain(role.identity);
+            let (_, existed) = self.keep_role(Role::new(role.identity, role.name, role.reserved));
+            if existed {
+                return Err(DatabaseError::DataCorruption {
+                    message: "duplicate Role survived logical replay".to_string(),
+                });
+            }
+        }
+        for posit in replayed.posits {
+            let mut appearances = Vec::with_capacity(posit.appearances.len());
+            for (role_identity, thing) in posit.appearances {
+                let role = self
+                    .role_keeper
+                    .lock()
+                    .map_err(|error| DatabaseError::Lock(error.to_string()))?
+                    .lookup(&role_identity)
+                    .ok_or_else(|| DatabaseError::DataCorruption {
+                        message: format!("missing replayed Role {role_identity}"),
+                    })?;
+                self.thing_generator
+                    .lock()
+                    .map_err(|error| DatabaseError::Lock(error.to_string()))?
+                    .retain(thing);
+                appearances.push(self.keep_appearance(Appearance::new(thing, role)).0);
+            }
+            let appearance_set = self.create_appearance_set(appearances)?.0;
+            self.thing_generator
+                .lock()
+                .map_err(|error| DatabaseError::Lock(error.to_string()))?
+                .retain(posit.identity);
+            let (_, existed) = self.keep_posit(Posit::new(
+                posit.identity,
+                appearance_set,
+                posit.value,
+                posit.time,
+            ));
+            if existed {
+                return Err(DatabaseError::DataCorruption {
+                    message: "duplicate Posit survived logical replay".to_string(),
+                });
+            }
+        }
+        self.ensure_builtin_role(POSIT_ROLE_ID, "posit")?;
+        self.ensure_builtin_role(ASCERTAINS_ROLE_ID, "ascertains")?;
+        Ok(())
     }
     // functions to access the owned generator and keepers
     pub fn thing_generator(&self) -> Arc<Mutex<ThingGenerator>> {
@@ -728,11 +842,6 @@ impl Database {
     pub fn role_to_appearance_lookup(&self) -> Arc<Mutex<RoleAppearanceLookup>> {
         Arc::clone(&self.role_to_appearance_lookup)
     }
-    pub fn role_name_to_data_type_lookup(
-        &self,
-    ) -> Arc<Mutex<Lookup<Vec<String>, String, OtherHasher>>> {
-        Arc::clone(&self.role_name_to_data_type_lookup)
-    }
     pub fn appearance_to_appearance_set_lookup(&self) -> Arc<Mutex<AppearanceSetLookup>> {
         Arc::clone(&self.appearance_to_appearance_set_lookup)
     }
@@ -752,13 +861,34 @@ impl Database {
     pub fn posit_time_lookup(&self) -> Arc<Mutex<HashMap<Thing, Time, ThingHasher>>> {
         Arc::clone(&self.posit_time_lookup)
     }
-    pub fn create_thing(&self) -> Arc<Thing> {
-        let thing = self.thing_generator.lock().unwrap().generate();
+
+    pub fn flush(&self) -> Result<(), DatabaseError> {
         #[cfg(feature = "persistence")]
-        if let Err(e) = self.persistor.lock().unwrap().persist_thing(&thing) {
-            warn!(?e, "persist_thing failed");
+        if let Some(store) = self
+            .store
+            .lock()
+            .map_err(|error| DatabaseError::Lock(error.to_string()))?
+            .as_mut()
+        {
+            store.flush()?;
         }
-        Arc::new(thing)
+        Ok(())
+    }
+    pub fn create_thing(&self) -> Result<Arc<Thing>, DatabaseError> {
+        #[cfg(feature = "persistence")]
+        if self
+            .store
+            .lock()
+            .map_err(|error| DatabaseError::Lock(error.to_string()))?
+            .is_some()
+        {
+            return Err(DatabaseError::Execution(
+                "standalone Thing allocation is not durable in the beta store; allocate through a role or posit command"
+                    .to_string(),
+            ));
+        }
+        let thing = self.thing_generator.lock().unwrap().generate();
+        Ok(Arc::new(thing))
     }
     // functions to create constructs for the keepers to keep that also populate the lookups
     pub fn keep_role(&self, role: Role) -> (Arc<Role>, bool) {
@@ -799,42 +929,88 @@ impl Database {
             .retain(identity);
         let (builtin_role, existed) = self.keep_role(Role::new(identity, name.to_string(), true));
         debug_assert!(!existed);
-        #[cfg(not(feature = "persistence"))]
         let _ = builtin_role;
-        #[cfg(feature = "persistence")]
-        {
-            let mut persistor = self
-                .persistor
-                .lock()
-                .map_err(|error| DatabaseError::Lock(error.to_string()))?;
-            persistor.persist_thing(&identity)?;
-            persistor.persist_role(&builtin_role)?;
-        }
         Ok(())
     }
-    pub fn create_role(&self, role_name: String, reserved: bool) -> (Arc<Role>, bool) {
-        let role_thing = self.thing_generator.lock().unwrap().generate();
-        let (kept_role, previously_kept) =
-            self.keep_role(Role::new(role_thing, role_name, reserved));
-        if !previously_kept {
-            #[cfg(feature = "persistence")]
-            {
-                if let Err(e) = self
-                    .persistor
-                    .lock()
-                    .unwrap()
-                    .persist_thing(&kept_role.role())
-                {
-                    warn!(?e, "persist_thing(role) failed");
-                }
-                if let Err(e) = self.persistor.lock().unwrap().persist_role(&kept_role) {
-                    warn!(?e, "persist_role failed");
-                }
-            }
-        } else {
-            self.thing_generator.lock().unwrap().release(role_thing);
+    pub fn create_role(
+        &self,
+        role_name: String,
+        reserved: bool,
+    ) -> Result<(Arc<Role>, bool), DatabaseError> {
+        self.create_roles(vec![(role_name, reserved)])?
+            .into_iter()
+            .next()
+            .ok_or_else(|| DatabaseError::Invariant("role command returned no role".to_string()))
+    }
+
+    pub(crate) fn create_roles(
+        &self,
+        roles: Vec<(String, bool)>,
+    ) -> Result<Vec<(Arc<Role>, bool)>, DatabaseError> {
+        enum Source {
+            Existing(Arc<Role>),
+            New(usize),
         }
-        (kept_role, previously_kept)
+
+        let mut prepared = Vec::new();
+        let mut sources = Vec::with_capacity(roles.len());
+        for (name, reserved) in roles {
+            let canonical_name: String = name.nfc().collect();
+            if canonical_name.is_empty() {
+                return Err(DatabaseError::Execution(
+                    "role name cannot be empty".to_string(),
+                ));
+            }
+            if let Some(existing) = self
+                .role_keeper
+                .lock()
+                .map_err(|error| DatabaseError::Lock(error.to_string()))?
+                .get(&canonical_name)
+            {
+                sources.push(Source::Existing(existing));
+            } else if let Some(index) = prepared
+                .iter()
+                .position(|role: &Role| role.name() == canonical_name)
+            {
+                if prepared[index].reserved() != reserved {
+                    return Err(DatabaseError::Execution(format!(
+                        "role '{canonical_name}' has conflicting reserved status in one command"
+                    )));
+                }
+                sources.push(Source::New(index));
+            } else {
+                let identity = self.thing_generator.lock().unwrap().generate();
+                let index = prepared.len();
+                prepared.push(Role::new(identity, canonical_name, reserved));
+                sources.push(Source::New(index));
+            }
+        }
+        #[cfg(feature = "persistence")]
+        if !prepared.is_empty() {
+            let records: Vec<_> = prepared.iter().map(role_record).collect();
+            let mut store = self
+                .store
+                .lock()
+                .map_err(|error| DatabaseError::Lock(error.to_string()))?;
+            if let Some(store) = store.as_mut() {
+                store.append_batch(&records)?;
+            }
+        }
+        let kept: Vec<Arc<Role>> = prepared
+            .into_iter()
+            .map(|role| {
+                let (role, existed) = self.keep_role(role);
+                debug_assert!(!existed);
+                role
+            })
+            .collect();
+        Ok(sources
+            .into_iter()
+            .map(|source| match source {
+                Source::Existing(role) => (role, true),
+                Source::New(index) => (Arc::clone(&kept[index]), false),
+            })
+            .collect())
     }
     pub fn keep_appearance(&self, appearance: Appearance) -> (Arc<Appearance>, bool) {
         let (kept_appearance, previously_kept) =
@@ -888,12 +1064,12 @@ impl Database {
         Ok(self.keep_appearance_set(appearance_set))
     }
     pub fn keep_posit<V: 'static + DataType>(&self, posit: Posit<V>) -> (Arc<Posit<V>>, bool) {
-        let (kept_posit, previously_kept) = self.posit_keeper.lock().unwrap().keep(posit);
+        self.keep_posit_arc(Arc::new(posit))
+    }
+
+    fn keep_posit_arc<V: 'static + DataType>(&self, posit: Arc<Posit<V>>) -> (Arc<Posit<V>>, bool) {
+        let (kept_posit, previously_kept) = self.posit_keeper.lock().unwrap().keep_arc(posit);
         if !previously_kept {
-            self.role_name_to_data_type_lookup.lock().unwrap().insert(
-                kept_posit.appearance_set().roles(),
-                V::DATA_TYPE.to_string(),
-            );
             self.appearance_set_to_posit_thing_lookup
                 .lock()
                 .unwrap()
@@ -923,28 +1099,155 @@ impl Database {
         appearance_set: Arc<AppearanceSet>,
         value: V,
         time: Time,
-    ) -> Arc<Posit<V>> {
+    ) -> Result<Arc<Posit<V>>, DatabaseError> {
         let posit_thing = self.thing_generator.lock().unwrap().generate();
-        let (kept_posit, previously_kept) =
-            self.keep_posit(Posit::new(posit_thing, appearance_set, value, time));
-        if !previously_kept {
-            #[cfg(feature = "persistence")]
-            {
-                if let Err(e) = self
-                    .persistor
-                    .lock()
-                    .unwrap()
-                    .persist_thing(&kept_posit.posit())
-                {
-                    warn!(?e, "persist_thing(posit) failed");
-                }
-                if let Err(e) = self.persistor.lock().unwrap().persist_posit(&kept_posit) {
-                    warn!(?e, "persist_posit failed");
-                }
-            }
-        } else {
+        let candidate = Arc::new(Posit::new(posit_thing, appearance_set, value, time));
+        if let Some(existing) = self
+            .posit_keeper
+            .lock()
+            .map_err(|error| DatabaseError::Lock(error.to_string()))?
+            .existing(&candidate)
+        {
             self.thing_generator.lock().unwrap().release(posit_thing);
+            return Ok(existing);
         }
-        kept_posit
+        #[cfg(feature = "persistence")]
+        {
+            let mut store = self
+                .store
+                .lock()
+                .map_err(|error| DatabaseError::Lock(error.to_string()))?;
+            if let Some(store) = store.as_mut() {
+                let literal = (candidate.value() as &dyn Any)
+                    .downcast_ref::<LiteralValue>()
+                    .ok_or_else(|| {
+                        DatabaseError::Execution(
+                            "persistent beta posits require a lossless LiteralValue".to_string(),
+                        )
+                    })?;
+                let record = posit_record_parts(
+                    candidate.posit(),
+                    &candidate.appearance_set(),
+                    literal,
+                    candidate.time(),
+                )?;
+                store.append_batch(&[record])?;
+            }
+        }
+        let (kept_posit, previously_kept) = self.keep_posit_arc(candidate);
+        debug_assert!(!previously_kept);
+        Ok(kept_posit)
+    }
+
+    pub(crate) fn create_literal_posits(
+        &self,
+        posits: Vec<(Arc<AppearanceSet>, LiteralValue, Time)>,
+    ) -> Result<Vec<Arc<Posit<LiteralValue>>>, DatabaseError> {
+        enum Source {
+            Existing(Arc<Posit<LiteralValue>>),
+            New(usize),
+        }
+
+        let mut prepared: Vec<Arc<Posit<LiteralValue>>> = Vec::new();
+        let mut sources = Vec::with_capacity(posits.len());
+        for (appearance_set, value, time) in posits {
+            let identity = self.thing_generator.lock().unwrap().generate();
+            let candidate = Arc::new(Posit::new(identity, appearance_set, value, time));
+            if let Some(existing) = self
+                .posit_keeper
+                .lock()
+                .map_err(|error| DatabaseError::Lock(error.to_string()))?
+                .existing(&candidate)
+            {
+                self.thing_generator.lock().unwrap().release(identity);
+                sources.push(Source::Existing(existing));
+            } else if let Some(index) = prepared.iter().position(|existing| existing == &candidate)
+            {
+                self.thing_generator.lock().unwrap().release(identity);
+                sources.push(Source::New(index));
+            } else {
+                let index = prepared.len();
+                prepared.push(candidate);
+                sources.push(Source::New(index));
+            }
+        }
+
+        #[cfg(feature = "persistence")]
+        if !prepared.is_empty() {
+            let records = prepared
+                .iter()
+                .map(|posit| {
+                    posit_record_parts(
+                        posit.posit(),
+                        &posit.appearance_set(),
+                        posit.value(),
+                        posit.time(),
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut store = self
+                .store
+                .lock()
+                .map_err(|error| DatabaseError::Lock(error.to_string()))?;
+            if let Some(store) = store.as_mut() {
+                store.append_batch(&records)?;
+            }
+        }
+
+        let kept: Vec<Arc<Posit<LiteralValue>>> = prepared
+            .into_iter()
+            .map(|posit| {
+                let (posit, existed) = self.keep_posit_arc(posit);
+                debug_assert!(!existed);
+                posit
+            })
+            .collect();
+        Ok(sources
+            .into_iter()
+            .map(|source| match source {
+                Source::Existing(posit) => posit,
+                Source::New(index) => Arc::clone(&kept[index]),
+            })
+            .collect())
+    }
+}
+
+#[cfg(all(test, feature = "persistence"))]
+mod append_store_tests {
+    use super::*;
+    use crate::traqula::Engine;
+
+    #[test]
+    fn mutating_commands_append_one_atomic_batch_each() {
+        let path = std::env::temp_dir().join(format!(
+            "positorium-command-batches-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let database =
+            Database::new(PersistenceMode::File(path.to_string_lossy().into_owned())).unwrap();
+        Engine::new(&database)
+            .execute_collect(
+                "add role left, right; add posit [{(+a, left)}, 1, @NOW], [{(+b, right)}, 2, @NOW];",
+            )
+            .unwrap();
+
+        let store = database.store.lock().unwrap();
+        let batches = store.as_ref().unwrap().replay();
+        assert_eq!(batches.len(), 3, "bootstrap plus two commands");
+        assert_eq!(batches[0].len(), 3, "built-ins and raw codec");
+        assert_eq!(batches[1].len(), 2, "both roles commit together");
+        assert_eq!(batches[2].len(), 2, "both posits commit together");
+        drop(store);
+        drop(database);
+
+        let restored =
+            Database::new(PersistenceMode::File(path.to_string_lossy().into_owned())).unwrap();
+        assert_eq!(restored.posit_keeper.lock().unwrap().len(), 2);
+        drop(restored);
+        let _ = std::fs::remove_dir_all(path);
     }
 }

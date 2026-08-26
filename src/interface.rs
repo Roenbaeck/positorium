@@ -118,7 +118,7 @@ impl QueryInterface {
             (None, None)
         };
 
-        // Execute on a background thread; Persistor performs serialized writes internally.
+        // Execute on a background thread; the interface mutex serializes scripts.
         let db = Arc::clone(&self.db);
         let cancel_for_thread = cancel.clone();
         let active = Arc::clone(&self.active);
@@ -153,9 +153,8 @@ impl QueryInterface {
 
     /// Run a Traqula script synchronously on the current thread.
     ///
-    /// This avoids any `Send`/`Sync` constraints on the underlying database/persistence
-    /// and is appropriate for one-off startup scripts or environments using in-memory
-    /// SQLite where cross-thread connections are not viable.
+    /// This is appropriate for one-off startup scripts and embedded callers that
+    /// already execute on the database owner's thread.
     pub fn run_sync(&self, script: &str) {
         let Ok(_owner) = self.execution.lock() else {
             return;

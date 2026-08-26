@@ -16,18 +16,17 @@
 //! * [`construct`] – Fundamental identity / posit building blocks and keepers.
 //! * [`datatype`] – The [`datatype::DataType`] trait plus provided concrete types
 //!   (string, numeric, temporal, certainty, JSON, decimal, etc.).
-//! * [`persist`] – SQLite persistence & restoration layer.
+//! * `storage` – private append-only framing, replay, and durability machinery.
 //! * [`traqula`] – A minimal DSL (parser + engine) for adding roles, posits and performing searches.
 //!
 //! ## Data Types
 //! Any type implementing [`datatype::DataType`] can be used as the value in a posit.
-//! Built‑ins demonstrate patterns for stable identifiers (`UID`) and constant
-//! `DATA_TYPE` strings enabling heterogeneous indexing.
+//! Built‑ins currently retain transitional internal names for heterogeneous indexing.
 //!
 //! ## Persistence
-//! The [`persist::Persistor`] encapsulates SQLite schema creation and durable
-//! storage for things, roles and posits. The [`construct::Database`] wires a
-//! persistor together with in‑memory keepers and restores prior state on startup.
+//! [`construct::Database`] owns either an ephemeral engine or one append-only
+//! store, durably commits each mutation command, and rebuilds all keepers and
+//! indexes through validated replay on startup.
 //!
 //! ## Traqula DSL
 //! The `traqula` module exposes an [`traqula::Engine`] capable of parsing simple
@@ -65,8 +64,6 @@ pub mod datatype;
 pub mod error;
 pub mod interface;
 pub mod literal;
-#[cfg(feature = "persistence")]
-pub mod persist;
 #[cfg(feature = "server")]
 pub mod server;
 #[cfg(feature = "persistence")]

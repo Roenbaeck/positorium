@@ -1,10 +1,9 @@
 //! Versioned append-only storage primitives for the beta store format.
 //!
-//! This module is intentionally private until the high-level database API has
-//! fully replaced the SQLite prototype. Its byte contract is specified in
+//! This module is private storage machinery. Its byte contract is specified in
 //! `STORAGE.md`.
 
-#![allow(dead_code)] // Removed when Database switches from the SQLite importer to this backend.
+#![allow(dead_code)] // Includes reserved backup/inspection hooks not yet public.
 
 use crate::construct::{Posit, Role, Thing};
 use crate::datatype::{Time, TimeType};
@@ -247,8 +246,21 @@ pub(crate) fn raw_codec_record() -> PendingRecord {
 }
 
 pub(crate) fn posit_record(posit: &Posit<LiteralValue>) -> Result<PendingRecord> {
-    let mut appearances: Vec<(Thing, Thing)> = posit
-        .appearance_set()
+    posit_record_parts(
+        posit.posit(),
+        &posit.appearance_set(),
+        posit.value(),
+        posit.time(),
+    )
+}
+
+pub(crate) fn posit_record_parts(
+    identity: Thing,
+    appearance_set: &crate::construct::AppearanceSet,
+    value: &LiteralValue,
+    time: &Time,
+) -> Result<PendingRecord> {
+    let mut appearances: Vec<(Thing, Thing)> = appearance_set
         .appearances()
         .iter()
         .map(|appearance| (appearance.role().role(), appearance.thing()))
@@ -260,17 +272,17 @@ pub(crate) fn posit_record(posit: &Posit<LiteralValue>) -> Result<PendingRecord>
         ));
     }
     let mut payload = Vec::new();
-    payload.extend_from_slice(&posit.posit().to_le_bytes());
+    payload.extend_from_slice(&identity.to_le_bytes());
     encode_uleb128(appearances.len() as u64, &mut payload);
     for (role, thing) in appearances {
         payload.extend_from_slice(&role.to_le_bytes());
         payload.extend_from_slice(&thing.to_le_bytes());
     }
-    payload.push(posit.value().family().identifier());
+    payload.push(value.family().identifier());
     payload.extend_from_slice(&RAW_CODEC_IDENTIFIER.to_le_bytes());
     payload.extend_from_slice(&RAW_CODEC_VERSION.to_le_bytes());
-    encode_text(posit.value().token(), &mut payload);
-    encode_time(posit.time(), &mut payload);
+    encode_text(value.token(), &mut payload);
+    encode_time(time, &mut payload);
     Ok(PendingRecord::new(RECORD_POSIT, payload))
 }
 
@@ -369,8 +381,10 @@ fn replay_logical(store_uuid: [u8; 16], batches: &[Vec<StoredRecord>]) -> Result
             }
         }
     }
-    validate_builtin_role(&roles_by_identity, &identities_by_name, 1, "posit")?;
-    validate_builtin_role(&roles_by_identity, &identities_by_name, 2, "ascertains")?;
+    if !roles.is_empty() || !posits.is_empty() || has_raw_codec {
+        validate_builtin_role(&roles_by_identity, &identities_by_name, 1, "posit")?;
+        validate_builtin_role(&roles_by_identity, &identities_by_name, 2, "ascertains")?;
+    }
     Ok(ReplayedStore {
         store_uuid,
         roles,
@@ -386,7 +400,6 @@ fn validate_builtin_role(
     name: &str,
 ) -> Result<()> {
     match (roles.get(&identity), names.get(name)) {
-        (None, None) => Ok(()),
         (Some(role), Some(named_identity))
             if role.name == name && role.reserved && *named_identity == identity =>
         {

@@ -25,16 +25,17 @@ Traqula is Positorium's domain-specific language for defining roles, positing fa
 For the complete language reference, examples, and details on posits, variables, and search patterns, see [TRAQULA.md](TRAQULA.md).
 
 The normative design for the append-only beta store is in [STORAGE.md](STORAGE.md).
-The current file-backed implementation remains the SQLite prototype while that
-format is implemented and migration tooling is built.
+File-backed mode uses that framed, checksummed, append-only format. The
+unpublished SQLite prototype and its dependency have been removed; the first
+append-only beta format begins the compatibility window.
 
 The storage- and language-independent identity, value-slot, temporal, snapshot,
 and external-identification contract is in [MODEL.md](MODEL.md).
 
 ## Build and run
 
-Prereqs: rustup and a C toolchain for rusqlite (bundled is enabled). The
-repository selects the stable Rust toolchain declared in `rust-toolchain.toml`.
+Prerequisite: rustup. The repository selects the stable Rust
+toolchain declared in `rust-toolchain.toml`.
 
 Build:
 
@@ -52,8 +53,8 @@ Config (positorium.json):
 
 ```json
 {
-	"database_file_and_path": "positorium.db",
-	"recreate_database_on_startup": true,
+	"database_file_and_path": "positorium.store",
+	"recreate_database_on_startup": false,
 	"traqula_file_to_run_on_startup": "traqula/adds.traqula"
 }
 ```
@@ -68,22 +69,23 @@ use positorium::construct::{Database, PersistenceMode};
 // Ephemeral: nothing is written, all data lost when process exits
 let db = Database::new(PersistenceMode::InMemory);
 
-// File-backed persistence (creates or reuses SQLite file)
-let db = Database::new(PersistenceMode::File("positorium.db".to_string()));
+// File-backed persistence (creates or reuses an append-only store directory)
+let db = Database::new(PersistenceMode::File("positorium.store".to_string()));
 
 // Derive from config style flags
 let enable = true; // imagine read from config
-let mode = PersistenceMode::from_config(enable, "positorium.db");
+let mode = PersistenceMode::from_config(enable, "positorium.store");
 let db2 = Database::new(mode);
 ```
 
 When running the provided binary, the `enable_persistence` flag in `positorium.json` selects between these modes internally.
 
-## Integrity Ledger
+## Store integrity
 
-When running in file‑backed persistence mode, Positorium records a compact integrity signal alongside persisted posits: a rolling hash over each persisted row. This ledger is always maintained for file‑backed databases and is intended as a lightweight way to spot accidental edits or simple corruption during local inspection.
-
-Note: this is not a full audit or tamper‑proof trail. It provides a quick, low‑overhead check but does not protect against an attacker with write access who can recompute the chain or against external threats without anchoring. See the `persist` module for implementation details if you need stronger guarantees.
+File-backed stores frame every record with CRC32C, monotonic sequence numbers,
+atomic commit frames, and a manifest-recorded committed length. Startup rejects
+committed corruption and writable recovery truncates only an uncommitted tail.
+This detects corruption; it is not a tamper-proof audit mechanism.
 
 ## Client / Server Architecture
 
@@ -174,7 +176,7 @@ A minimal static HTML client (`positorium.html`) demonstrates submitting scripts
 
 Implemented:
 * Roles, appearances, appearance sets, heterogeneous posits with times
-* Persistence via SQLite + tamper-evident ledger (file mode)
+* Framed append-only persistence with atomic command batches and deterministic replay
 * Traqula parsing (Pest) for add/search/where/return, unions, multi-result scripts
 * Bitmap-backed indexes for fast intersections
 * Time filtering (variable vs literal and variable vs variable)

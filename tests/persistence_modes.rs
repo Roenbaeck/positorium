@@ -1,14 +1,14 @@
 use positorium::construct::{Database, PersistenceMode};
 
 #[cfg(feature = "persistence")]
-fn temporary_database_path(label: &str) -> String {
+fn temporary_store_path(label: &str) -> String {
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("clock")
         .as_nanos();
     std::env::temp_dir()
         .join(format!(
-            "positorium-{label}-{}-{nonce}.db",
+            "positorium-{label}-{}-{nonce}.store",
             std::process::id()
         ))
         .to_string_lossy()
@@ -16,204 +16,137 @@ fn temporary_database_path(label: &str) -> String {
 }
 
 #[cfg(feature = "persistence")]
-fn remove_database_files(path: &str) {
-    for suffix in ["", "-shm", "-wal"] {
-        let _ = std::fs::remove_file(format!("{path}{suffix}"));
-    }
+fn remove_store(path: &str) {
+    let _ = std::fs::remove_dir_all(path);
 }
 
 #[test]
 fn in_memory_mode_allows_basic_operations() {
     let db = Database::new(PersistenceMode::InMemory).expect("db");
-    let (role, existed) = db.create_role("person".to_string(), false);
+    let (role, existed) = db
+        .create_role("person".to_string(), false)
+        .expect("create role");
     assert!(!existed);
-    let thing = db.create_thing();
+    let thing = db.create_thing().expect("ephemeral thing");
     let (appearance, _) = db.create_appearance(*thing, role);
     let (_aset, _) = db.create_appearance_set(vec![appearance]).unwrap();
-    // No ledger head should exist (no persistence)
-    #[cfg(feature = "persistence")]
-    assert!(
-        db.persistor
-            .lock()
-            .unwrap()
-            .current_superhash()
-            .unwrap()
-            .is_none()
-    );
 }
 
 #[test]
 #[cfg(feature = "persistence")]
-fn file_mode_persists_and_has_ledger() {
-    let path = temporary_database_path("ledger");
-    let db = Database::new(PersistenceMode::File(path.clone())).expect("db");
-    let (role, _) = db.create_role("audit".to_string(), false);
-    let thing = db.create_thing();
-    let (appearance, _) = db.create_appearance(*thing, role);
-    let (aset, _) = db.create_appearance_set(vec![appearance]).unwrap();
-    // Insert a posit to trigger ledger append
-    let time = positorium::datatype::Time::new();
-    let _posit = db.create_posit(aset, "ok".to_string(), time);
-    let head = db.persistor.lock().unwrap().current_superhash().unwrap();
-    assert!(
-        head.is_some(),
-        "expected ledger head after posit insertion in file-backed mode"
-    );
-    // Clean up
-    drop(db);
-    remove_database_files(&path);
-}
+fn append_only_store_replays_roles_posits_and_indexes() {
+    use positorium::traqula::Engine;
 
-#[test]
-#[cfg(feature = "persistence")]
-fn lossless_literal_token_survives_sqlite_prototype_restart() {
-    use positorium::datatype::Time;
-    use positorium::literal::{LiteralFamily, LiteralValue};
+    let path = temporary_store_path("replay");
+    {
+        let db = Database::new(PersistenceMode::File(path.clone())).expect("create store");
+        let engine = Engine::new(&db);
+        engine
+            .execute_collect(
+                "add role amount; add posit [{(+item, amount)}, +001.00, '2026-08-26'];",
+            )
+            .expect("durable commands");
+        assert_eq!(db.role_keeper().lock().unwrap().len(), 3);
+        assert_eq!(db.posit_keeper().lock().unwrap().len(), 1);
+    }
 
-    let path = temporary_database_path("literal-token");
-    let posit_id = {
-        let db = Database::new(PersistenceMode::File(path.clone())).expect("create database");
-        let (role, _) = db.create_role("amount".to_string(), false);
-        let thing = db.create_thing();
-        let (appearance, _) = db.create_appearance(*thing, role);
-        let (appearance_set, _) = db.create_appearance_set(vec![appearance]).unwrap();
-        let literal = LiteralValue::new("+001.00", LiteralFamily::Decimal).unwrap();
-        db.create_posit(appearance_set, literal, Time::new_date_from("2026-08-26"))
-            .posit()
-    };
-
-    let restored = Database::new(PersistenceMode::File(path.clone())).expect("restore database");
-    let restored_literal = restored
-        .posit_keeper()
-        .lock()
-        .unwrap()
-        .posit::<LiteralValue>(posit_id)
-        .expect("lossless literal posit restored");
-    assert_eq!(restored_literal.value().token(), "+001.00");
-    assert_eq!(restored_literal.value().family(), LiteralFamily::Decimal);
-
-    drop(restored);
-    remove_database_files(&path);
-}
-
-#[test]
-#[cfg(feature = "persistence")]
-fn restores_all_builtin_date_value_types() {
-    use chrono::{NaiveDate, NaiveDateTime};
-
-    let path = temporary_database_path("chrono-values");
-    let date = NaiveDate::from_ymd_opt(2026, 8, 26).unwrap();
-    let datetime = date.and_hms_opt(12, 34, 56).unwrap();
-    let (date_id, datetime_id) = {
-        let db = Database::new(PersistenceMode::File(path.clone())).expect("create database");
-        let (role, _) = db.create_role("observed".to_string(), false);
-        let thing = db.create_thing();
-        let (appearance, _) = db.create_appearance(*thing, role);
-        let (appearance_set, _) = db.create_appearance_set(vec![appearance]).unwrap();
-        let time = positorium::datatype::Time::new();
-        let date_posit = db.create_posit(appearance_set.clone(), date, time.clone());
-        let datetime_posit = db.create_posit(appearance_set, datetime, time);
-        (date_posit.posit(), datetime_posit.posit())
-    };
-
-    let restored = Database::new(PersistenceMode::File(path.clone())).expect("restore database");
-    let keeper = restored.posit_keeper();
-    let mut keeper = keeper.lock().unwrap();
-    assert_eq!(*keeper.posit::<NaiveDate>(date_id).unwrap().value(), date);
+    let restored = Database::new(PersistenceMode::File(path.clone())).expect("replay store");
+    let result = Engine::new(&restored)
+        .execute_collect("search [{(*, amount)}, +value, +time] return value, time;")
+        .expect("query restored indexes");
     assert_eq!(
-        *keeper.posit::<NaiveDateTime>(datetime_id).unwrap().value(),
-        datetime
+        result.rows,
+        vec![vec!["+001.00".to_string(), "2026-08-26".to_string()]]
     );
-    drop(keeper);
     drop(restored);
-    remove_database_files(&path);
+    remove_store(&path);
 }
 
 #[test]
 #[cfg(feature = "persistence")]
-fn unknown_persisted_value_type_fails_restore() {
-    let path = temporary_database_path("unknown-type");
+fn every_literal_family_survives_append_only_restart_losslessly() {
+    use positorium::traqula::Engine;
+
+    let path = temporary_store_path("literal-families");
     {
-        let db = Database::new(PersistenceMode::File(path.clone())).expect("create database");
-        let (role, _) = db.create_role("label".to_string(), false);
-        let thing = db.create_thing();
-        let (appearance, _) = db.create_appearance(*thing, role);
-        let (appearance_set, _) = db.create_appearance_set(vec![appearance]).unwrap();
-        db.create_posit(
-            appearance_set,
-            "value".to_string(),
-            positorium::datatype::Time::new(),
-        );
+        let db = Database::new(PersistenceMode::File(path.clone())).expect("create store");
+        Engine::new(&db)
+            .execute_collect(
+                r#"
+                add role value;
+                add posit [{(+s, value)}, "\u0041", @NOW];
+                add posit [{(+i, value)}, +001, @NOW];
+                add posit [{(+d, value)}, 01.00, @NOW];
+                add posit [{(+c, value)}, 075%, @NOW];
+                add posit [{(+j, value)}, { "a": 1.00 }, @NOW];
+                add posit [{(+t, value)}, '2024-05', @NOW];
+                "#,
+            )
+            .expect("persist literal families");
     }
-    rusqlite::Connection::open(&path)
-        .unwrap()
-        .execute(
-            "update DataType set DataType = 'Mystery' where DataType_Identity = 2",
-            [],
-        )
-        .unwrap();
 
-    let error = match Database::new(PersistenceMode::File(path.clone())) {
-        Ok(_) => panic!("unknown persisted types must not be skipped"),
-        Err(error) => error,
-    };
-    assert!(format!("{error}").contains("Unknown persisted value type 'Mystery'"));
-    remove_database_files(&path);
-}
-
-#[test]
-#[cfg(feature = "persistence")]
-fn integrity_verification_does_not_rewrite_a_bad_head() {
-    let path = temporary_database_path("bad-head");
-    let db = Database::new(PersistenceMode::File(path.clone())).expect("create database");
-    let (role, _) = db.create_role("label".to_string(), false);
-    let thing = db.create_thing();
-    let (appearance, _) = db.create_appearance(*thing, role);
-    let (appearance_set, _) = db.create_appearance_set(vec![appearance]).unwrap();
-    db.create_posit(
-        appearance_set,
-        "value".to_string(),
-        positorium::datatype::Time::new(),
+    let restored = Database::new(PersistenceMode::File(path.clone())).expect("restore store");
+    let result = Engine::new(&restored)
+        .execute_collect("search [{(*, value)}, +literal, *] return literal;")
+        .expect("query restored literals");
+    let mut tokens: Vec<String> = result.rows.into_iter().map(|row| row[0].clone()).collect();
+    tokens.sort();
+    assert_eq!(
+        tokens,
+        vec![
+            r#""\u0041""#.to_string(),
+            "'2024-05'".to_string(),
+            "+001".to_string(),
+            "01.00".to_string(),
+            "075%".to_string(),
+            r#"{ "a": 1.00 }"#.to_string(),
+        ]
     );
-    rusqlite::Connection::open(&path)
-        .unwrap()
-        .execute(
-            "update LedgerHead set HeadHash = 'bad' where Name = 'PositLedger'",
-            [],
-        )
-        .unwrap();
-
-    let error = db.persistor.lock().unwrap().verify_integrity().unwrap_err();
-    assert!(format!("{error}").contains("ledger head mismatch"));
-    let stored: String = rusqlite::Connection::open(&path)
-        .unwrap()
-        .query_row(
-            "select HeadHash from LedgerHead where Name = 'PositLedger'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(stored, "bad");
-    drop(db);
-    remove_database_files(&path);
+    drop(restored);
+    remove_store(&path);
 }
 
 #[test]
 #[cfg(feature = "persistence")]
-fn incompatible_builtin_role_metadata_fails_open() {
-    let path = temporary_database_path("builtin-role");
+fn persistent_store_rejects_standalone_thing_allocation() {
+    let path = temporary_store_path("standalone-thing");
+    let db = Database::new(PersistenceMode::File(path.clone())).expect("create store");
+    let error = db.create_thing().unwrap_err();
+    assert!(error.to_string().contains("standalone Thing allocation"));
+    drop(db);
+    remove_store(&path);
+}
+
+#[test]
+#[cfg(feature = "persistence")]
+fn committed_checksum_corruption_fails_open_without_rewriting_source() {
+    use std::io::{Seek, SeekFrom, Write};
+
+    let path = temporary_store_path("corruption");
     {
-        Database::new(PersistenceMode::File(path.clone())).expect("create database");
+        let db = Database::new(PersistenceMode::File(path.clone())).expect("create store");
+        positorium::traqula::Engine::new(&db)
+            .execute_collect("add role value;")
+            .expect("append role");
     }
-    rusqlite::Connection::open(&path)
-        .unwrap()
-        .execute("update Role set Reserved = 0 where Role = 'posit'", [])
-        .unwrap();
+    let log_path = std::path::Path::new(&path).join("log-0000000000000001.ptl");
+    let mut bytes = std::fs::read(&log_path).expect("read log");
+    bytes[90] ^= 0x40;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&log_path)
+        .expect("open log");
+    file.seek(SeekFrom::Start(90)).unwrap();
+    file.write_all(&bytes[90..91]).unwrap();
+    file.sync_all().unwrap();
+    drop(file);
+    let corrupted = std::fs::read(&log_path).unwrap();
 
     let error = match Database::new(PersistenceMode::File(path.clone())) {
-        Ok(_) => panic!("incompatible built-in metadata must fail startup"),
+        Ok(_) => panic!("committed corruption must fail startup"),
         Err(error) => error,
     };
-    assert!(format!("{error}").contains("built-in role 'posit'"));
-    remove_database_files(&path);
+    assert!(error.to_string().contains("checksum"), "{error}");
+    assert_eq!(std::fs::read(&log_path).unwrap(), corrupted);
+    remove_store(&path);
 }

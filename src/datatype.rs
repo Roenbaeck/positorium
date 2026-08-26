@@ -1,36 +1,10 @@
-//! Data type abstractions and concrete value/time representations.
+//! Storage-neutral value/time abstractions used by in-memory constructs.
 //!
-//! The [`DataType`] trait is implemented for all value/time types that can be
-//! stored inside a posit. Each implementation declares a stable numeric
-//! identifier (`UID`) and a textual name (`DATA_TYPE`) which are persisted in
-//! the catalog. A helper [`DataType::convert`] function reconstructs a value
-//! from a SQLite `ValueRef` during restoration.
-//!
-//! # Implementing a Custom Data Type
-//! To add a new logical value type implement the trait for your type and make
-//! sure it satisfies the required bounds. Example (toy wrapper around `i64`):
-//! ```
-//! # #[cfg(feature = "persistence")]
-//! # {
-//! use rusqlite::types::{ValueRef, ToSql, ToSqlOutput};
-//! # }
-//! use std::fmt;
-//! use positorium::datatype::DataType;
-//! #[derive(Eq, PartialEq, PartialOrd, Ord, Hash)]
-//! struct MyCount(i64);
-//! impl fmt::Display for MyCount { fn fmt(&self, f:&mut fmt::Formatter)->fmt::Result { write!(f, "{}", self.0) } }
-//! #[cfg(feature = "persistence")]
-//! impl ToSql for MyCount { fn to_sql(&self)->rusqlite::Result<ToSqlOutput<'_>> { Ok(ToSqlOutput::from(self.0)) } }
-//! impl DataType for MyCount {
-//!     const UID: u8 = 250; // choose a free id
-//!     const DATA_TYPE: &'static str = "MyCount";
-//!     #[cfg(feature = "persistence")]
-//!     fn convert(v:&ValueRef)->Result<Self, String> {
-//!         v.as_i64().map(MyCount).map_err(|error| error.to_string())
-//!     }
-//! }
-//! assert_eq!(MyCount(3).data_type(), "MyCount");
-//! ```
+//! [`DataType`] is a marker for immutable values that satisfy the equality,
+//! ordering, hashing, display, and thread-safety laws required by [`Posit`](crate::construct::Posit).
+//! It contains no storage identifier, codec, or conversion contract. Durable
+//! beta posits use [`LiteralValue`](crate::literal::LiteralValue); physical codecs
+//! remain private to the append-only storage layer.
 //!
 //! # Special Provided Types
 //! * [`Certainty`] – subjective probability-like measure with saturation.
@@ -40,14 +14,7 @@
 //!
 //! # Equality & Ordering
 //! Most wrapper types delegate ordering and equality to their internal
-//! representations while ensuring a stable textual form for persistence.
-//!
-//! # Notes
-//! Adding a new [`DataType`] also requires updating restoration logic in
-//! `persist.rs` (see MAINTENANCE comments there).
-// used for persistence
-#[cfg(feature = "persistence")]
-use rusqlite::types::{FromSql, FromSqlResult, ToSql, ToSqlOutput, Value, ValueRef};
+//! representations.
 
 // used for timestamps in the database
 use chrono::{Datelike, NaiveDate, NaiveDateTime, Timelike, Utc};
@@ -65,162 +32,10 @@ use std::hash::{Hash, Hasher};
 // used to overload common operations for datatypes
 use std::ops;
 
-#[cfg(feature = "persistence")]
-use crate::literal::LiteralFamily;
-use crate::literal::LiteralValue;
-#[cfg(feature = "persistence")]
-use crate::traqula::parse_time;
-
 /// Trait implemented by all logical value/time types that may appear in a posit.
-///
-/// Implementors must provide a stable numeric `UID` and textual name
-/// `DATA_TYPE`. These are persisted so changing them breaks backward
-/// compatibility.
-#[cfg(feature = "persistence")]
-pub trait DataType: fmt::Display + Eq + Ord + Hash + Send + Sync + ToSql {
-    /// Stable numeric identifier for catalog persistence.
-    const UID: u8;
-    /// Stable human readable name stored in persistence.
-    const DATA_TYPE: &'static str;
-    /// Convert from a raw SQLite value (during restore).
-    fn convert(value: &ValueRef) -> std::result::Result<Self, String>
-    where
-        Self: Sized;
-    /// Returns the textual data type name.
-    fn data_type(&self) -> &'static str {
-        Self::DATA_TYPE
-    }
-    /// Returns the numeric identifier.
-    fn identifier(&self) -> u8 {
-        Self::UID
-    }
-}
+pub trait DataType: fmt::Display + Eq + Ord + Hash + Send + Sync {}
 
-#[cfg(not(feature = "persistence"))]
-pub trait DataType: fmt::Display + Eq + Ord + Hash + Send + Sync {
-    /// Stable numeric identifier for catalog persistence.
-    const UID: u8;
-    /// Stable human readable name stored in persistence.
-    const DATA_TYPE: &'static str;
-    /// Returns the textual data type name.
-    fn data_type(&self) -> &'static str {
-        Self::DATA_TYPE
-    }
-    /// Returns the numeric identifier.
-    fn identifier(&self) -> u8 {
-        Self::UID
-    }
-}
-
-// ------------- Data Types --------------
-impl DataType for Certainty {
-    const UID: u8 = 1;
-    const DATA_TYPE: &'static str = "Certainty";
-    #[cfg(feature = "persistence")]
-    fn convert(value: &ValueRef) -> std::result::Result<Certainty, String> {
-        let raw_i64 = value.as_i64().map_err(|error| error.to_string())?;
-        let alpha = i8::try_from(raw_i64)
-            .map_err(|error| format!("certainty {raw_i64} is out of range: {error}"))?;
-        Ok(Certainty { alpha })
-    }
-}
-impl DataType for String {
-    const UID: u8 = 2;
-    const DATA_TYPE: &'static str = "String";
-    #[cfg(feature = "persistence")]
-    fn convert(value: &ValueRef) -> std::result::Result<String, String> {
-        value
-            .as_str()
-            .map(str::to_string)
-            .map_err(|error| error.to_string())
-    }
-}
-impl DataType for NaiveDateTime {
-    const UID: u8 = 3;
-    const DATA_TYPE: &'static str = "NaiveDateTime";
-    #[cfg(feature = "persistence")]
-    fn convert(value: &ValueRef) -> std::result::Result<NaiveDateTime, String> {
-        let raw = value.as_str().map_err(|error| error.to_string())?;
-        NaiveDateTime::parse_from_str(raw, "%Y-%m-%d %H:%M:%S%.f")
-            .map_err(|error| error.to_string())
-    }
-}
-impl DataType for NaiveDate {
-    const UID: u8 = 4;
-    const DATA_TYPE: &'static str = "NaiveDate";
-    #[cfg(feature = "persistence")]
-    fn convert(value: &ValueRef) -> std::result::Result<NaiveDate, String> {
-        let raw = value.as_str().map_err(|error| error.to_string())?;
-        NaiveDate::from_str(raw).map_err(|error| error.to_string())
-    }
-}
-impl DataType for i64 {
-    const UID: u8 = 5;
-    const DATA_TYPE: &'static str = "i64";
-    #[cfg(feature = "persistence")]
-    fn convert(value: &ValueRef) -> std::result::Result<i64, String> {
-        value.as_i64().map_err(|error| error.to_string())
-    }
-}
-impl DataType for Decimal {
-    const UID: u8 = 6;
-    const DATA_TYPE: &'static str = "Decimal";
-    #[cfg(feature = "persistence")]
-    fn convert(value: &ValueRef) -> std::result::Result<Decimal, String> {
-        let raw = value.as_str().map_err(|error| error.to_string())?;
-        BigDecimal::from_str(raw)
-            .map(Decimal)
-            .map_err(|error| error.to_string())
-    }
-}
-impl DataType for JSON {
-    const UID: u8 = 7;
-    const DATA_TYPE: &'static str = "JSON";
-    #[cfg(feature = "persistence")]
-    fn convert(value: &ValueRef) -> std::result::Result<JSON, String> {
-        let raw = value.as_str().map_err(|error| error.to_string())?;
-        Json::from_str(raw)
-            .map(JSON)
-            .map_err(|error| error.to_string())
-    }
-}
-impl DataType for Time {
-    const UID: u8 = 8;
-    const DATA_TYPE: &'static str = "Time";
-    #[cfg(feature = "persistence")]
-    fn convert(value: &ValueRef) -> std::result::Result<Time, String> {
-        let raw = value.as_str().map_err(|error| error.to_string())?;
-        // Try persisted canonical formats first, then fall back to script literals.
-        Time::parse_persisted(raw)
-            .or_else(|| parse_time(raw))
-            .ok_or_else(|| format!("unrecognized persisted time literal '{raw}'"))
-    }
-}
-impl DataType for LiteralValue {
-    const UID: u8 = 9;
-    const DATA_TYPE: &'static str = "LiteralValue";
-    #[cfg(feature = "persistence")]
-    fn convert(value: &ValueRef) -> std::result::Result<LiteralValue, String> {
-        let encoded = value.as_blob().map_err(|error| error.to_string())?;
-        let (&family, token) = encoded
-            .split_first()
-            .ok_or_else(|| "empty LiteralValue encoding".to_string())?;
-        let family = LiteralFamily::from_identifier(family)
-            .ok_or_else(|| format!("unknown literal family {family}"))?;
-        let token = std::str::from_utf8(token).map_err(|error| error.to_string())?;
-        LiteralValue::new(token, family)
-    }
-}
-
-#[cfg(feature = "persistence")]
-impl ToSql for LiteralValue {
-    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        let mut encoded = Vec::with_capacity(self.token().len() + 1);
-        encoded.push(self.family().identifier());
-        encoded.extend_from_slice(self.token().as_bytes());
-        Ok(ToSqlOutput::Owned(Value::Blob(encoded)))
-    }
-}
+impl<T> DataType for T where T: fmt::Display + Eq + Ord + Hash + Send + Sync {}
 
 // Special types below
 /// JSON value wrapper implementing [`DataType`]. Display prints compact JSON.
@@ -232,18 +47,6 @@ impl FromStr for JSON {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Json::from_str(s).map(JSON)
-    }
-}
-#[cfg(feature = "persistence")]
-impl ToSql for JSON {
-    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        Ok(ToSqlOutput::from(self.0.to_string()))
-    }
-}
-#[cfg(feature = "persistence")]
-impl FromSql for JSON {
-    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        rusqlite::Result::Ok(JSON(Json::from_str(value.as_str().unwrap()).unwrap()))
     }
 }
 impl Hash for JSON {
@@ -407,20 +210,6 @@ impl From<&Certainty> for f64 {
         r.alpha as f64 / 100f64
     }
 }
-#[cfg(feature = "persistence")]
-impl ToSql for Certainty {
-    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        Ok(ToSqlOutput::from(self.alpha))
-    }
-}
-#[cfg(feature = "persistence")]
-impl FromSql for Certainty {
-    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        rusqlite::Result::Ok(Certainty {
-            alpha: i8::try_from(value.as_i64().unwrap()).ok().unwrap(),
-        })
-    }
-}
 
 /// Arbitrary precision decimal wrapper implementing [`DataType`].
 #[derive(Eq, PartialEq, Hash, PartialOrd, Ord, Clone)]
@@ -436,20 +225,6 @@ impl FromStr for Decimal {
 impl fmt::Display for Decimal {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.0)
-    }
-}
-#[cfg(feature = "persistence")]
-impl FromSql for Decimal {
-    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        rusqlite::Result::Ok(Decimal(
-            BigDecimal::from_str(value.as_str().unwrap()).unwrap(),
-        ))
-    }
-}
-#[cfg(feature = "persistence")]
-impl ToSql for Decimal {
-    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        Ok(ToSqlOutput::from(self.0.to_string()))
     }
 }
 impl ops::Deref for Decimal {
@@ -734,44 +509,6 @@ impl Time {
     pub fn within(&self, other: &Self) -> bool {
         other.contains(self)
     }
-    /// Parse a persisted canonical textual form of Time (no quotes, produced by Display).
-    /// Accepted forms:
-    /// BOT | EOT | YYYY | YYYY-MM | YYYY-MM-DD | YYYY-MM-DD HH:MM:SS[.fraction] | YYYY-MM-DDTHH:MM:SS[.fraction]
-    #[cfg(feature = "persistence")]
-    fn parse_persisted(raw: &str) -> Option<Time> {
-        let s = raw.trim();
-        match s {
-            "BOT" => return Some(Time::new_beginning_of_time()),
-            "EOT" => return Some(Time::new_end_of_time()),
-            _ => {}
-        }
-        if (s.contains(':')) && (s.contains(' ') || s.contains('T')) && s.matches('-').count() == 2
-        {
-            if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f") {
-                return Some(Time::from_naive_datetime(dt));
-            }
-            if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f") {
-                return Some(Time::from_naive_datetime(dt));
-            }
-        }
-        if s.matches('-').count() == 2 && !s.contains(':') && NaiveDate::from_str(s).is_ok() {
-            return Some(Time::new_date_from(s));
-        }
-        if s.matches('-').count() == 1
-            && !s.contains(':')
-            && let Some((y, m)) = s.split_once('-')
-            && y.chars().all(|c| c == '-' || c.is_ascii_digit())
-            && m.chars().all(|c| c.is_ascii_digit())
-            && let Ok(mm) = m.parse::<u8>()
-            && (1..=12).contains(&mm)
-        {
-            return Some(Time::new_year_month_from(s));
-        }
-        if s.chars().all(|c| c == '-' || c.is_ascii_digit()) && (4..=8).contains(&s.len()) {
-            return Some(Time::new_year_from(s));
-        }
-        None
-    }
 }
 
 impl Default for Time {
@@ -801,11 +538,5 @@ impl fmt::Display for Time {
                 write!(f, "{}", d)
             }
         }
-    }
-}
-#[cfg(feature = "persistence")]
-impl ToSql for Time {
-    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        Ok(ToSqlOutput::from(self.to_string()))
     }
 }

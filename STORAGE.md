@@ -304,9 +304,9 @@ It never retains a foreign local number merely because it is currently unused.
 Each beta engine reads its current format and at least the immediately preceding
 beta format. A breaking migration writes a new store beside the source, replays
 and validates it completely, and activates it only after success; it never
-mutates the old store. Published stepwise migrators remain available. The SQLite
-prototype importer is supported through the beta series and archived when
-SQLite is removed from the runtime at the first stable release.
+mutates the old store. Published stepwise migrators remain available. There is no
+pre-beta SQLite compatibility boundary (D031); this format starts the published
+migration window.
 
 Snapshots, derived indexes, compaction, and immutable segment rotation may be
 added later. They are rebuildable optimizations and cannot change the logical

@@ -32,7 +32,7 @@ The following must be accepted before their respective implementation begins:
 
 - Core model and time: D001-D011
 - Traqula beta semantics: D012-D019
-- Append-only persistence format: D020-D027
+- Append-only persistence format: D020-D027 and D031
 - Public beta compatibility: D028-D030
 
 Non-format groundwork can begin earlier: property tests, typed AST construction,
@@ -1295,6 +1295,8 @@ removed together with the `rusqlite` dependency.
 - SQLite importer lifetime: Ship and support it through the beta series. Remove it
   and the `rusqlite` dependency at the first stable release, while retaining the
   last beta importer as an archived migration tool.
+- Amendment: The SQLite-importer lifetime above is superseded by D031. The
+  remaining current/previous beta format guarantees in this decision stay accepted.
 - Reasoning: This guarantees a supported logical-data path without requiring the
   main engine to carry every historical physical decoder indefinitely.
 - Accepted on: 2026-08-26
@@ -1427,6 +1429,28 @@ interface embedded in files and responses.
   while the young language and implementation retain controlled room to improve.
 - Accepted on: 2026-08-26
 
+### D031: Pre-Release SQLite Compatibility
+
+**Status:** Accepted
+
+**Supersedes:** Only the SQLite-importer lifetime clause in D027
+
+No Positorium release has used the prototype SQLite backend, and there is no
+legacy user data or published SQLite contract to preserve.
+
+**Response:**
+
+- Choice: Remove the SQLite backend, importer scaffolding, feature flag, and
+  `rusqlite` dependency before the first beta. Do not build a SQLite migration
+  path for an unpublished prototype format.
+- Compatibility boundary: The first published append-only beta format begins the
+  D027/D030 migration guarantee. Native logical export/import and physical backup
+  remain required for that format.
+- Reasoning: Carrying and testing an unused legacy path would enlarge the public
+  and security surface without protecting released data. Removing it also keeps
+  logical values independent of storage UIDs and SQL conversion types.
+- Accepted on: 2026-08-26
+
 ---
 
 ## Decision Summary
@@ -1465,3 +1489,4 @@ Update this table as decisions are accepted.
 | D028 | Stable Rust API surface | Accepted | High-level contracts only |
 | D029 | HTTP beta trust boundary | Accepted | Loopback, same-origin, enforced limits |
 | D030 | Beta compatibility promise | Accepted | Logical-data migration; versioned surfaces |
+| D031 | Pre-release SQLite compatibility | Accepted | Remove unpublished prototype path now |

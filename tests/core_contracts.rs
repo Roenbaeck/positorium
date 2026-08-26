@@ -97,13 +97,13 @@ fn snapshots_preserve_incomparable_and_equal_time_conflicts() {
 #[test]
 fn role_catalog_normalizes_nfc_and_keeps_names_case_sensitive() {
     let db = Database::new(PersistenceMode::InMemory).unwrap();
-    let (decomposed, existed) = db.create_role("cafe\u{301}".to_string(), false);
+    let (decomposed, existed) = db.create_role("cafe\u{301}".to_string(), false).unwrap();
     assert!(!existed);
-    let (composed, existed) = db.create_role("caf\u{e9}".to_string(), false);
+    let (composed, existed) = db.create_role("caf\u{e9}".to_string(), false).unwrap();
     assert!(existed);
     assert_eq!(decomposed.role(), composed.role());
 
-    let (upper, existed) = db.create_role("CAF\u{c9}".to_string(), false);
+    let (upper, existed) = db.create_role("CAF\u{c9}".to_string(), false).unwrap();
     assert!(!existed);
     assert_ne!(decomposed.role(), upper.role());
 }
@@ -166,7 +166,7 @@ fn only_assertion_roles_are_reserved_by_default() {
     assert_eq!(posit.role(), POSIT_ROLE_ID);
     assert_eq!(ascertains.role(), ASCERTAINS_ROLE_ID);
     drop(keeper);
-    let (thing, existed) = db.create_role("thing".to_string(), false);
+    let (thing, existed) = db.create_role("thing".to_string(), false).unwrap();
     assert!(!existed);
     assert!(!thing.reserved());
 }
@@ -174,7 +174,7 @@ fn only_assertion_roles_are_reserved_by_default() {
 #[test]
 fn invalid_appearance_sets_and_unknown_roles_return_errors() {
     let db = Database::new(PersistenceMode::InMemory).unwrap();
-    let (role, _) = db.create_role("member".to_string(), false);
+    let (role, _) = db.create_role("member".to_string(), false).unwrap();
     let (first, _) = db.create_appearance(10, Arc::clone(&role));
     let (second, _) = db.create_appearance(11, role);
     assert!(db.create_appearance_set(vec![first, second]).is_err());

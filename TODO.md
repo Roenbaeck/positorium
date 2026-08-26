@@ -22,7 +22,7 @@ Beta does not mean an Internet-facing, production-ready service. Authentication,
 replication, distributed execution, and container packaging are outside this
 milestone unless they become necessary for a concrete deployment.
 
-All beta-gating decisions D001-D030 in `DECISIONS.md` were accepted on
+All beta-gating decisions D001-D031 in `DECISIONS.md` were accepted on
 2026-08-26. The unchecked items below track remaining specification,
 implementation, documentation, and test work; decision acceptance alone does not
 complete them. Decision identifiers are included where they clarify the governing
@@ -259,11 +259,11 @@ this algebra.
 
 ## P0: Append-Only Persistence
 
-SQLite was useful for prototyping and offline inspection, but it will not be the
-runtime persistence backend for beta. Replace it with a format designed for
-compact sequential writes and deterministic posit replay.
+The unpublished SQLite prototype is not a compatibility boundary (D031). The
+beta uses a format designed for compact sequential writes and deterministic
+posit replay.
 
-- [ ] **Separate the engine from the storage implementation.**
+- [x] **Separate the engine from the storage implementation.**
         - Define a narrow append/replay/flush storage interface that returns all
             durability and corruption errors to the caller.
         - Replace the public `DataType` persistence contract with a storage-neutral
@@ -284,7 +284,7 @@ compact sequential writes and deterministic posit replay.
             identifiers, lossless literal payloads, and all time precisions.
         - Use hand-specified endian-independent payloads with little-endian fixed
             integers; never persist Rust memory layouts or `Display` output.
-- [ ] **Persist catalog metadata in the interleaved log.**
+- [x] **Persist catalog metadata in the interleaved log.**
         - Persist role identity, canonical name, reserved status, and record version as
             metadata records in the same log.
         - Preserve the fact that role identities are also Thing identities.
@@ -294,7 +294,7 @@ compact sequential writes and deterministic posit replay.
         - Specify a closed registry of built-in `(codec identifier, codec version)`
             pairs with immutable decoding semantics. Require a raw UTF-8 token fallback
             for every beta literal family and defer custom codecs (D026).
-- [ ] **Define the posit log record model.**
+- [x] **Define the posit log record model.**
         - Persist posit identity, sorted appearances as `(thing, role)` identities,
             hidden value codec identifier, lossless literal payload, and appearance
             time.
@@ -309,7 +309,7 @@ compact sequential writes and deterministic posit replay.
             identity durable only when a committed role or posit first references it;
             permit gaps but never recycle released identities (D020).
         - Preserve duplicate detection and canonical reconstruction during replay.
-- [ ] **Define commit and acknowledgment semantics.**
+- [x] **Define commit and acknowledgment semantics.**
         - Enforce one writer/owner for the complete store with one operating-system
             lock covering the manifest and every active or sealed log (D023).
         - Make each semicolon-delimited command one atomic batch delimited by a commit
@@ -322,7 +322,7 @@ compact sequential writes and deterministic posit replay.
             the commit. In-memory execution makes no disk-durability claim (D022).
         - Update in-memory state only after the durable append succeeds, or provide a
             complete rollback path.
-- [ ] **Implement deterministic recovery.**
+- [x] **Implement deterministic recovery.**
         - On writable recovery, truncate only bytes after the last valid commit frame.
             A read-only open may ignore that uncommitted tail (D025).
         - Fail startup with byte offset and record sequence on checksum failure,
@@ -332,21 +332,18 @@ compact sequential writes and deterministic posit replay.
             silently skipping data.
         - Rebuild the identity generator, keepers, and all indexes identically on
             every replay.
-- [ ] **Implement framed-record integrity for the new log.**
+- [x] **Implement framed-record integrity for the new log.**
         - Verify CRC32C over each complete framed record except its checksum field
             (D024).
         - Do not require a rolling cryptographic chain in beta. Reserve a manifest
             feature flag for a future optional BLAKE3 chain over committed framed bytes
             in sequence order, without calling it tamper-proof absent a trusted anchor.
-- [ ] **Provide migration and inspection tools.**
-        - Build a one-way importer from the prototype SQLite schema to the first log
-            format and verify role/thing/posit counts plus representative queries.
+- [ ] **Provide native transfer and inspection tools.**
         - Provide a stable logical export/dump format using `(store UUID, local u64)`
             for external identities. Import must remap every identity and internal
             reference; foreign local identifiers are never retained verbatim (D003).
-        - Keep SQLite support only in the importer through the beta series. At the first
-            stable release, remove it and `rusqlite` from the engine while archiving the
-            last beta importer (D027).
+        - Remove the unpublished SQLite prototype path and `rusqlite` dependency;
+            the first append-only beta format starts the compatibility window (D031).
         - Hold the store's read/backup lock while copying the manifest and logs through
             a recorded committed length; exclude uncommitted tail bytes (D023).
 - [ ] **Plan format evolution without premature compaction work.**
@@ -374,7 +371,7 @@ compact sequential writes and deterministic posit replay.
             of its changes or none, while earlier commands remain committed after a
             later failure. Defer explicit script transactions until after beta (D021).
         - Add cooperative cancellation points inside query evaluation.
-- [ ] **Make startup and shutdown explicit.**
+- [x] **Make startup and shutdown explicit.**
         - Fail startup on committed corruption, unsupported formats, or failed replay.
         - Flush according to the single persistent durability contract during graceful
             shutdown (D022).
@@ -400,7 +397,7 @@ compact sequential writes and deterministic posit replay.
             lossless result and stream-event types; storage configuration; and
             `DatabaseError` (D028).
         - Keep keepers, indexes/lookups, `ThingGenerator`, parser/AST/planner internals,
-            `Persistor`, physical records/codecs, and public fields exposing those
+            physical storage owners/records/codecs, and public fields exposing those
             details explicitly unstable.
         - Rename `create_apperance` to `create_appearance` while narrowing the API and
             apply the D030 deprecation policy to any already-published surface.
@@ -428,7 +425,7 @@ compact sequential writes and deterministic posit replay.
             only uncommitted tail data can be discarded.
         - Verify metadata-before-dependent-posit ordering in the interleaved log,
             command-level atomicity, strict acknowledgment durability, backup committed
-            lengths, identity remapping, and SQLite import fidelity.
+            lengths and identity remapping.
 - [ ] **Language contract tests.**
         - Cover mixed time precision, equal-time ties, literal and variable `as of`,
             shorthand expansion equivalence, binding multiplicity, and deterministic
@@ -454,8 +451,6 @@ compact sequential writes and deterministic posit replay.
 - [ ] **Benchmark the intended architecture.**
         - Measure append throughput, bytes per posit, replay/startup time, query time,
             and memory usage at representative result-set sizes.
-        - Compare with the SQLite prototype to validate the backend switch, but do not
-            make SQLite parity a release dependency.
 
 ## P1: Server And Distribution
 
@@ -501,8 +496,8 @@ compact sequential writes and deterministic posit replay.
             unions as role unions, or confuse a leading posit binder with an appearing
             Thing binder.
         - Add a cookbook for correction, disagreement, external identification,
-            multi-valued attributes, repeated relation roles, backup/restore, and
-            SQLite migration.
+            multi-valued attributes, repeated relation roles, backup, restore, and
+            native logical transfer.
         - Document the exact reserved-role vocabulary, command atomicity and durability,
             trust/resource limits, beta compatibility window, and the manifest plus
             interleaved-log backup unit.

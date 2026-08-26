@@ -6,7 +6,8 @@
 #[cfg(feature = "cli")]
 use config::*;
 use std::collections::HashMap;
-use std::fs::{read_to_string, remove_file};
+use std::fs::{read_to_string, remove_dir_all, remove_file};
+use std::path::Path;
 
 use positorium::construct::{Database, PersistenceMode};
 use positorium::error::{DatabaseError, Result};
@@ -54,11 +55,25 @@ async fn real_main() -> Result<()> {
         .map(|v| v == "true")
         .unwrap_or(false);
     if recreate_database_on_startup {
-        match remove_file(database_file_and_path) {
+        let target = Path::new(database_file_and_path);
+        if database_file_and_path.is_empty()
+            || matches!(database_file_and_path.as_str(), "/" | "." | "..")
+        {
+            return Err(DatabaseError::Config(format!(
+                "refusing to recreate unsafe store path '{database_file_and_path}'"
+            )));
+        }
+        let removal = if target.is_dir() {
+            remove_dir_all(target)
+        } else {
+            remove_file(target)
+        };
+        match removal {
             Ok(_) => (),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
             Err(e) => {
                 println!(
-                    "Could not remove the file '{}': {}",
+                    "Could not remove the store '{}': {}",
                     database_file_and_path, e
                 );
             }
@@ -94,17 +109,6 @@ async fn real_main() -> Result<()> {
             Err(e) => {
                 tracing::warn!(error=%e, "Startup script execution error");
             }
-        }
-    }
-    // Minimal informational output (always show integrity ledger head if available)
-    #[cfg(feature = "persistence")]
-    {
-        let p = db
-            .persistor
-            .lock()
-            .map_err(|error| DatabaseError::Lock(error.to_string()))?;
-        if let Some((head, count)) = p.current_superhash()? {
-            println!("Integrity ledger head: {} ({} posits)", head, count);
         }
     }
     // Derive listen interface & port (optional in config)
@@ -155,5 +159,6 @@ async fn real_main() -> Result<()> {
     axum::serve(listener, app.into_make_service())
         .await
         .map_err(|e| DatabaseError::Execution(format!("server error: {e}")))?;
+    db.flush()?;
     Ok(())
 }
