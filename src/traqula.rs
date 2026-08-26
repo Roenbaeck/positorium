@@ -68,6 +68,9 @@ use tracing::info;
 
 type Variables = HashMap<String, ResultSet, OtherHasher>;
 
+/// Version of the accepted Traqula source grammar and semantics.
+pub const TRAQULA_VERSION: u16 = 1;
+
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Copy, Clone)]
 pub enum ResultSetMode {
     Empty,
@@ -705,6 +708,7 @@ pub struct ExecutionWarning {
 /// Values resolved once and shared by every command in a script execution.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionMetadata {
+    pub traqula_version: u16,
     pub resolved_now: Time,
     pub warnings: Vec<ExecutionWarning>,
 }
@@ -728,6 +732,7 @@ impl ExecutionOptions {
             .transpose()?;
         Ok(ExecutionContext {
             metadata: ExecutionMetadata {
+                traqula_version: TRAQULA_VERSION,
                 resolved_now: self.now.unwrap_or_default(),
                 warnings: execution_warnings(source),
             },

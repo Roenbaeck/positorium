@@ -2,7 +2,7 @@ use crate::error::DatabaseError;
 use crate::interface::QueryInterface;
 use crate::traqula::{
     CancellationToken, CollectedResultSet, ExecutionOptions, ExecutionWarning,
-    MultiStreamCallbacks, ResultCell, RowSink, SinkFlow, script_counts,
+    MultiStreamCallbacks, ResultCell, RowSink, SinkFlow, TRAQULA_VERSION, script_counts,
 };
 use axum::extract::{DefaultBodyLimit, State, rejection::JsonRejection};
 use axum::http::{HeaderValue, Method, StatusCode, header};
@@ -16,6 +16,7 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::{info, warn};
 
 pub const HTTP_API_VERSION: &str = "v1";
+pub const SSE_SCHEMA_VERSION: u16 = 1;
 pub const DEFAULT_REQUEST_BODY_BYTES: usize = 1024 * 1024;
 pub const MAX_REQUEST_BODY_BYTES: usize = 16 * 1024 * 1024;
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -123,6 +124,7 @@ fn is_exact_loopback_origin(origin: &str) -> bool {
 
 #[derive(Deserialize)]
 pub struct QueryRequest {
+    pub traqula_version: u16,
     pub script: String,
     #[serde(default)]
     pub stream: bool,
@@ -133,6 +135,7 @@ pub struct QueryRequest {
 #[derive(Serialize)]
 pub struct QueryResponse {
     pub api_version: &'static str,
+    pub traqula_version: u16,
     pub id: u64,
     pub status: String,
     pub elapsed_ms: f64,
@@ -203,6 +206,16 @@ async fn query(
         Ok(request) => request,
         Err(error) => return error_response(error.status(), started, error.body_text()),
     };
+    if request.traqula_version != TRAQULA_VERSION {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            started,
+            format!(
+                "unsupported Traqula version {}; supported version is {TRAQULA_VERSION}",
+                request.traqula_version
+            ),
+        );
+    }
     let (command_count, search_count) = match script_counts(&request.script) {
         Ok(counts) => counts,
         Err(error) => return database_error_response(error, started),
@@ -272,6 +285,7 @@ async fn query(
                 StatusCode::OK,
                 QueryResponse {
                     api_version: HTTP_API_VERSION,
+                    traqula_version: TRAQULA_VERSION,
                     id: 0,
                     status: "ok".into(),
                     elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
@@ -296,6 +310,7 @@ async fn query(
                 StatusCode::OK,
                 QueryResponse {
                     api_version: HTTP_API_VERSION,
+                    traqula_version: TRAQULA_VERSION,
                     id: 0,
                     status: "ok".into(),
                     elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
@@ -356,7 +371,7 @@ fn streaming_response(
             match interface.execute_stream_single_with_options(&script, &mut sink, options) {
                 Ok((_columns, limited, row_count)) => {
                     let event = serde_json::json!({
-                        "version": 1,
+                        "version": SSE_SCHEMA_VERSION,
                         "event": "end",
                         "row_count": row_count,
                         "limited": limited
@@ -374,7 +389,7 @@ fn streaming_response(
             match interface.execute_stream_multi_with_options(&script, &mut callbacks, options) {
                 Ok(()) => {
                     let event = serde_json::json!({
-                        "version": 1,
+                        "version": SSE_SCHEMA_VERSION,
                         "event": "end",
                         "result_sets": search_count,
                         "total_rows": callbacks.total_rows
@@ -405,7 +420,7 @@ struct StreamingSink {
 impl RowSink for StreamingSink {
     fn on_warning(&mut self, warning: &ExecutionWarning) -> SinkFlow {
         let event = serde_json::json!({
-            "version": 1,
+            "version": SSE_SCHEMA_VERSION,
             "event": "warning",
             "warning": warning
         });
@@ -414,7 +429,7 @@ impl RowSink for StreamingSink {
 
     fn on_meta(&mut self, columns: &[String]) -> SinkFlow {
         let event = serde_json::json!({
-            "version": 1,
+            "version": SSE_SCHEMA_VERSION,
             "event": "meta",
             "columns": columns
         });
@@ -423,7 +438,7 @@ impl RowSink for StreamingSink {
 
     fn push(&mut self, row: Vec<ResultCell>) -> SinkFlow {
         let event = serde_json::json!({
-            "version": 1,
+            "version": SSE_SCHEMA_VERSION,
             "event": "row",
             "row": row
         });
@@ -455,7 +470,7 @@ struct StreamingCallbacks {
 impl MultiStreamCallbacks for StreamingCallbacks {
     fn on_warning(&mut self, warning: &ExecutionWarning) {
         let event = serde_json::json!({
-            "version": 1,
+            "version": SSE_SCHEMA_VERSION,
             "event": "warning",
             "warning": warning
         });
@@ -464,7 +479,7 @@ impl MultiStreamCallbacks for StreamingCallbacks {
 
     fn on_result_set_start(&mut self, index: usize, columns: &[String], search: &str) {
         let event = serde_json::json!({
-            "version": 1,
+            "version": SSE_SCHEMA_VERSION,
             "event": "result_set_start",
             "index": index,
             "columns": columns,
@@ -475,7 +490,7 @@ impl MultiStreamCallbacks for StreamingCallbacks {
 
     fn on_row(&mut self, index: usize, row: Vec<ResultCell>) -> bool {
         let event = serde_json::json!({
-            "version": 1,
+            "version": SSE_SCHEMA_VERSION,
             "event": "row",
             "index": index,
             "row": row
@@ -490,7 +505,7 @@ impl MultiStreamCallbacks for StreamingCallbacks {
 
     fn on_result_set_end(&mut self, index: usize, row_count: usize, limited: bool) {
         let event = serde_json::json!({
-            "version": 1,
+            "version": SSE_SCHEMA_VERSION,
             "event": "result_set_end",
             "index": index,
             "row_count": row_count,
@@ -514,13 +529,13 @@ impl StreamingCallbacks {
 fn send_stream_error(tx: &tokio::sync::mpsc::Sender<String>, error: DatabaseError) {
     warn!(%error, "streaming query failed");
     let event = serde_json::json!({
-        "version": 1,
+        "version": SSE_SCHEMA_VERSION,
         "event": "error",
         "error": error.to_string()
     });
     let _ = tx.blocking_send(format!("data: {event}\n\n"));
     let end = serde_json::json!({
-        "version": 1,
+        "version": SSE_SCHEMA_VERSION,
         "event": "end",
         "status": "error"
     });
@@ -548,6 +563,7 @@ fn error_response(status: StatusCode, started: Instant, error: impl Into<String>
         status,
         QueryResponse {
             api_version: HTTP_API_VERSION,
+            traqula_version: TRAQULA_VERSION,
             id: 0,
             status: "error".into(),
             elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
@@ -622,6 +638,7 @@ mod tests {
         let response = query(
             State(state),
             Ok(Json(QueryRequest {
+                traqula_version: TRAQULA_VERSION,
                 script: "not traqula".into(),
                 stream: false,
                 timeout_ms: None,
@@ -629,5 +646,27 @@ mod tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn unsupported_traqula_versions_are_rejected_before_execution() {
+        let database = Arc::new(Database::new(PersistenceMode::InMemory).unwrap());
+        let state = ServerState {
+            interface: Arc::new(QueryInterface::new(Arc::clone(&database))),
+            config: ServerConfig::default(),
+        };
+        let response = query(
+            State(state),
+            Ok(Json(QueryRequest {
+                traqula_version: TRAQULA_VERSION + 1,
+                script: "add role never_created;".into(),
+                stream: false,
+                timeout_ms: None,
+            })),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(!database.contains_role("never_created").unwrap());
     }
 }

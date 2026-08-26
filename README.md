@@ -102,6 +102,7 @@ cargo run --bin positorium-store -- import export.jsonl imported.store remap.jso
 Physical backup excludes uncommitted tail bytes without changing the source.
 Logical import creates a new store UUID and emits the complete identity remap.
 The versioned formats and failure rules are specified in [TRANSFER.md](TRANSFER.md).
+Independent beta boundary versions are listed in [CONTRACTS.md](CONTRACTS.md).
 
 ## Client / Server Architecture
 
@@ -111,21 +112,24 @@ Positorium can run as a library or an HTTP server. The server layer (Axum + Toki
 
 Request body:
 ```jsonc
-{ "script": "search [{(*, name)}, +n, *] return n;", "stream": false, "timeout_ms": 5000 }
+{ "traqula_version": 1, "script": "search [{(*, name)}, +n, *] return n;", "stream": false, "timeout_ms": 5000 }
 ```
 
 Response (single result set):
 ```jsonc
 {
 	"api_version": "v1",
+	"traqula_version": 1,
 	"id": 0,
 	"status": "ok",
 	"elapsed_ms": 1.23,
 	"columns": ["n"],
-	"row_types": [["String"]],
 	"row_count": 2,
 	"limited": false,
-	"rows": [["Alice"],["Bob"]]
+	"rows": [
+		[{"kind":"literal","text":"\"Alice\""}],
+		[{"kind":"literal","text":"\"Bob\""}]
+	]
 }
 ```
 

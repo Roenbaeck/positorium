@@ -25,6 +25,7 @@ fn now_override_is_shared_by_the_complete_script_and_reported() {
         .expect("script executes");
 
     assert_eq!(result.metadata.resolved_now, resolved_now);
+    assert_eq!(result.metadata.traqula_version, positorium::TRAQULA_VERSION);
     assert_eq!(
         result.rows,
         vec![vec![

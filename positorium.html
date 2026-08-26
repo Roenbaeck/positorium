@@ -424,25 +424,13 @@ async function runWasm(script, started) {
     }
     const output = wasmEngine.execute(script);
     els.progress.value = 80;
-    
-    // Simple text-to-table parser for WasmEngine.execute output
-    const lines = output.trim().split('\n');
-    let columns = [];
-    let rows = [];
-    if (lines.length > 0) {
-      columns = lines[0].split('\t');
-      // Skip separator line if present (contains dashes)
-      const startRow = (lines.length > 1 && lines[1].includes('---')) ? 2 : 1;
-      for (let i = startRow; i < lines.length; i++) {
-        if (lines[i].startsWith('... (limited)')) continue;
-        rows.push(lines[i].split('\t'));
-      }
-    }
-
-    buildTable(columns, rows, []);
+    const first = output.result_sets[0] || { columns: [], rows: [] };
+    const columns = first.columns;
+    const rows = first.rows;
+    buildTable(columns, rows);
     const ms = (performance.now() - started).toFixed(2);
     els.perf.textContent = `WASM local | execution ${ms} ms | rows ${rows.length}`;
-    els.jsonOut.textContent = output;
+    els.jsonOut.textContent = JSON.stringify(output, null, 2);
     setStatus('OK');
   } catch (e) {
     setStatus('WASM error: ' + e, 'err');
@@ -450,17 +438,17 @@ async function runWasm(script, started) {
   }
 }
 function escapeHtml(s) { return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c])); }
-function buildTable(columns, rows, rowTypes) {
+function buildTable(columns, rows) {
   els.tableHead.innerHTML = '';
   els.tableBody.innerHTML = '';
   if (!columns || columns.length===0) return;
   // Collect unique data types for each column
   const columnTypes = columns.map((_, colIndex) => {
     const types = new Set();
-    if (rowTypes) {
-      rowTypes.forEach(rowType => {
-        if (rowType && rowType[colIndex]) {
-          types.add(rowType[colIndex]);
+    if (rows) {
+      rows.forEach(row => {
+        if (row && row[colIndex] && row[colIndex].kind) {
+          types.add(row[colIndex].kind);
         }
       });
     }
@@ -477,11 +465,8 @@ function buildTable(columns, rows, rowTypes) {
     const tr = document.createElement('tr');
     r.forEach((cell,ci)=>{
       const td = document.createElement('td');
-      const typ = (rowTypes && rowTypes[ri] ? rowTypes[ri][ci] : '');
-      let display = String(cell);
-      if (typ === 'Certainty') {
-        display = formatCertaintyDisplay(display);
-      }
+      const typ = cell && cell.kind ? cell.kind : '';
+      const display = cell && Object.prototype.hasOwnProperty.call(cell, 'text') ? cell.text : String(cell);
       td.innerHTML = '<span class="badge '+escapeHtml(typ)+'">'+escapeHtml(typ||'')+'</span> '+ escapeHtml(display);
       tr.appendChild(td);
     });
@@ -535,7 +520,7 @@ function rebuildStreamingDropdown(multiSets, currentIdx) {
     sel.appendChild(opt);
   });
   sel.value = prev;
-  sel.onchange = () => { const idx = parseInt(sel.value,10); const s = multiSets[idx]; buildTable(s.columns, s.rows, s.row_types); };
+  sel.onchange = () => { const idx = parseInt(sel.value,10); const s = multiSets[idx]; buildTable(s.columns, s.rows); };
   computeSearchOffsetsForOptions();
 }
 async function runQuery() {
@@ -545,7 +530,7 @@ async function runQuery() {
   console.log('script:', script);
   const doStream = els.streamMode.checked;
   const doWasm = els.wasmMode.checked;
-  const payload = { script: script, stream: doStream };
+  const payload = { traqula_version: 1, script: script, stream: doStream };
   const timeoutMs = parseInt(els.timeout.value || '0',10);
   els.runBtn.disabled = true; setStatus('Running...'); els.progress.style.visibility='visible'; els.progress.value=15;
   const controller = timeoutMs>0 ? new AbortController() : null;
@@ -571,15 +556,15 @@ async function runQuery() {
         if (json.result_sets) {
           populateResultSetSelect(json.result_sets);
           const first = json.result_sets[0];
-          buildTable(first.columns, first.rows||[], first.row_types||[]);
+          buildTable(first.columns, first.rows||[]);
           els.resultSetSelect.onchange = () => {
             const idx = parseInt(els.resultSetSelect.value,10);
               const rs = json.result_sets[idx];
-              buildTable(rs.columns, rs.rows||[], rs.row_types||[]);
+              buildTable(rs.columns, rs.rows||[]);
           };
         } else {
           populateResultSetSelect(null);
-          buildTable(json.columns, json.rows||[], json.row_types||[]);
+          buildTable(json.columns, json.rows||[]);
         }
         const ms = (performance.now()-started).toFixed(2);
         els.perf.textContent = `client ${(ms)} ms | server ${(json.elapsed_ms).toFixed(3)} ms | rows ${json.row_count}`;
@@ -600,7 +585,7 @@ async function runStream(endpoint, payload, started, controller) {
   // Reset table
   buildTable([],[],[]); populateResultSetSelect(null); els.jsonOut.textContent='';
   // Multi-search streaming accumulation structures
-  let multiSets = []; // each: { columns, rows, row_types, limited }
+  let multiSets = []; // each: { columns, rows, limited }
   let currentSetIndex = 0;
   let streamingMulti = false;
   const res = await fetch(endpoint, {
@@ -614,7 +599,7 @@ async function runStream(endpoint, payload, started, controller) {
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
-  let columns = null; let rowTypesAll = []; let rowCount=0; let limited=false;
+  let columns = null; let rowCount=0; let limited=false;
   const rows = [];
   function flushEvents(text) {
     const parts = text.split(/\n\n/);
@@ -632,7 +617,7 @@ async function runStream(endpoint, payload, started, controller) {
             // Start of new result set
             streamingMulti = true;
             if (!evt.columns) continue;
-            multiSets.push({ columns: evt.columns, rows: [], row_types: [], limited: false, search: evt.search || null });
+            multiSets.push({ columns: evt.columns, rows: [], limited: false, search: evt.search || null });
             const idx = evt.index;
             // If first set, initialize overall view
             if (multiSets.length === 1) {
@@ -645,9 +630,9 @@ async function runStream(endpoint, payload, started, controller) {
         } else if (evt.event==='row') {
             if (streamingMulti && typeof evt.index === 'number' && multiSets[evt.index]) {
               const set = multiSets[evt.index];
-              set.rows.push(evt.row); set.row_types.push(evt.types); set.row_count = set.rows.length;
+              set.rows.push(evt.row); set.row_count = set.rows.length;
               if (evt.index === currentSetIndex) {
-                buildTable(set.columns, set.rows, set.row_types);
+                buildTable(set.columns, set.rows);
               }
               // Refresh dropdown option text to reflect new row counts
               if (multiSets.length > 1) {
@@ -655,8 +640,8 @@ async function runStream(endpoint, payload, started, controller) {
               }
               els.perf.textContent = `stream sets ${multiSets.length} | rows set${evt.index+1}=${set.rows.length}`;
             } else { // single-search path
-              rows.push(evt.row); rowTypesAll.push(evt.types); rowCount = rows.length;
-              buildTable(columns, rows, rowTypesAll);
+              rows.push(evt.row); rowCount = rows.length;
+              buildTable(columns, rows);
               els.perf.textContent = `stream rows ${rowCount}`;
             }
         } else if (evt.event==='result_set_end') {
@@ -677,11 +662,11 @@ async function runStream(endpoint, payload, started, controller) {
               setStatus('OK');
               // Ensure dropdown exists even if earlier start events had an exception
               rebuildStreamingDropdown(multiSets, currentSetIndex);
-              els.jsonOut.textContent = JSON.stringify({ status:'ok', result_sets: multiSets.map((s,i)=>({ index:i, columns:s.columns, rows:s.rows, row_types:s.row_types, row_count: s.row_count||s.rows.length, limited: !!s.limited, search: s.search })) }, null, 2);
+              els.jsonOut.textContent = JSON.stringify({ status:'ok', result_sets: multiSets.map((s,i)=>({ index:i, columns:s.columns, rows:s.rows, row_count: s.row_count||s.rows.length, limited: !!s.limited, search: s.search })) }, null, 2);
             } else {
               els.perf.textContent = `client ${(ms)} ms | total rows ${evt.total_rows ?? rowCount}`;
               setStatus('OK');
-              const summary = { status:'ok', last_set: { columns, rows, row_types: rowTypesAll, row_count: rowCount }, total_rows: evt.total_rows ?? rowCount };
+              const summary = { status:'ok', last_set: { columns, rows, row_count: rowCount }, total_rows: evt.total_rows ?? rowCount };
               els.jsonOut.textContent = JSON.stringify(summary,null,2);
             }
         } else if (evt.event==='error') {
@@ -692,7 +677,7 @@ async function runStream(endpoint, payload, started, controller) {
             els.perf.textContent = `client ${(ms)} ms | rows ${rowCount}${limited?' (limited)':''}`;
             setStatus('OK');
             // Summarize JSON output
-            const summary = { status:'ok', columns, rows, row_types: rowTypesAll, row_count: rowCount, limited };
+            const summary = { status:'ok', columns, rows, row_count: rowCount, limited };
             els.jsonOut.textContent = JSON.stringify(summary,null,2);
         }
       } catch (e) { /* ignore parse errors mid-stream */ }

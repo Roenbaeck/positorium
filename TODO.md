@@ -380,7 +380,7 @@ posit replay.
 
 ## P0: Compatibility Boundaries
 
-- [ ] **Version every external contract.**
+- [x] **Version every external contract.**
         - Version the manifest/log format, Traqula grammar, HTTP endpoint and streaming
             events, WASM interface, and logical export format independently.
         - Use 0.x SemVer: minor releases may contain documented beta breaks and patch

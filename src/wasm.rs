@@ -8,6 +8,7 @@ pub const WASM_INTERFACE_VERSION: &str = "1";
 #[derive(serde::Serialize)]
 struct WasmQueryResponse {
     interface_version: &'static str,
+    traqula_version: u16,
     result_sets: Vec<crate::traqula::CollectedResultSet>,
 }
 
@@ -32,6 +33,7 @@ impl WasmEngine {
             .map_err(|error| JsValue::from_str(&error.to_string()))?;
         serde_wasm_bindgen::to_value(&WasmQueryResponse {
             interface_version: WASM_INTERFACE_VERSION,
+            traqula_version: crate::traqula::TRAQULA_VERSION,
             result_sets,
         })
         .map_err(|error| JsValue::from_str(&error.to_string()))
@@ -61,6 +63,7 @@ mod tests {
 
         let output: serde_json::Value = serde_wasm_bindgen::from_value(output).unwrap();
         assert_eq!(output["interface_version"], "1");
+        assert_eq!(output["traqula_version"], 1);
         assert_eq!(output["result_sets"][0]["rows"][0][0]["text"], "\"Alice\"");
         assert_eq!(output["result_sets"][0]["rows"][0][0]["kind"], "literal");
     }

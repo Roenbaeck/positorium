@@ -76,5 +76,5 @@ pub use literal::{LiteralFamily, LiteralValue};
 pub use traqula::{
     CancellationToken, CollectedResult, CollectedResultSet, Engine, ExecutionMetadata,
     ExecutionOptions, ExecutionWarning, MultiStreamCallbacks, ResultCell, ResultCellKind, RowSink,
-    SinkFlow,
+    SinkFlow, TRAQULA_VERSION,
 };
