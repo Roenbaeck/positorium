@@ -482,7 +482,7 @@ posit replay.
             structured API for a zero-install testbed.
         - Host the web console and WASM engine on GitHub Pages after browser smoke
             tests cover representative Traqula scripts.
-- [ ] **Keep editor support synchronized.**
+- [x] **Keep editor support synchronized.**
         - Test that both copies of `traqula.tmLanguage.json` remain aligned with
             `src/traqula.pest`.
 - [ ] **Write beta documentation.**
