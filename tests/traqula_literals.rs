@@ -44,8 +44,9 @@ fn results_preserve_complete_literal_tokens() {
 #[test]
 fn predicates_use_nominal_semantics_without_changing_results() {
     let engine = engine();
-    engine.execute(
-        r#"
+    engine
+        .execute(
+            r#"
         add role number;
         add role label;
         add role document;
@@ -53,7 +54,8 @@ fn predicates_use_nominal_semantics_without_changing_results() {
         add posit [{(+label, label)}, "\u0041", @NOW];
         add posit [{(+document, document)}, {"a": 1.00, "b": [true, null]}, @NOW];
         "#,
-    );
+        )
+        .unwrap();
 
     let number = engine
         .execute_collect("search [{(*, number)}, +n, *] where n = 10 return n;")
@@ -78,7 +80,7 @@ fn arbitrary_precision_integer_predicates_are_exact() {
     let engine = engine();
     engine.execute(
         "add role number; add posit [{(+lower, number)}, 340282366920938463463374607431768211454, @NOW]; add posit [{(+upper, number)}, 340282366920938463463374607431768211455, @NOW];",
-    );
+    ).unwrap();
 
     let result = engine
         .execute_collect(
@@ -94,14 +96,16 @@ fn arbitrary_precision_integer_predicates_are_exact() {
 #[test]
 fn literal_operators_keep_identity_nominality_and_compatibility_distinct() {
     let engine = engine();
-    engine.execute(
-        r#"
+    engine
+        .execute(
+            r#"
         add role number;
         add role document;
         add posit [{(+number, number)}, +0010.00, @NOW];
         add posit [{(+document, document)}, {"a": 1.00, "b": [true, null]}, @NOW];
         "#,
-    );
+        )
+        .unwrap();
 
     let exact = engine
         .execute_collect("search [{(*, number)}, +n, *] where n === +0010.00 return n;")
@@ -146,7 +150,7 @@ fn literal_operators_keep_identity_nominality_and_compatibility_distinct() {
 #[test]
 fn malformed_structured_literals_fail_without_creating_a_posit() {
     let engine = engine();
-    engine.execute("add role value;");
+    engine.execute("add role value;").unwrap();
     let error = engine
         .execute_collect(r#"add posit [{(+item, value)}, {"name": 1, "\u006eame": 2}, @NOW];"#)
         .unwrap_err();

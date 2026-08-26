@@ -28,7 +28,7 @@ fn in_memory_mode_allows_basic_operations() {
         .expect("create role");
     assert!(!existed);
     let thing = db.create_thing().expect("ephemeral thing");
-    let (appearance, _) = db.create_appearance(*thing, role);
+    let (appearance, _) = db.create_appearance(*thing, role).unwrap();
     let (_aset, _) = db.create_appearance_set(vec![appearance]).unwrap();
 }
 

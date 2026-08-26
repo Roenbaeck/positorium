@@ -4,7 +4,7 @@ use positorium::traqula::Engine;
 fn setup() -> Engine<'static> {
     let db = Database::new(PersistenceMode::InMemory).unwrap();
     let engine = Engine::new(Box::leak(Box::new(db)));
-    engine.execute("add role number; add role confidence; add posit [{(+n1, number)}, 5, @NOW]; add posit [{(+n2, number)}, 10, @NOW]; add posit [{(+c1, confidence)}, 60%, @NOW]; add posit [{(+c2, confidence)}, 75%, @NOW];");
+    engine.execute("add role number; add role confidence; add posit [{(+n1, number)}, 5, @NOW]; add posit [{(+n2, number)}, 10, @NOW]; add posit [{(+c1, confidence)}, 60%, @NOW]; add posit [{(+c2, confidence)}, 75%, @NOW];").unwrap();
     engine
 }
 
@@ -66,7 +66,7 @@ fn certainty_mixed_ordering_error() {
 fn string_ordering_error() {
     let db = Database::new(PersistenceMode::InMemory).unwrap();
     let engine = Engine::new(Box::leak(Box::new(db)));
-    engine.execute("add role label; add posit [{(+l1, label)}, \"alpha\", @NOW]; add posit [{(+l2, label)}, \"beta\", @NOW];");
+    engine.execute("add role label; add posit [{(+l1, label)}, \"alpha\", @NOW]; add posit [{(+l2, label)}, \"beta\", @NOW];").unwrap();
     let script =
         "search [{(*, label)}, +l1, *], [{(*, label)}, +l2, *] where l1 < l2 return l1, l2;";
     let err = engine.execute_collect(script).unwrap_err();
@@ -76,7 +76,9 @@ fn string_ordering_error() {
 #[test]
 fn numeric_mixed_decimal_int() {
     let engine = setup();
-    engine.execute("add posit [{(+n3, number)}, 10.00, @NOW];");
+    engine
+        .execute("add posit [{(+n3, number)}, 10.00, @NOW];")
+        .unwrap();
     let script = "search [{(*, number)}, +a, *], [{(*, number)}, +b, *] where a = b return a, b;";
     let res = engine.execute_collect(script).expect("query ok");
     // Should include 10 vs 10.00 equality pairs (treat numerically equal)

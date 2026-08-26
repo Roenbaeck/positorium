@@ -6,8 +6,10 @@
 #[cfg(feature = "cli")]
 use config::*;
 use std::collections::HashMap;
+use std::fmt::Display;
 use std::fs::{read_to_string, remove_dir_all, remove_file};
 use std::path::Path;
+use std::str::FromStr;
 
 use positorium::construct::{Database, PersistenceMode};
 use positorium::error::{DatabaseError, Result};
@@ -46,14 +48,9 @@ async fn real_main() -> Result<()> {
     let database_file_and_path = settings_lookup
         .get("database_file_and_path")
         .ok_or_else(|| DatabaseError::Config("Missing 'database_file_and_path'".into()))?;
-    let enable_persistence = settings_lookup
-        .get("enable_persistence")
-        .map(|v| v == "true")
-        .unwrap_or(true);
-    let recreate_database_on_startup = settings_lookup
-        .get("recreate_database_on_startup")
-        .map(|v| v == "true")
-        .unwrap_or(false);
+    let enable_persistence = setting(&settings_lookup, "enable_persistence")?.unwrap_or(true);
+    let recreate_database_on_startup =
+        setting(&settings_lookup, "recreate_database_on_startup")?.unwrap_or(false);
     if recreate_database_on_startup {
         let target = Path::new(database_file_and_path);
         if database_file_and_path.is_empty()
@@ -72,10 +69,9 @@ async fn real_main() -> Result<()> {
             Ok(_) => (),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
             Err(e) => {
-                println!(
-                    "Could not remove the store '{}': {}",
-                    database_file_and_path, e
-                );
+                return Err(DatabaseError::Config(format!(
+                    "Could not remove store '{database_file_and_path}': {e}"
+                )));
             }
         }
     }
@@ -104,22 +100,16 @@ async fn real_main() -> Result<()> {
     // Quietly execute the startup script (suppressing any search result row printing)
     {
         let engine = Engine::new(db.as_ref());
-        match engine.execute_collect(&traqula_content) {
-            Ok(_) => {}
-            Err(e) => {
-                tracing::warn!(error=%e, "Startup script execution error");
-            }
-        }
+        engine
+            .execute_collect(&traqula_content)
+            .map_err(|error| DatabaseError::Execution(format!("startup script failed: {error}")))?;
     }
     // Derive listen interface & port (optional in config)
     let listen_interface = settings_lookup
         .get("listen_interface")
         .map(|s| s.as_str())
         .unwrap_or("127.0.0.1");
-    let listen_port: u16 = settings_lookup
-        .get("listen_port")
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(8080);
+    let listen_port: u16 = setting(&settings_lookup, "listen_port")?.unwrap_or(8080);
     let addr: std::net::SocketAddr = format!("{}:{}", listen_interface, listen_port)
         .parse()
         .map_err(|e| {
@@ -128,16 +118,10 @@ async fn real_main() -> Result<()> {
             ))
         })?;
     let mut server_config = positorium::server::ServerConfig::default();
-    if let Some(value) = settings_lookup
-        .get("http_request_body_bytes")
-        .and_then(|value| value.parse::<usize>().ok())
-    {
+    if let Some(value) = setting(&settings_lookup, "http_request_body_bytes")? {
         server_config.request_body_bytes = value;
     }
-    if let Some(value) = settings_lookup
-        .get("http_default_timeout_ms")
-        .and_then(|value| value.parse::<u64>().ok())
-    {
+    if let Some(value) = setting(&settings_lookup, "http_default_timeout_ms")? {
         server_config.default_timeout = std::time::Duration::from_millis(value);
     }
     if let Some(origins) = settings_lookup.get("cors_allowed_origins") {
@@ -156,9 +140,70 @@ async fn real_main() -> Result<()> {
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .map_err(|e| DatabaseError::Execution(format!("bind error: {e}")))?;
-    axum::serve(listener, app.into_make_service())
+    let serve_result = axum::serve(listener, app.into_make_service())
+        .with_graceful_shutdown(shutdown_signal())
         .await
-        .map_err(|e| DatabaseError::Execution(format!("server error: {e}")))?;
-    db.flush()?;
-    Ok(())
+        .map_err(|e| DatabaseError::Execution(format!("server error: {e}")));
+    let flush_result = db.flush();
+    serve_result?;
+    flush_result
+}
+
+#[cfg(feature = "cli")]
+fn setting<T>(settings: &HashMap<String, String>, key: &str) -> Result<Option<T>>
+where
+    T: FromStr,
+    T::Err: Display,
+{
+    settings
+        .get(key)
+        .map(|value| {
+            value.parse::<T>().map_err(|error| {
+                DatabaseError::Config(format!("Invalid '{key}' value '{value}': {error}"))
+            })
+        })
+        .transpose()
+}
+
+#[cfg(feature = "cli")]
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        let terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate());
+        match terminate {
+            Ok(mut terminate) => {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = terminate.recv() => {}
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%error, "failed to install SIGTERM handler; waiting for Ctrl-C");
+                let _ = tokio::signal::ctrl_c().await;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
+#[cfg(all(test, feature = "cli"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn setting_distinguishes_missing_valid_and_invalid_values() {
+        let mut settings = HashMap::new();
+        assert_eq!(setting::<u16>(&settings, "port").unwrap(), None);
+
+        settings.insert("port".to_string(), "8080".to_string());
+        assert_eq!(setting::<u16>(&settings, "port").unwrap(), Some(8080));
+
+        settings.insert("port".to_string(), "not-a-port".to_string());
+        let error = setting::<u16>(&settings, "port").unwrap_err();
+        assert!(matches!(error, DatabaseError::Config(_)));
+        assert!(error.to_string().contains("not-a-port"));
+    }
 }

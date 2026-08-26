@@ -7,7 +7,7 @@ fn setup() -> Engine<'static> {
     // Seed roles and posits
     let engine = Engine::new(Box::leak(Box::new(db)));
     // Insert roles / posits covering numeric, string, certainty
-    engine.execute("add role number; add role label; add role confidence; add posit [{(+n1, number)}, 5, @NOW]; add posit [{(+n2, number)}, 10, @NOW]; add posit [{(+l1, label)}, \"alpha\", @NOW]; add posit [{(+c1, confidence)}, 75%, @NOW];");
+    engine.execute("add role number; add role label; add role confidence; add posit [{(+n1, number)}, 5, @NOW]; add posit [{(+n2, number)}, 10, @NOW]; add posit [{(+l1, label)}, \"alpha\", @NOW]; add posit [{(+c1, confidence)}, 75%, @NOW];").unwrap();
     engine
 }
 
@@ -43,7 +43,9 @@ fn certainty_literal_equivalents() {
 fn one_percent_is_not_parsed_as_one_hundred_percent() {
     let db = Database::new(PersistenceMode::InMemory).unwrap();
     let engine = Engine::new(Box::leak(Box::new(db)));
-    engine.execute("add role confidence; add posit [{(+c1, confidence)}, 1%, @NOW];");
+    engine
+        .execute("add role confidence; add posit [{(+c1, confidence)}, 1%, @NOW];")
+        .unwrap();
 
     let result = engine
         .execute_collect("search [{(*, confidence)}, +c, *] return c;")
@@ -83,7 +85,7 @@ fn numeric_pruning() {
 fn adjacent_large_integers_compare_exactly() {
     let db = Database::new(PersistenceMode::InMemory).unwrap();
     let engine = Engine::new(Box::leak(Box::new(db)));
-    engine.execute("add role number; add posit [{(+n1, number)}, 9007199254740992, @NOW]; add posit [{(+n2, number)}, 9007199254740993, @NOW];");
+    engine.execute("add role number; add posit [{(+n1, number)}, 9007199254740992, @NOW]; add posit [{(+n2, number)}, 9007199254740993, @NOW];").unwrap();
 
     let result = engine
         .execute_collect("search [{(*, number)}, +n, *] where n = 9007199254740993 return n;")
@@ -114,7 +116,7 @@ fn time_where_regression() {
     // Build a small dataset with a time variable bound earlier than the where predicate filter.
     let engine = setup();
     // Add minimal roles / posits to simulate marriage-like pattern with times.
-    engine.execute("add role wife; add role husband; add role name; add role posit; add role ascertains; add posit [{(+w1, wife), (+h1, husband)}, \"married\", '2012-12-12']; add posit [{(+p1, posit), (+a1, ascertains)}, 0%, @NOW]; add posit [{(+h1, name)}, \"Bob\", '2012-12-12'];");
+    engine.execute("add role wife; add role husband; add role name; add role posit; add role ascertains; add posit [{(+w1, wife), (+h1, husband)}, \"married\", '2012-12-12']; add posit [{(+p1, posit), (+a1, ascertains)}, 0%, @NOW]; add posit [{(+h1, name)}, \"Bob\", '2012-12-12'];").unwrap();
     // Query where bound time t1 is compared to a future date -> expect zero rows
     let script = "search +p [{(+w, wife), (+h, husband)}, \"married\", +t1] as of '2012-12-12', [{(p, posit), (*, ascertains)}, +c, +at] as of @NOW, [{(h, name)}, +n, +t] as of t1 where t1 > '2022-01-01' return n, t, c, at;";
     let res = engine.execute_collect(script).expect("query ok");

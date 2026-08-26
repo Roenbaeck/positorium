@@ -31,3 +31,10 @@ pub enum DatabaseError {
 }
 
 pub type Result<T> = std::result::Result<T, DatabaseError>;
+
+#[cfg(feature = "persistence")]
+impl DatabaseError {
+    pub(crate) fn from_io(error: std::io::Error) -> Self {
+        Self::Persistence(error.to_string())
+    }
+}

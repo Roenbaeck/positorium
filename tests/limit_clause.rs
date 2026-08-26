@@ -5,7 +5,7 @@ use positorium::traqula::Engine;
 fn limit_after_return_parses() {
     let db = Database::new(PersistenceMode::InMemory).unwrap();
     let engine = Engine::new(&db);
-    engine.execute("add role name; add posit [{(+x, name)}, \"Alice\", @NOW]; add posit [{(+y, name)}, \"Bob\", @NOW];");
+    engine.execute("add role name; add posit [{(+x, name)}, \"Alice\", @NOW]; add posit [{(+y, name)}, \"Bob\", @NOW];").unwrap();
     let res = engine
         .execute_collect("search [{(*, name)}, +n, *] return n limit 1;")
         .expect("parse ok");
@@ -21,7 +21,7 @@ fn limit_after_return_parses() {
 fn reserved_keyword_not_variable() {
     let db = Database::new(PersistenceMode::InMemory).unwrap();
     let engine = Engine::new(&db);
-    engine.execute("add role name; add posit [{(+x, name)}, \"Alice\", @NOW]; add posit [{(+y, name)}, \"Bob\", @NOW];");
+    engine.execute("add role name; add posit [{(+x, name)}, \"Alice\", @NOW]; add posit [{(+y, name)}, \"Bob\", @NOW];").unwrap();
     // Previously this would fail because 'limit' was consumed as variable; now it must parse as clause.
     let res = engine
         .execute_collect("search [{(*, name)}, +n, *] return n limit 2;")

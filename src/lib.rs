@@ -39,7 +39,9 @@
 //! use positorium::{construct::{Database, PersistenceMode}, traqula::Engine};
 //! let db = Database::new(PersistenceMode::InMemory).unwrap();
 //! let engine = Engine::new(&db);
-//! engine.execute("add role person; add posit [{(+a, person)}, \"Alice\", @NOW];");
+//! engine
+//!     .execute("add role person; add posit [{(+a, person)}, \"Alice\", @NOW];")
+//!     .unwrap();
 //! assert!(db.role_keeper().lock().unwrap().len() >= 1);
 //! ```
 //!

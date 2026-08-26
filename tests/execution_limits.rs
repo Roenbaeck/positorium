@@ -59,7 +59,7 @@ fn execution_row_cap_reports_only_actual_truncation() {
     let engine = Engine::new(&db);
     engine.execute(
         "add role name; add posit [{(+a, name)}, \"Alice\", @NOW]; add posit [{(+b, name)}, \"Bob\", @NOW];",
-    );
+    ).unwrap();
 
     let result = engine
         .execute_collect_with_options(

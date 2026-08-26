@@ -358,44 +358,48 @@ impl Time {
             moment: TimeType::EndOfTime,
         }
     }
-    // TODO: may panic
-    /// Creates a `Time` from a year string (e.g. "2024"). Panics on invalid input.
-    pub fn new_year_from(d: &str) -> Time {
-        Time {
-            moment: TimeType::Year(d.parse::<i32>().unwrap()),
-        }
+    /// Creates a `Time` from a year string (for example `"2024"`).
+    pub fn new_year_from(value: &str) -> Result<Time, String> {
+        let year = value
+            .parse::<i32>()
+            .map_err(|error| format!("invalid year '{value}': {error}"))?;
+        Ok(Time {
+            moment: TimeType::Year(year),
+        })
     }
-    /// Creates a `Time` from a year-month string ("YYYY-MM"). Panics on invalid input.
-    pub fn new_year_month_from(d: &str) -> Time {
-        let mut year = String::new();
-        let mut month = String::new();
-        for c in d.chars() {
-            if c != '-' {
-                if year.len() < 4 {
-                    year.push(c);
-                } else {
-                    month.push(c);
-                }
-            }
+    /// Creates a `Time` from a `YYYY-MM` string.
+    pub fn new_year_month_from(value: &str) -> Result<Time, String> {
+        let (year, month) = value
+            .split_once('-')
+            .ok_or_else(|| format!("invalid year-month '{value}'"))?;
+        let year = year
+            .parse::<i32>()
+            .map_err(|error| format!("invalid year in '{value}': {error}"))?;
+        let month = month
+            .parse::<u8>()
+            .map_err(|error| format!("invalid month in '{value}': {error}"))?;
+        if !(1..=12).contains(&month) {
+            return Err(format!("month is outside 01..12 in '{value}'"));
         }
-        Time {
-            moment: TimeType::YearMonth(year.parse::<i32>().unwrap(), month.parse::<u8>().unwrap()),
-        }
+        Ok(Time {
+            moment: TimeType::YearMonth(year, month),
+        })
     }
-    /// Creates a `Time` from a date string ("YYYY-MM-DD"). Panics on invalid input.
-    pub fn new_date_from(d: &str) -> Time {
-        Time {
-            moment: TimeType::Date(NaiveDate::from_str(d).unwrap()),
-        }
+    /// Creates a `Time` from an ISO date string (`YYYY-MM-DD`).
+    pub fn new_date_from(value: &str) -> Result<Time, String> {
+        let date = NaiveDate::from_str(value)
+            .map_err(|error| format!("invalid date '{value}': {error}"))?;
+        Ok(Time {
+            moment: TimeType::Date(date),
+        })
     }
-    /// Creates a `Time` from a datetime string acceptable by `NaiveDateTime::from_str`.
-    pub fn new_datetime_from(d: &str) -> Time {
-        match NaiveDateTime::from_str(d) {
-            Ok(dt) => Time {
-                moment: TimeType::DateTime(dt),
-            },
-            Err(e) => panic!("[positorium][time] Failed to parse datetime '{d}': {e}"),
-        }
+    /// Creates a `Time` from an ISO-8601 datetime string.
+    pub fn new_datetime_from(value: &str) -> Result<Time, String> {
+        let datetime = NaiveDateTime::from_str(value)
+            .map_err(|error| format!("invalid datetime '{value}': {error}"))?;
+        Ok(Time {
+            moment: TimeType::DateTime(datetime),
+        })
     }
     /// Creates a `Time` from an existing `NaiveDateTime` (internal helper to avoid double parsing)
     pub fn from_naive_datetime(dt: NaiveDateTime) -> Time {

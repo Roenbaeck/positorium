@@ -31,7 +31,7 @@ fn posit_identity_is_not_part_of_proposition_equality_or_ordering() {
     let role = Arc::new(Role::new(7, "name".to_string(), false));
     let appearance = Arc::new(Appearance::new(11, role));
     let appearance_set = Arc::new(AppearanceSet::new(vec![appearance]).unwrap());
-    let time = Time::new_date_from("2024-05-06");
+    let time = Time::new_date_from("2024-05-06").unwrap();
     let first = Posit::new(
         100,
         Arc::clone(&appearance_set),
@@ -47,8 +47,8 @@ fn posit_identity_is_not_part_of_proposition_equality_or_ordering() {
 
 #[test]
 fn mixed_precision_time_ordering_obeys_eq_ord_laws() {
-    let year = Time::new_year_from("2024");
-    let date = Time::new_date_from("2024-05-06");
+    let year = Time::new_year_from("2024").unwrap();
+    let date = Time::new_date_from("2024-05-06").unwrap();
 
     assert_ne!(year, date);
     assert_ne!(year.cmp(&date), std::cmp::Ordering::Equal);
@@ -57,9 +57,9 @@ fn mixed_precision_time_ordering_obeys_eq_ord_laws() {
 
 #[test]
 fn temporal_relations_use_half_open_precision_intervals() {
-    let year = Time::new_year_from("2024");
-    let date = Time::new_date_from("2024-05-06");
-    let next_year = Time::new_year_from("2025");
+    let year = Time::new_year_from("2024").unwrap();
+    let date = Time::new_date_from("2024-05-06").unwrap();
+    let next_year = Time::new_year_from("2025").unwrap();
     let beginning = Time::new_beginning_of_time();
     let end = Time::new_end_of_time();
 
@@ -120,7 +120,19 @@ fn thing_identities_are_never_recycled() {
 fn accepted_literal_display_forms_are_canonical() {
     assert_eq!(Certainty::new(0.05).to_string(), "0.05");
     assert_eq!(Certainty::new(-0.05).to_string(), "-0.05");
-    assert_eq!(Time::new_year_month_from("2024-05").to_string(), "2024-05");
+    assert_eq!(
+        Time::new_year_month_from("2024-05").unwrap().to_string(),
+        "2024-05"
+    );
+}
+
+#[test]
+fn invalid_public_time_inputs_return_errors() {
+    assert!(Time::new_year_from("not-a-year").is_err());
+    assert!(Time::new_year_month_from("2024-00").is_err());
+    assert!(Time::new_year_month_from("2024-13").is_err());
+    assert!(Time::new_date_from("2024-02-30").is_err());
+    assert!(Time::new_datetime_from("2024-02-30T25:00:00").is_err());
 }
 
 #[test]
@@ -175,8 +187,8 @@ fn only_assertion_roles_are_reserved_by_default() {
 fn invalid_appearance_sets_and_unknown_roles_return_errors() {
     let db = Database::new(PersistenceMode::InMemory).unwrap();
     let (role, _) = db.create_role("member".to_string(), false).unwrap();
-    let (first, _) = db.create_appearance(10, Arc::clone(&role));
-    let (second, _) = db.create_appearance(11, role);
+    let (first, _) = db.create_appearance(10, Arc::clone(&role)).unwrap();
+    let (second, _) = db.create_appearance(11, role).unwrap();
     assert!(db.create_appearance_set(vec![first, second]).is_err());
 
     let engine = Engine::new(&db);

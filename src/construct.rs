@@ -24,7 +24,7 @@
 //! let db = Database::new(PersistenceMode::InMemory).unwrap();
 //! let (role, _) = db.create_role("person".to_string(), false).unwrap();
 //! let thing = db.create_thing().unwrap();
-//! let (appearance, _) = db.create_appearance(*thing, role);
+//! let (appearance, _) = db.create_appearance(*thing, role).unwrap();
 //! let (appearance_set, _) = db.create_appearance_set(vec![appearance]).unwrap();
 //! let time = Time::new();
 //! let posit = db.create_posit(appearance_set, String::from("Alice"), time.clone()).unwrap();
@@ -631,6 +631,7 @@ impl PersistenceMode {
 }
 
 pub struct Database {
+    pub(crate) execution_owner: Mutex<()>,
     // owns a thing generator
     pub thing_generator: Arc<Mutex<ThingGenerator>>,
     // owns keepers for the available constructs
@@ -684,6 +685,7 @@ impl Database {
         let posit_time_lookup: HashMap<Thing, Time, ThingHasher> = HashMap::default();
         // Create the database so that we can prime it before returning it
         let database = Database {
+            execution_owner: Mutex::new(()),
             thing_generator: Arc::new(Mutex::new(thing_generator)),
             role_keeper: Arc::new(Mutex::new(role_keeper)),
             appearance_keeper: Arc::new(Mutex::new(appearance_keeper)),
@@ -756,8 +758,8 @@ impl Database {
             .lock()
             .map_err(|error| DatabaseError::Lock(error.to_string()))?
             .retain(ASCERTAINS_ROLE_ID);
-        self.keep_role(posit);
-        self.keep_role(ascertains);
+        self.keep_role(posit)?;
+        self.keep_role(ascertains)?;
         Ok(())
     }
 
@@ -773,7 +775,8 @@ impl Database {
                 .lock()
                 .map_err(|error| DatabaseError::Lock(error.to_string()))?
                 .retain(role.identity);
-            let (_, existed) = self.keep_role(Role::new(role.identity, role.name, role.reserved));
+            let (_, existed) =
+                self.keep_role(Role::new(role.identity, role.name, role.reserved))?;
             if existed {
                 return Err(DatabaseError::DataCorruption {
                     message: "duplicate Role survived logical replay".to_string(),
@@ -795,7 +798,7 @@ impl Database {
                     .lock()
                     .map_err(|error| DatabaseError::Lock(error.to_string()))?
                     .retain(thing);
-                appearances.push(self.keep_appearance(Appearance::new(thing, role)).0);
+                appearances.push(self.keep_appearance(Appearance::new(thing, role))?.0);
             }
             let appearance_set = self.create_appearance_set(appearances)?.0;
             self.thing_generator
@@ -807,7 +810,7 @@ impl Database {
                 appearance_set,
                 posit.value,
                 posit.time,
-            ));
+            ))?;
             if existed {
                 return Err(DatabaseError::DataCorruption {
                     message: "duplicate Posit survived logical replay".to_string(),
@@ -887,13 +890,20 @@ impl Database {
                     .to_string(),
             ));
         }
-        let thing = self.thing_generator.lock().unwrap().generate();
+        let thing = self
+            .thing_generator
+            .lock()
+            .map_err(|error| DatabaseError::Lock(error.to_string()))?
+            .generate();
         Ok(Arc::new(thing))
     }
     // functions to create constructs for the keepers to keep that also populate the lookups
-    pub fn keep_role(&self, role: Role) -> (Arc<Role>, bool) {
-        let (kept_role, previously_kept) = self.role_keeper.lock().unwrap().keep(role);
-        (kept_role, previously_kept)
+    pub fn keep_role(&self, role: Role) -> Result<(Arc<Role>, bool), DatabaseError> {
+        Ok(self
+            .role_keeper
+            .lock()
+            .map_err(|error| DatabaseError::Lock(error.to_string()))?
+            .keep(role))
     }
     fn ensure_builtin_role(&self, identity: Thing, name: &str) -> Result<(), DatabaseError> {
         {
@@ -927,7 +937,8 @@ impl Database {
             .lock()
             .map_err(|error| DatabaseError::Lock(error.to_string()))?
             .retain(identity);
-        let (builtin_role, existed) = self.keep_role(Role::new(identity, name.to_string(), true));
+        let (builtin_role, existed) =
+            self.keep_role(Role::new(identity, name.to_string(), true))?;
         debug_assert!(!existed);
         let _ = builtin_role;
         Ok(())
@@ -979,7 +990,11 @@ impl Database {
                 }
                 sources.push(Source::New(index));
             } else {
-                let identity = self.thing_generator.lock().unwrap().generate();
+                let identity = self
+                    .thing_generator
+                    .lock()
+                    .map_err(|error| DatabaseError::Lock(error.to_string()))?
+                    .generate();
                 let index = prepared.len();
                 prepared.push(Role::new(identity, canonical_name, reserved));
                 sources.push(Source::New(index));
@@ -999,11 +1014,11 @@ impl Database {
         let kept: Vec<Arc<Role>> = prepared
             .into_iter()
             .map(|role| {
-                let (role, existed) = self.keep_role(role);
+                let (role, existed) = self.keep_role(role)?;
                 debug_assert!(!existed);
-                role
+                Ok(role)
             })
-            .collect();
+            .collect::<Result<Vec<_>, DatabaseError>>()?;
         Ok(sources
             .into_iter()
             .map(|source| match source {
@@ -1012,45 +1027,62 @@ impl Database {
             })
             .collect())
     }
-    pub fn keep_appearance(&self, appearance: Appearance) -> (Arc<Appearance>, bool) {
-        let (kept_appearance, previously_kept) =
-            self.appearance_keeper.lock().unwrap().keep(appearance);
+    pub fn keep_appearance(
+        &self,
+        appearance: Appearance,
+    ) -> Result<(Arc<Appearance>, bool), DatabaseError> {
+        let (kept_appearance, previously_kept) = self
+            .appearance_keeper
+            .lock()
+            .map_err(|error| DatabaseError::Lock(error.to_string()))?
+            .keep(appearance);
         if !previously_kept {
             self.thing_to_appearance_lookup
                 .lock()
-                .unwrap()
+                .map_err(|error| DatabaseError::Lock(error.to_string()))?
                 .insert(kept_appearance.thing(), Arc::clone(&kept_appearance));
             if kept_appearance.role().reserved {
                 self.role_to_appearance_lookup
                     .lock()
-                    .unwrap()
+                    .map_err(|error| DatabaseError::Lock(error.to_string()))?
                     .insert(kept_appearance.role(), Arc::clone(&kept_appearance));
             }
         }
-        (kept_appearance, previously_kept)
+        Ok((kept_appearance, previously_kept))
     }
     #[deprecated(since = "0.1.5", note = "use Database::create_appearance")]
-    pub fn create_apperance(&self, thing: Thing, role: Arc<Role>) -> (Arc<Appearance>, bool) {
+    pub fn create_apperance(
+        &self,
+        thing: Thing,
+        role: Arc<Role>,
+    ) -> Result<(Arc<Appearance>, bool), DatabaseError> {
         self.create_appearance(thing, role)
     }
-    pub fn create_appearance(&self, thing: Thing, role: Arc<Role>) -> (Arc<Appearance>, bool) {
+    pub fn create_appearance(
+        &self,
+        thing: Thing,
+        role: Arc<Role>,
+    ) -> Result<(Arc<Appearance>, bool), DatabaseError> {
         self.keep_appearance(Appearance::new(thing, role))
     }
-    pub fn keep_appearance_set(&self, appearance_set: AppearanceSet) -> (Arc<AppearanceSet>, bool) {
+    pub fn keep_appearance_set(
+        &self,
+        appearance_set: AppearanceSet,
+    ) -> Result<(Arc<AppearanceSet>, bool), DatabaseError> {
         let (kept_appearance_set, previously_kept) = self
             .appearance_set_keeper
             .lock()
-            .unwrap()
+            .map_err(|error| DatabaseError::Lock(error.to_string()))?
             .keep(appearance_set);
         if !previously_kept {
             for appearance in kept_appearance_set.appearances().iter() {
                 self.appearance_to_appearance_set_lookup
                     .lock()
-                    .unwrap()
+                    .map_err(|error| DatabaseError::Lock(error.to_string()))?
                     .insert(Arc::clone(appearance), Arc::clone(&kept_appearance_set));
             }
         }
-        (kept_appearance_set, previously_kept)
+        Ok((kept_appearance_set, previously_kept))
     }
     pub fn create_appearance_set(
         &self,
@@ -1061,38 +1093,48 @@ impl Database {
                 "an appearance set may contain at most one Thing for each Role".into(),
             )
         })?;
-        Ok(self.keep_appearance_set(appearance_set))
+        self.keep_appearance_set(appearance_set)
     }
-    pub fn keep_posit<V: 'static + DataType>(&self, posit: Posit<V>) -> (Arc<Posit<V>>, bool) {
+    pub fn keep_posit<V: 'static + DataType>(
+        &self,
+        posit: Posit<V>,
+    ) -> Result<(Arc<Posit<V>>, bool), DatabaseError> {
         self.keep_posit_arc(Arc::new(posit))
     }
 
-    fn keep_posit_arc<V: 'static + DataType>(&self, posit: Arc<Posit<V>>) -> (Arc<Posit<V>>, bool) {
-        let (kept_posit, previously_kept) = self.posit_keeper.lock().unwrap().keep_arc(posit);
+    fn keep_posit_arc<V: 'static + DataType>(
+        &self,
+        posit: Arc<Posit<V>>,
+    ) -> Result<(Arc<Posit<V>>, bool), DatabaseError> {
+        let (kept_posit, previously_kept) = self
+            .posit_keeper
+            .lock()
+            .map_err(|error| DatabaseError::Lock(error.to_string()))?
+            .keep_arc(posit);
         if !previously_kept {
             self.appearance_set_to_posit_thing_lookup
                 .lock()
-                .unwrap()
+                .map_err(|error| DatabaseError::Lock(error.to_string()))?
                 .insert(kept_posit.appearance_set(), kept_posit.posit());
             self.posit_thing_to_appearance_set_lookup
                 .lock()
-                .unwrap()
+                .map_err(|error| DatabaseError::Lock(error.to_string()))?
                 .insert(kept_posit.posit(), kept_posit.appearance_set());
             // Record posit time in type-erased lookup for generic time filtering
             self.posit_time_lookup
                 .lock()
-                .unwrap()
+                .map_err(|error| DatabaseError::Lock(error.to_string()))?
                 .insert(kept_posit.posit(), kept_posit.time().clone());
             // Index posit thing by each role in its appearance set
             for appearance in kept_posit.appearance_set().appearances().iter() {
                 let role_thing = appearance.role().role();
                 self.role_to_posit_thing_lookup
                     .lock()
-                    .unwrap()
+                    .map_err(|error| DatabaseError::Lock(error.to_string()))?
                     .insert(role_thing, kept_posit.posit());
             }
         }
-        (kept_posit, previously_kept)
+        Ok((kept_posit, previously_kept))
     }
     pub fn create_posit<V: 'static + DataType>(
         &self,
@@ -1100,7 +1142,11 @@ impl Database {
         value: V,
         time: Time,
     ) -> Result<Arc<Posit<V>>, DatabaseError> {
-        let posit_thing = self.thing_generator.lock().unwrap().generate();
+        let posit_thing = self
+            .thing_generator
+            .lock()
+            .map_err(|error| DatabaseError::Lock(error.to_string()))?
+            .generate();
         let candidate = Arc::new(Posit::new(posit_thing, appearance_set, value, time));
         if let Some(existing) = self
             .posit_keeper
@@ -1108,7 +1154,10 @@ impl Database {
             .map_err(|error| DatabaseError::Lock(error.to_string()))?
             .existing(&candidate)
         {
-            self.thing_generator.lock().unwrap().release(posit_thing);
+            self.thing_generator
+                .lock()
+                .map_err(|error| DatabaseError::Lock(error.to_string()))?
+                .release(posit_thing);
             return Ok(existing);
         }
         #[cfg(feature = "persistence")]
@@ -1134,7 +1183,7 @@ impl Database {
                 store.append_batch(&[record])?;
             }
         }
-        let (kept_posit, previously_kept) = self.keep_posit_arc(candidate);
+        let (kept_posit, previously_kept) = self.keep_posit_arc(candidate)?;
         debug_assert!(!previously_kept);
         Ok(kept_posit)
     }
@@ -1151,7 +1200,11 @@ impl Database {
         let mut prepared: Vec<Arc<Posit<LiteralValue>>> = Vec::new();
         let mut sources = Vec::with_capacity(posits.len());
         for (appearance_set, value, time) in posits {
-            let identity = self.thing_generator.lock().unwrap().generate();
+            let identity = self
+                .thing_generator
+                .lock()
+                .map_err(|error| DatabaseError::Lock(error.to_string()))?
+                .generate();
             let candidate = Arc::new(Posit::new(identity, appearance_set, value, time));
             if let Some(existing) = self
                 .posit_keeper
@@ -1159,11 +1212,17 @@ impl Database {
                 .map_err(|error| DatabaseError::Lock(error.to_string()))?
                 .existing(&candidate)
             {
-                self.thing_generator.lock().unwrap().release(identity);
+                self.thing_generator
+                    .lock()
+                    .map_err(|error| DatabaseError::Lock(error.to_string()))?
+                    .release(identity);
                 sources.push(Source::Existing(existing));
             } else if let Some(index) = prepared.iter().position(|existing| existing == &candidate)
             {
-                self.thing_generator.lock().unwrap().release(identity);
+                self.thing_generator
+                    .lock()
+                    .map_err(|error| DatabaseError::Lock(error.to_string()))?
+                    .release(identity);
                 sources.push(Source::New(index));
             } else {
                 let index = prepared.len();
@@ -1197,11 +1256,11 @@ impl Database {
         let kept: Vec<Arc<Posit<LiteralValue>>> = prepared
             .into_iter()
             .map(|posit| {
-                let (posit, existed) = self.keep_posit_arc(posit);
+                let (posit, existed) = self.keep_posit_arc(posit)?;
                 debug_assert!(!existed);
-                posit
+                Ok(posit)
             })
-            .collect();
+            .collect::<Result<Vec<_>, DatabaseError>>()?;
         Ok(sources
             .into_iter()
             .map(|source| match source {

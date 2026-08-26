@@ -38,7 +38,9 @@
 //! use positorium::traqula::Engine;
 //! let db = Database::new(PersistenceMode::InMemory).unwrap();
 //! let engine = Engine::new(&db);
-//! engine.execute("add role person; add posit [{(+a, person)}, \"Alice\", @NOW];");
+//! engine
+//!     .execute("add role person; add posit [{(+a, person)}, \"Alice\", @NOW];")
+//!     .unwrap();
 //! ```
 //!
 //! NOTE: The search functionality is still evolving; many captured variables
@@ -54,7 +56,7 @@ use chrono::NaiveDate;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::{
-    Arc,
+    Arc, MutexGuard, TryLockError,
     atomic::{AtomicBool, Ordering as AtomicOrdering},
 };
 use std::time::{Duration, Instant};
@@ -493,7 +495,7 @@ fn parse_time_with_now(value: &str, resolved_now: &Time) -> Option<Time> {
         && !stripped.contains(':')
         && stripped.parse::<NaiveDate>().is_ok()
     {
-        return Some(Time::new_date_from(&stripped));
+        return Time::new_date_from(&stripped).ok();
     }
 
     // 5. Year-month (YYYY-MM)
@@ -507,14 +509,14 @@ fn parse_time_with_now(value: &str, resolved_now: &Time) -> Option<Time> {
                 .filter(|mm| (1..=12).contains(mm))
                 .is_some()
         {
-            return Some(Time::new_year_month_from(&stripped));
+            return Time::new_year_month_from(&stripped).ok();
         }
     }
 
     // 6. Year only
     if stripped.chars().all(|c| c == '-' || c.is_ascii_digit()) && (4..=8).contains(&stripped.len())
     {
-        return Some(Time::new_year_from(&stripped));
+        return Time::new_year_from(&stripped).ok();
     }
 
     None
@@ -774,6 +776,24 @@ impl<'en> Engine<'en> {
         Self { database }
     }
 
+    fn acquire_owner(
+        &self,
+        execution: &ExecutionContext,
+    ) -> Result<MutexGuard<'_, ()>, DatabaseError> {
+        loop {
+            match self.database.execution_owner.try_lock() {
+                Ok(owner) => return Ok(owner),
+                Err(TryLockError::Poisoned(error)) => {
+                    return Err(DatabaseError::Lock(error.to_string()));
+                }
+                Err(TryLockError::WouldBlock) => {
+                    execution.check()?;
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            }
+        }
+    }
+
     /// Execute a single-search script in streaming fashion using the provided RowSink.
     /// Returns (columns, limited, row_count) or an error. If the script has zero or multiple search commands an error is returned.
     pub fn execute_stream_single<S: RowSink>(
@@ -792,6 +812,7 @@ impl<'en> Engine<'en> {
         options: ExecutionOptions,
     ) -> Result<(Vec<String>, bool, usize), crate::error::DatabaseError> {
         let execution = options.resolve(traqula)?;
+        let _owner = self.acquire_owner(&execution)?;
         execution.check()?;
         for warning in &execution.metadata.warnings {
             if let SinkFlow::Stop = sink.on_warning(warning) {
@@ -1098,21 +1119,29 @@ impl<'en> Engine<'en> {
                         }
                         let mut appearances = Vec::new();
                         for i in 0..idxs.len() {
-                            let Some(role) = self
-                                .database
-                                .role_keeper()
+                            let role_keeper = self.database.role_keeper();
+                            let role = match role_keeper
                                 .lock()
-                                .unwrap()
-                                .get(roles_ord[i])
-                            else {
-                                appearance_error =
-                                    Some(DatabaseError::UnknownRole(roles_ord[i].to_string()));
-                                return;
+                                .map_err(|error| DatabaseError::Lock(error.to_string()))
+                                .and_then(|keeper| {
+                                    keeper.get(roles_ord[i]).ok_or_else(|| {
+                                        DatabaseError::UnknownRole(roles_ord[i].to_string())
+                                    })
+                                }) {
+                                Ok(role) => role,
+                                Err(error) => {
+                                    appearance_error = Some(error);
+                                    return;
+                                }
                             };
                             let thing = things_for_roles_ord[i][idxs[i]];
-                            let (appearance, _) =
-                                self.database.create_appearance(thing, Arc::clone(&role));
-                            appearances.push(appearance);
+                            match self.database.create_appearance(thing, Arc::clone(&role)) {
+                                Ok((appearance, _)) => appearances.push(appearance),
+                                Err(error) => {
+                                    appearance_error = Some(error);
+                                    return;
+                                }
+                            }
                         }
                         match self.database.create_appearance_set(appearances) {
                             Ok((appearance_set, _)) => appearance_sets.push(appearance_set),
@@ -2586,88 +2615,12 @@ impl<'en> Engine<'en> {
             }
         }
     }
-    // Backwards compatible wrapper retaining original signature (prints rows)
-    fn search_print(
-        &self,
-        command: Pair<Rule>,
-        variables: &mut Variables,
-        execution: &ExecutionContext,
-    ) {
-        let mut cols = None;
-        let mut err = None;
-        struct PrintSink;
-        impl RowSink for PrintSink {
-            fn push(&mut self, row: Vec<String>, _types: Vec<String>) -> SinkFlow {
-                println!("{}", row.join(", "));
-                SinkFlow::Continue
-            }
-        }
-        let mut ps = PrintSink;
-        self.search(command, variables, &mut ps, &mut cols, &mut err, execution);
-        if let Some(e) = err {
-            eprintln!("{}", e);
-        }
-    }
-    /// Parse and execute a Traqula script (one or more commands).
-    pub fn execute(&self, traqula: &str) {
-        let Ok(execution) = ExecutionOptions::default().resolve(traqula) else {
-            return;
-        };
-        let mut variables: Variables = Variables::default();
-        let parse_result = TraqulaParser::parse(Rule::traqula, traqula.trim());
-        let traqula = match parse_result {
-            Ok(pairs) => pairs,
-            Err(err) => {
-                // Print a helpful parse error with expected tokens and context
-                eprintln!("Traqula parse error:\n{}", err);
-                if let ErrorVariant::ParsingError {
-                    positives,
-                    negatives: _,
-                } = err.variant
-                    && !positives.is_empty()
-                {
-                    let mut expected: Vec<&'static str> =
-                        positives.iter().map(|r| friendly_rule_name(*r)).collect();
-                    expected.sort();
-                    expected.dedup();
-                    eprintln!("Expected one of: {}", expected.join(", "));
-                }
-                return;
-            }
-        };
-        for command in traqula {
-            if let Err(error) = execution.check() {
-                eprintln!("{error}");
-                return;
-            }
-            match command.as_rule() {
-                Rule::add_role => {
-                    if let Err(error) = self.add_role(command) {
-                        eprintln!("{error}");
-                        return;
-                    }
-                }
-                Rule::add_posit => {
-                    if let Err(error) = self.add_posit(
-                        command,
-                        &mut variables,
-                        &execution.metadata.resolved_now,
-                        &execution,
-                    ) {
-                        eprintln!("{error}");
-                        return;
-                    }
-                }
-                Rule::search => {
-                    // reset limit per search
-                    let mut search_variables: Variables = Variables::default();
-                    self.search_print(command, &mut search_variables, &execution);
-                }
-                Rule::EOI => (), // end of input
-                _ => println!("Unknown command: {:?}", command),
-            }
-        }
-        // suppressed variable dump in release/normal runs
+    /// Parse and execute a Traqula script, discarding any search rows.
+    ///
+    /// All parsing, execution, cancellation, and persistence failures are returned
+    /// to the caller. Use the collection or streaming methods when rows are needed.
+    pub fn execute(&self, traqula: &str) -> Result<(), DatabaseError> {
+        self.execute_collect_multi(traqula).map(|_| ())
     }
 
     /// Execute a script and collect printed row outputs (one Vec<String> per returned row).
@@ -2683,6 +2636,7 @@ impl<'en> Engine<'en> {
         options: ExecutionOptions,
     ) -> Result<CollectedResult, DatabaseError> {
         let execution = options.resolve(traqula)?;
+        let _owner = self.acquire_owner(&execution)?;
         execution.check()?;
         let metadata = execution.metadata.clone();
         let mut variables: Variables = Variables::default();
@@ -2810,6 +2764,7 @@ impl<'en> Engine<'en> {
         options: ExecutionOptions,
     ) -> Result<Vec<CollectedResultSet>, DatabaseError> {
         let execution = options.resolve(traqula)?;
+        let _owner = self.acquire_owner(&execution)?;
         execution.check()?;
         let metadata = execution.metadata.clone();
         let mut variables: Variables = Variables::default();
@@ -2941,6 +2896,7 @@ impl<'en> Engine<'en> {
         options: ExecutionOptions,
     ) -> Result<(), DatabaseError> {
         let execution = options.resolve(traqula)?;
+        let _owner = self.acquire_owner(&execution)?;
         execution.check()?;
         for warning in &execution.metadata.warnings {
             callbacks.on_warning(warning);

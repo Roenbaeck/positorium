@@ -5,9 +5,9 @@ fn setup() -> Engine<'static> {
     let db = Database::new(PersistenceMode::InMemory).unwrap();
     let engine = Engine::new(Box::leak(Box::new(db)));
     // Base roles
-    engine.execute("add role event; add role label;");
+    engine.execute("add role event; add role label;").unwrap();
     // Seed two events with different times
-    engine.execute("add posit [{(+e1, event)}, \"alpha\", '2010-01-01']; add posit [{(+e2, event)}, \"beta\", '2020-01-01'];");
+    engine.execute("add posit [{(+e1, event)}, \"alpha\", '2010-01-01']; add posit [{(+e2, event)}, \"beta\", '2020-01-01'];").unwrap();
     engine
 }
 
@@ -62,7 +62,9 @@ fn time_variable_variable_no_match() {
     // Only one event so no pair with t1 < t2
     let db = Database::new(PersistenceMode::InMemory).unwrap();
     let engine = Engine::new(Box::leak(Box::new(db)));
-    engine.execute("add role event; add posit [{(+e1, event)}, \"solo\", '2015-05-05'];");
+    engine
+        .execute("add role event; add posit [{(+e1, event)}, \"solo\", '2015-05-05'];")
+        .unwrap();
     let script =
         "search [{(*, event)}, +v1, +t1], [{(*, event)}, +v2, +t2] where t1 < t2 return t1, t2;";
     let res = engine.execute_collect(script).expect("query ok");

@@ -1361,12 +1361,6 @@ fn frame_io_error(offset: u64, sequence: Option<u64>, error: std::io::Error) -> 
     }
 }
 
-impl DatabaseError {
-    pub(crate) fn from_io(error: std::io::Error) -> Self {
-        Self::Persistence(error.to_string())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1423,10 +1417,10 @@ mod tests {
         let times = [
             Time::new_beginning_of_time(),
             Time::new_end_of_time(),
-            Time::new_year_from("2024"),
-            Time::new_year_month_from("2024-05"),
-            Time::new_date_from("2024-05-06"),
-            Time::new_datetime_from("2024-05-06T07:08:09.123456789"),
+            Time::new_year_from("2024").unwrap(),
+            Time::new_year_month_from("2024-05").unwrap(),
+            Time::new_date_from("2024-05-06").unwrap(),
+            Time::new_datetime_from("2024-05-06T07:08:09.123456789").unwrap(),
         ];
         let mut batch = vec![
             stored(role_record(&posit_role), 1),
@@ -1469,7 +1463,7 @@ mod tests {
             100,
             appearance_set,
             value,
-            Time::new_date_from("2024-05-06"),
+            Time::new_date_from("2024-05-06").unwrap(),
         );
         let base = vec![
             stored(role_record(&posit_role), 1),
