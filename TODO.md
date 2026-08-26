@@ -90,7 +90,7 @@ The accepted decisions now define the required fixes.
 
 ## P0: Semantic Contracts
 
-- [ ] **Specify the core model independently of Traqula and persistence.**
+- [x] **Specify the core model independently of Traqula and persistence.**
         - Define identity, equality, canonicalization, and ordering for every construct.
         - Formalize an appearance set as a finite partial function from Role to Thing,
             and a posit proposition as `(AppearanceSet, LiteralValue, Time)` with a
@@ -103,7 +103,7 @@ The accepted decisions now define the required fixes.
             particular, posit ordering must not include fields excluded from posit
             equality, and role hashing must not include mutable/non-identity metadata.
         - State which invariants are enforced on write and which are query policies.
-- [ ] **Define appearance-set cardinality and value-slot semantics.**
+- [x] **Define appearance-set cardinality and value-slot semantics.**
         - State that an appearance set contains at most one Thing for each Role and
             therefore models named positions rather than repeatable labels (D005).
         - Treat each exact appearance set as one value-bearing transition slot over
@@ -125,7 +125,7 @@ The accepted decisions now define the required fixes.
             to express contextual conformance requirements.
         - Separate exact literal identity, nominal equality (`=`), and compatible
             possible-value overlap (`?=`).
-- [ ] **Formalize temporal precision and ordering.**
+- [x] **Formalize temporal precision and ordering.**
         - Represent every year, year-month, date, and datetime as a half-open UTC
             interval at its stated precision. Do not support local-time/offset coercion
             or leap seconds in beta; treat `@BOT` and `@EOT` as unbounded sentinels
@@ -165,7 +165,7 @@ The accepted decisions now define the required fixes.
         - Treat `thing`, `class`, `classification`, `named`, `subclass`, and
             `superclass` as ordinary roles until a class model is specified.
         - Dedicated keyword syntax is not required for beta.
-- [ ] **Document external identification.**
+- [x] **Document external identification.**
         - Explain that identification is a modeling/query concern built from posits,
             not a second mutable key system inside the engine.
         - Forbid destructive identity merging in the beta format; represent proposed

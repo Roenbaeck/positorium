@@ -28,6 +28,9 @@ The normative design for the append-only beta store is in [STORAGE.md](STORAGE.m
 The current file-backed implementation remains the SQLite prototype while that
 format is implemented and migration tooling is built.
 
+The storage- and language-independent identity, value-slot, temporal, snapshot,
+and external-identification contract is in [MODEL.md](MODEL.md).
+
 ## Build and run
 
 Prereqs: rustup and a C toolchain for rusqlite (bundled is enabled). The
