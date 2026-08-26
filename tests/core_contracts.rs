@@ -54,6 +54,42 @@ fn mixed_precision_time_ordering_obeys_eq_ord_laws() {
 }
 
 #[test]
+fn temporal_relations_use_half_open_precision_intervals() {
+    let year = Time::new_year_from("2024");
+    let date = Time::new_date_from("2024-05-06");
+    let next_year = Time::new_year_from("2025");
+    let beginning = Time::new_beginning_of_time();
+    let end = Time::new_end_of_time();
+
+    assert!(year.overlaps(&date));
+    assert!(year.contains(&date));
+    assert!(date.within(&year));
+    assert!(!year.definitely_before(&date));
+    assert!(!date.definitely_after(&year));
+    assert!(year.definitely_before(&next_year));
+    assert!(year.definitely_at_or_before(&year));
+    assert!(beginning.definitely_before(&year));
+    assert!(end.definitely_after(&year));
+    assert!(!beginning.definitely_before(&beginning));
+    assert!(!end.definitely_after(&end));
+}
+
+#[test]
+fn snapshots_preserve_incomparable_and_equal_time_conflicts() {
+    let db = Database::new(PersistenceMode::InMemory).unwrap();
+    let engine = Engine::new(&db);
+    let result = engine
+        .execute_collect(
+            "add role state; add posit [{(+subject, state)}, \"broad\", '2024']; add posit [{(subject, state)}, \"specific-a\", '2024-05-06']; add posit [{(subject, state)}, \"specific-b\", '2024-05-06']; search [{(*, state)}, +value, *] as of @EOT return value;",
+        )
+        .expect("snapshot query");
+
+    let mut values: Vec<&str> = result.rows.iter().map(|row| row[0].as_str()).collect();
+    values.sort_unstable();
+    assert_eq!(values, vec!["broad", "specific-a", "specific-b"]);
+}
+
+#[test]
 fn role_catalog_normalizes_nfc_and_keeps_names_case_sensitive() {
     let db = Database::new(PersistenceMode::InMemory).unwrap();
     let (decomposed, existed) = db.create_role("cafe\u{301}".to_string(), false);

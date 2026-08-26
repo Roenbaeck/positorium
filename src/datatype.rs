@@ -50,7 +50,7 @@
 use rusqlite::types::{FromSql, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
 
 // used for timestamps in the database
-use chrono::{NaiveDate, NaiveDateTime, Utc};
+use chrono::{Datelike, NaiveDate, NaiveDateTime, Timelike, Utc};
 // used for decimal numbers
 use bigdecimal::BigDecimal;
 // used for JSON
@@ -468,6 +468,76 @@ impl PartialOrd for TimeType {
 pub struct Time {
     moment: TimeType,
 }
+
+#[derive(Eq, PartialEq, PartialOrd, Ord, Debug, Clone, Copy)]
+struct TemporalInstant {
+    year: i32,
+    month: u8,
+    day: u8,
+    hour: u8,
+    minute: u8,
+    second: u8,
+    nanosecond: u32,
+}
+
+#[derive(Eq, PartialEq, PartialOrd, Ord, Debug, Clone, Copy)]
+enum TemporalBound {
+    NegativeInfinity,
+    Finite(TemporalInstant),
+    PositiveInfinity,
+}
+
+#[derive(Eq, PartialEq, Debug, Clone, Copy)]
+struct TimeInterval {
+    start: TemporalBound,
+    end: TemporalBound,
+}
+
+impl TemporalInstant {
+    fn start_of_year(year: i32) -> Self {
+        Self {
+            year,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            nanosecond: 0,
+        }
+    }
+
+    fn start_of_month(year: i32, month: u8) -> Self {
+        Self {
+            month,
+            ..Self::start_of_year(year)
+        }
+    }
+
+    fn from_date(date: NaiveDate) -> Self {
+        Self {
+            year: date.year(),
+            month: date.month() as u8,
+            day: date.day() as u8,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            nanosecond: 0,
+        }
+    }
+
+    fn from_datetime(datetime: NaiveDateTime) -> Self {
+        Self {
+            year: datetime.year(),
+            month: datetime.month() as u8,
+            day: datetime.day() as u8,
+            hour: datetime.hour() as u8,
+            minute: datetime.minute() as u8,
+            second: datetime.second() as u8,
+            nanosecond: datetime.nanosecond(),
+        }
+    }
+}
+
 impl Time {
     /// Now (UTC) time point.
     pub fn new() -> Time {
@@ -531,6 +601,112 @@ impl Time {
         Time {
             moment: TimeType::DateTime(dt),
         }
+    }
+
+    fn interval(&self) -> TimeInterval {
+        let finite = TemporalBound::Finite;
+        match self.moment {
+            TimeType::BeginningOfTime => TimeInterval {
+                start: TemporalBound::NegativeInfinity,
+                end: TemporalBound::NegativeInfinity,
+            },
+            TimeType::EndOfTime => TimeInterval {
+                start: TemporalBound::PositiveInfinity,
+                end: TemporalBound::PositiveInfinity,
+            },
+            TimeType::Year(year) => TimeInterval {
+                start: finite(TemporalInstant::start_of_year(year)),
+                end: year
+                    .checked_add(1)
+                    .map_or(TemporalBound::PositiveInfinity, |next| {
+                        finite(TemporalInstant::start_of_year(next))
+                    }),
+            },
+            TimeType::YearMonth(year, month) => {
+                let (next_year, next_month) = if month == 12 {
+                    (year.checked_add(1), 1)
+                } else {
+                    (Some(year), month + 1)
+                };
+                TimeInterval {
+                    start: finite(TemporalInstant::start_of_month(year, month)),
+                    end: next_year.map_or(TemporalBound::PositiveInfinity, |next_year| {
+                        finite(TemporalInstant::start_of_month(next_year, next_month))
+                    }),
+                }
+            }
+            TimeType::Date(date) => TimeInterval {
+                start: finite(TemporalInstant::from_date(date)),
+                end: date
+                    .succ_opt()
+                    .map_or(TemporalBound::PositiveInfinity, |next| {
+                        finite(TemporalInstant::from_date(next))
+                    }),
+            },
+            TimeType::DateTime(datetime) => TimeInterval {
+                start: finite(TemporalInstant::from_datetime(datetime)),
+                end: datetime
+                    .checked_add_signed(chrono::Duration::nanoseconds(1))
+                    .map_or(TemporalBound::PositiveInfinity, |next| {
+                        finite(TemporalInstant::from_datetime(next))
+                    }),
+            },
+        }
+    }
+
+    /// Returns true when every instant represented by `self` is before every
+    /// instant represented by `other`.
+    pub fn definitely_before(&self, other: &Self) -> bool {
+        self != other && self.interval().end <= other.interval().start
+    }
+
+    /// Returns true when every instant represented by `self` is after every
+    /// instant represented by `other`.
+    pub fn definitely_after(&self, other: &Self) -> bool {
+        self != other && self.interval().start >= other.interval().end
+    }
+
+    /// Conservative `<=`: identical stored times compare equal; otherwise the
+    /// complete interval of `self` must precede `other`.
+    pub fn definitely_at_or_before(&self, other: &Self) -> bool {
+        self == other || self.definitely_before(other)
+    }
+
+    /// Conservative `>=`: identical stored times compare equal; otherwise the
+    /// complete interval of `self` must follow `other`.
+    pub fn definitely_at_or_after(&self, other: &Self) -> bool {
+        self == other || self.definitely_after(other)
+    }
+
+    /// Returns true when at least one represented instant may precede an
+    /// instant represented by `other`.
+    pub fn possibly_before(&self, other: &Self) -> bool {
+        self.interval().start < other.interval().end
+    }
+
+    /// Returns true when at least one represented instant may follow an
+    /// instant represented by `other`.
+    pub fn possibly_after(&self, other: &Self) -> bool {
+        self.interval().end > other.interval().start
+    }
+
+    /// Returns true when the two half-open intervals intersect.
+    pub fn overlaps(&self, other: &Self) -> bool {
+        let lhs = self.interval();
+        let rhs = other.interval();
+        lhs.start < rhs.end && rhs.start < lhs.end
+    }
+
+    /// Returns true when `self` contains the complete interval of `other`.
+    pub fn contains(&self, other: &Self) -> bool {
+        let lhs = self.interval();
+        let rhs = other.interval();
+        lhs.start <= rhs.start && lhs.end >= rhs.end
+    }
+
+    /// Returns true when `self` is contained within `other`.
+    pub fn within(&self, other: &Self) -> bool {
+        other.contains(self)
     }
     /// Parse a persisted canonical textual form of Time (no quotes, produced by Display).
     /// Accepted forms:

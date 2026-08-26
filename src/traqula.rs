@@ -1569,43 +1569,40 @@ impl<'en> Engine<'en> {
                                                     .database
                                                     .posit_thing_to_appearance_set_lookup();
                                                 let aset_guard = aset_lk.lock().unwrap();
-                                                // Map: appearance set ptr address -> (best_time, Vec<Thing>) to keep all ties
+                                                // Keep every maximal applicable posit per appearance set.
                                                 use std::collections::HashMap as StdHashMap;
                                                 let mut best: StdHashMap<
                                                     usize,
-                                                    (Time, Vec<Thing>),
+                                                    Vec<(Time, Thing)>,
                                                 > = StdHashMap::new();
                                                 for pid in cands.iter() {
                                                     if let Some(pt) = time_guard.get(&pid) {
-                                                        if pt <= as_of {
+                                                        if pt.definitely_at_or_before(as_of) {
                                                             if let Some(aset) = aset_guard.get(&pid)
                                                             {
                                                                 let key =
                                                                     Arc::as_ptr(aset) as usize;
-                                                                match best.get_mut(&key) {
-                                                                    Some((bt, ids)) => {
-                                                                        if pt > bt {
-                                                                            *bt = pt.clone();
-                                                                            ids.clear();
-                                                                            ids.push(pid);
-                                                                        } else if pt == bt {
-                                                                            ids.push(pid);
-                                                                        }
-                                                                    }
-                                                                    None => {
-                                                                        best.insert(
-                                                                            key,
-                                                                            (pt.clone(), vec![pid]),
-                                                                        );
-                                                                    }
+                                                                let maxima =
+                                                                    best.entry(key).or_default();
+                                                                if maxima.iter().any(
+                                                                    |(existing, _)| {
+                                                                        existing
+                                                                            .definitely_after(pt)
+                                                                    },
+                                                                ) {
+                                                                    continue;
                                                                 }
+                                                                maxima.retain(|(existing, _)| {
+                                                                    !pt.definitely_after(existing)
+                                                                });
+                                                                maxima.push((pt.clone(), pid));
                                                             }
                                                         }
                                                     }
                                                 }
                                                 let mut reduced = RoaringTreemap::new();
-                                                for (_k, (_bt, ids)) in best.into_iter() {
-                                                    for id in ids {
+                                                for maxima in best.into_values() {
+                                                    for (_, id) in maxima {
                                                         reduced.insert(id);
                                                     }
                                                 }
@@ -2012,12 +2009,17 @@ impl<'en> Engine<'en> {
                                                         };
                                                     // Precompute best-per-appearance-set once per binding when variable as-of is in effect
                                                     let best_cache: Option<
-                                                        std::collections::HashMap<usize, Thing>,
+                                                        std::collections::HashMap<
+                                                            usize,
+                                                            Vec<(Time, Thing)>,
+                                                        >,
                                                     > = if let Some(ref as_of_time) =
                                                         binding_as_of_time
                                                     {
-                                                        let mut cache =
-                                                            std::collections::HashMap::new();
+                                                        let mut cache: std::collections::HashMap<
+                                                            usize,
+                                                            Vec<(Time, Thing)>,
+                                                        > = std::collections::HashMap::new();
                                                         for cid in cands.iter() {
                                                             if let Some(aset_c) =
                                                                 aset_guard.get(&cid)
@@ -2025,34 +2027,36 @@ impl<'en> Engine<'en> {
                                                                 if let Some(ct) =
                                                                     time_guard.get(&cid)
                                                                 {
-                                                                    if ct <= as_of_time {
+                                                                    if ct.definitely_at_or_before(
+                                                                        as_of_time,
+                                                                    ) {
                                                                         let key =
                                                                             Arc::as_ptr(aset_c)
                                                                                 as usize;
-                                                                        let replace =
-                                                                            if let Some(prev_pid) =
-                                                                                cache.get(&key)
-                                                                            {
-                                                                                if let (
-                                                                                    Some(prev_t),
-                                                                                    Some(cur_t),
-                                                                                ) = (
-                                                                                    time_guard.get(
-                                                                                        prev_pid,
-                                                                                    ),
-                                                                                    time_guard
-                                                                                        .get(&cid),
-                                                                                ) {
-                                                                                    cur_t > prev_t
-                                                                                } else {
-                                                                                    false
-                                                                                }
-                                                                            } else {
-                                                                                true
-                                                                            };
-                                                                        if replace {
-                                                                            cache.insert(key, cid);
+                                                                        let maxima = cache
+                                                                            .entry(key)
+                                                                            .or_default();
+                                                                        if maxima.iter().any(
+                                                                            |(existing, _)| {
+                                                                                existing
+                                                                                    .definitely_after(
+                                                                                        ct,
+                                                                                    )
+                                                                            },
+                                                                        ) {
+                                                                            continue;
                                                                         }
+                                                                        maxima.retain(
+                                                                            |(existing, _)| {
+                                                                                !ct.definitely_after(
+                                                                                    existing,
+                                                                                )
+                                                                            },
+                                                                        );
+                                                                        maxima.push((
+                                                                            ct.clone(),
+                                                                            cid,
+                                                                        ));
                                                                     }
                                                                 }
                                                             }
@@ -2087,10 +2091,14 @@ impl<'en> Engine<'en> {
                                                             {
                                                                 let key = Arc::as_ptr(aset_of_pid)
                                                                     as usize;
-                                                                if let Some(best_pid) =
+                                                                if let Some(maxima) =
                                                                     cache.get(&key)
                                                                 {
-                                                                    if pid != best_pid {
+                                                                    if !maxima.iter().any(
+                                                                        |(_, best_pid)| {
+                                                                            pid == best_pid
+                                                                        },
+                                                                    ) {
                                                                         continue;
                                                                     }
                                                                 } else {
@@ -2361,10 +2369,10 @@ impl<'en> Engine<'en> {
                                     if let Some((pid, VarKind::Time)) = b.value_slots.get(v) {
                                         if let Some(pt) = guard_time.get(pid) {
                                             let ok = match op.as_str() {
-                                                "<" => pt < tcmp,
-                                                "<=" => pt <= tcmp,
-                                                ">" => pt > tcmp,
-                                                ">=" => pt >= tcmp,
+                                                "<" => pt.definitely_before(tcmp),
+                                                "<=" => pt.definitely_at_or_before(tcmp),
+                                                ">" => pt.definitely_after(tcmp),
+                                                ">=" => pt.definitely_at_or_after(tcmp),
                                                 "==" | "=" => pt == tcmp,
                                                 _ => false,
                                             };
@@ -2395,10 +2403,10 @@ impl<'en> Engine<'en> {
                                             (guard_time.get(pid1), guard_time.get(pid2))
                                         {
                                             let ok = match op.as_str() {
-                                                "<" => pt1 < pt2,
-                                                "<=" => pt1 <= pt2,
-                                                ">" => pt1 > pt2,
-                                                ">=" => pt1 >= pt2,
+                                                "<" => pt1.definitely_before(pt2),
+                                                "<=" => pt1.definitely_at_or_before(pt2),
+                                                ">" => pt1.definitely_after(pt2),
+                                                ">=" => pt1.definitely_at_or_after(pt2),
                                                 "==" | "=" => pt1 == pt2,
                                                 _ => false,
                                             };
