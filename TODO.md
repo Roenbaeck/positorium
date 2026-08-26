@@ -192,7 +192,7 @@ this algebra.
             repeated occurrences constrain, independent of pattern order.
         - Use `+x` only for allocation in `add`, `?x` for non-allocating query
             variables, and `?p = [...]` for explicit posit-identity binding (D012).
-- [ ] **Make variable scope explicit.**
+- [x] **Make variable scope explicit.**
         - Scope ordinary query variables lexically to one `search`; migrate tests that
             currently retain search bindings across commands (D013).
         - Keep allocation binders from `add` script-visible to later mutation commands,

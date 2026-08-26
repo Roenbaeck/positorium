@@ -1,42 +1,27 @@
 use positorium::construct::{Database, PersistenceMode};
 use positorium::traqula::Engine;
 
-// Regression: reusing +w,+h across searches should preserve bindings (proper intersection),
-// not toggle them away. Second search must still yield rows.
 #[test]
-fn cross_search_binding_persists() {
+fn query_bindings_are_lexical_to_one_search() {
     let db = Database::new(PersistenceMode::InMemory).unwrap();
     let engine = Engine::new(&db);
     let script = r#"
-add role wife; add role husband; add role name;
-add posit [{(+idw, wife), (+idh, husband)}, "married", '2004-06-19'],
-          [{(idw, wife), (idh, husband)}, "divorced", '2020-12-04'],
-          [{(idw, wife), (idh, husband)}, "married", '2024-03-17'],
-          [{(idh, name)}, "Archie Bald", '1972-08-20'],
-          [{(idh, name)}, "Archie Trix", '2004-09-21'],
-          [{(idh, name)}, "Archie Bald", '2021-01-19'],
-          [{(idw, name)}, "Bella Trix", '1972-12-13'],
-          [{(idw, name)}, "Bella Bald", '2024-05-29'];
+add role color;
+add posit [{(+red_item, color)}, "red", '2024-01-01'],
+          [{(+blue_item, color)}, "blue", '2024-01-01'];
 
-/* divorced historical */
-search [{(+w, wife), (+h, husband)}, "divorced", *], [{(w|h, name)}, +n, +t]
-return n, t;
+search [{(+item, color)}, "red", *]
+return item;
 
-/* current married */
-search [{(+w, wife), (+h, husband)}, "married", +mt] as of @NOW, [{(w|h, name)}, +n2, +t2]
-return n2, t2, mt;
+search [{(+item, color)}, +value, *]
+return item, value;
 "#;
-    let results = engine.execute_collect_multi(script).expect("multi ok");
-    assert_eq!(results.len(), 2, "two searches");
-    assert_eq!(results[0].row_count, 5, "historical divorced names");
-    assert_eq!(results[1].row_count, 5, "current married snapshot names");
-    assert!(
-        results[1]
-            .rows
-            .iter()
-            .all(|r| r.last().unwrap().contains("2024")
-                || r.last().unwrap().contains("2025")
-                || r.last().unwrap().contains("202")),
-        "snapshot time present"
-    );
+
+    let results = engine.execute_collect_multi(script).expect("multi search");
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].row_count, 1);
+    assert_eq!(results[1].row_count, 2);
+    let mut values: Vec<&str> = results[1].rows.iter().map(|row| row[1].as_str()).collect();
+    values.sort_unstable();
+    assert_eq!(values, vec!["blue", "red"]);
 }

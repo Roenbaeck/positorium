@@ -72,7 +72,7 @@ pub enum ResultSetMode {
 ///
 /// Public fields allow light‑weight pattern matching by the engine. External
 /// crates should treat this as opaque and rely on future higher level APIs.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ResultSet {
     pub mode: ResultSetMode,
     pub thing: Option<Thing>,
@@ -665,6 +665,7 @@ impl<'en> Engine<'en> {
                 Rule::add_role => self.add_role(command),
                 Rule::add_posit => self.add_posit(command, &mut variables, &resolved_now)?,
                 Rule::search => {
+                    let mut search_variables: Variables = Variables::default();
                     // limit extraction
                     let mut limit = None;
                     let cloned = command.clone();
@@ -718,7 +719,7 @@ impl<'en> Engine<'en> {
                     };
                     self.search(
                         command,
-                        &mut variables,
+                        &mut search_variables,
                         &mut wrapper,
                         &mut return_columns,
                         &mut err,
@@ -2798,7 +2799,8 @@ impl<'en> Engine<'en> {
                 }
                 Rule::search => {
                     // reset limit per search
-                    self.search_print(command, &mut variables, &resolved_now);
+                    let mut search_variables: Variables = Variables::default();
+                    self.search_print(command, &mut search_variables, &resolved_now);
                 }
                 Rule::EOI => (), // end of input
                 _ => println!("Unknown command: {:?}", command),
@@ -2884,9 +2886,10 @@ impl<'en> Engine<'en> {
             match command.as_rule() {
                 Rule::add_role => self.add_role(command),
                 Rule::add_posit => {
-                    self.add_posit(command, &mut variables, &metadata.resolved_now)?
+                    self.add_posit(command, &mut variables, &metadata.resolved_now)?;
                 }
                 Rule::search => {
+                    let mut search_variables: Variables = Variables::default();
                     search_count += 1;
                     // Extract per-search limit and install into sink (overwrite any prior; only meaningful when one search in script)
                     let limit = {
@@ -2907,7 +2910,7 @@ impl<'en> Engine<'en> {
                     let mut err = None;
                     self.search(
                         command,
-                        &mut variables,
+                        &mut search_variables,
                         &mut collector,
                         &mut return_columns,
                         &mut err,
@@ -2951,8 +2954,6 @@ impl<'en> Engine<'en> {
     ) -> Result<Vec<CollectedResultSet>, DatabaseError> {
         let metadata = options.resolve();
         let mut variables: Variables = Variables::default();
-        // Track long-lived identity variables introduced via add posit (+var in insert positions)
-        let mut stable_vars: std::collections::HashSet<String> = std::collections::HashSet::new();
         // Parse once
         let parse_result = TraqulaParser::parse(Rule::traqula, traqula.trim());
         let traqula = match parse_result {
@@ -2980,24 +2981,14 @@ impl<'en> Engine<'en> {
             }
         };
         let mut results: Vec<CollectedResultSet> = Vec::new();
-        // Variables to preserve across searches: from add_posit and from the last completed search
-        let mut preserve_vars: std::collections::HashSet<String> = std::collections::HashSet::new();
         for command in traqula {
             match command.as_rule() {
                 Rule::add_role => self.add_role(command),
                 Rule::add_posit => {
-                    // Detect variables created by this add_posit (new insert variables)
-                    let before: std::collections::HashSet<String> =
-                        variables.keys().cloned().collect();
                     self.add_posit(command, &mut variables, &metadata.resolved_now)?;
-                    for k in variables.keys() {
-                        if !before.contains(k) {
-                            stable_vars.insert(k.clone());
-                            preserve_vars.insert(k.clone());
-                        }
-                    }
                 }
                 Rule::search => {
+                    let mut search_variables: Variables = Variables::default();
                     struct LocalSink {
                         rows: Vec<Vec<String>>,
                         types: Vec<Vec<String>>,
@@ -3046,23 +3037,10 @@ impl<'en> Engine<'en> {
                         l
                     };
                     let mut local_return_columns: Option<Vec<String>> = None;
-                    // Track baseline variable states to identify variables introduced by this search
-                    let baseline_keys: std::collections::HashSet<String> =
-                        variables.keys().cloned().collect();
-                    let baseline_empty: std::collections::HashSet<String> = variables
-                        .iter()
-                        .filter_map(|(k, v)| {
-                            if v.mode == ResultSetMode::Empty {
-                                Some(k.clone())
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
                     let mut err = None;
                     self.search(
                         command,
-                        &mut variables,
+                        &mut search_variables,
                         &mut sink,
                         &mut local_return_columns,
                         &mut err,
@@ -3083,16 +3061,6 @@ impl<'en> Engine<'en> {
                         search: Some(raw_search_string),
                         metadata: metadata.clone(),
                     });
-                    // Update preserved variables with those that became non-empty during this search
-                    for (k, v) in variables.iter() {
-                        if !baseline_keys.contains(k)
-                            || (baseline_empty.contains(k) && v.mode != ResultSetMode::Empty)
-                        {
-                            preserve_vars.insert(k.clone());
-                        }
-                    }
-                    // Clear transient bindings; retain only preserved (+add_posit and newly introduced in this search)
-                    variables.retain(|k, _| preserve_vars.contains(k));
                 }
                 Rule::EOI => (),
                 _ => (),
@@ -3110,10 +3078,6 @@ impl<'en> Engine<'en> {
     ) -> Result<(), DatabaseError> {
         let resolved_now = Time::new();
         let mut variables: Variables = Variables::default();
-        // Track long-lived identity variables introduced via add posit (+var in insert positions)
-        let mut stable_vars: std::collections::HashSet<String> = std::collections::HashSet::new();
-        // Also preserve variables introduced/bound during the most recent search
-        let mut preserve_vars: std::collections::HashSet<String> = std::collections::HashSet::new();
         let parse_result = TraqulaParser::parse(Rule::traqula, traqula.trim());
         let pairs = match parse_result {
             Ok(p) => p,
@@ -3144,18 +3108,10 @@ impl<'en> Engine<'en> {
             match command.as_rule() {
                 Rule::add_role => self.add_role(command),
                 Rule::add_posit => {
-                    // Detect variables created by this add_posit (new insert variables)
-                    let before: std::collections::HashSet<String> =
-                        variables.keys().cloned().collect();
                     self.add_posit(command, &mut variables, &resolved_now)?;
-                    for k in variables.keys() {
-                        if !before.contains(k) {
-                            stable_vars.insert(k.clone());
-                            preserve_vars.insert(k.clone());
-                        }
-                    }
                 }
                 Rule::search => {
+                    let mut search_variables: Variables = Variables::default();
                     // Extract limit for this search
                     let search_text_full = command.as_str().trim().to_string();
                     let mut limit = None;
@@ -3236,23 +3192,10 @@ impl<'en> Engine<'en> {
                         limited: false,
                     };
                     let mut return_columns: Option<Vec<String>> = None; // ignored here beyond meta
-                    // Track baseline variable states before search
-                    let baseline_keys: std::collections::HashSet<String> =
-                        variables.keys().cloned().collect();
-                    let baseline_empty: std::collections::HashSet<String> = variables
-                        .iter()
-                        .filter_map(|(k, v)| {
-                            if v.mode == ResultSetMode::Empty {
-                                Some(k.clone())
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
                     let mut err = None;
                     self.search(
                         command,
-                        &mut variables,
+                        &mut search_variables,
                         &mut sink,
                         &mut return_columns,
                         &mut err,
@@ -3264,17 +3207,6 @@ impl<'en> Engine<'en> {
                     let finished_count = sink.count;
                     let limited_flag = sink.limited; // drop sink here
                     callbacks.on_result_set_end(set_index, finished_count, limited_flag);
-                    // Mirror collect_multi semantics: clear transient identity/value/time bindings between searches
-                    // to avoid unintended intersection constraints leaking across independent searches.
-                    // Preserve variables introduced by add posit as well as those newly bound during this search.
-                    for (k, v) in variables.iter() {
-                        if !baseline_keys.contains(k)
-                            || (baseline_empty.contains(k) && v.mode != ResultSetMode::Empty)
-                        {
-                            preserve_vars.insert(k.clone());
-                        }
-                    }
-                    variables.retain(|k, _| preserve_vars.contains(k));
                     set_index += 1;
                 }
                 Rule::EOI => (),
