@@ -97,6 +97,7 @@ impl Binding {
 enum ThingSlot {
     Wildcard,
     Variable(String),
+    LegacyVariable(String),
     OneOf(Vec<String>),
 }
 
@@ -125,6 +126,7 @@ struct AppearanceSetPattern {
 enum ValueSlot {
     Wildcard,
     Variable(String),
+    LegacyVariable(String),
     Literal(LiteralValue),
 }
 
@@ -132,6 +134,7 @@ enum ValueSlot {
 enum TimeSlot {
     Wildcard,
     Variable(String),
+    LegacyVariable(String),
     Literal(Time),
 }
 
@@ -165,11 +168,20 @@ struct Predicate {
     right: Operand,
 }
 
+#[derive(Debug, Clone)]
+struct OrderItem {
+    variable: String,
+    descending: bool,
+}
+
 #[derive(Debug)]
 struct Query {
-    patterns: Vec<PositPattern>,
+    branches: Vec<Vec<PositPattern>>,
+    not_exists: Vec<Vec<PositPattern>>,
     predicates: Vec<Predicate>,
     returns: Vec<String>,
+    distinct: bool,
+    order: Vec<OrderItem>,
 }
 
 #[derive(Clone)]
@@ -186,24 +198,39 @@ pub(super) fn execute(
     execution: &ExecutionContext,
 ) -> Result<(), DatabaseError> {
     execution.check()?;
-    let query = parse_query(command, &execution.metadata.resolved_now)?;
+    let query = parse_query(command, execution)?;
     let domains = validate_domains(&query)?;
-    let patterns = plan_patterns(&query.patterns)?;
     let posits = snapshot(database)?;
 
-    let mut bindings = vec![Binding::default()];
-    for pattern in patterns {
-        let mut joined = Vec::new();
-        for binding in &bindings {
+    let mut bindings = Vec::new();
+    for branch in &query.branches {
+        let patterns = plan_patterns(branch, &HashSet::new())?;
+        let mut branch_bindings = vec![Binding::default()];
+        for pattern in patterns {
+            let mut joined = Vec::new();
+            for binding in &branch_bindings {
+                execution.check()?;
+                joined.extend(evaluate_pattern(
+                    pattern, binding, &posits, &domains, execution,
+                )?);
+            }
+            branch_bindings = joined;
+            if branch_bindings.is_empty() {
+                break;
+            }
+        }
+        bindings.extend(branch_bindings);
+    }
+
+    for absence in &query.not_exists {
+        let mut retained = Vec::with_capacity(bindings.len());
+        for binding in bindings {
             execution.check()?;
-            joined.extend(evaluate_pattern(
-                pattern, binding, &posits, &domains, execution,
-            )?);
+            if !block_has_match(absence, &binding, &posits, &domains, execution)? {
+                retained.push(binding);
+            }
         }
-        bindings = joined;
-        if bindings.is_empty() {
-            break;
-        }
+        bindings = retained;
     }
 
     for predicate in &query.predicates {
@@ -217,23 +244,38 @@ pub(super) fn execute(
         bindings = selected;
     }
 
+    let mut projected = bindings
+        .into_iter()
+        .map(|binding| {
+            let row = query
+                .returns
+                .iter()
+                .map(|name| {
+                    binding
+                        .get(name)
+                        .map(BoundValue::result_cell)
+                        .ok_or_else(|| DatabaseError::UnknownVariable(name.clone()))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok((binding, row))
+        })
+        .collect::<Result<Vec<_>, DatabaseError>>()?;
+    if query.distinct {
+        let mut seen = std::collections::BTreeSet::new();
+        projected.retain(|(_, row)| seen.insert(row.clone()));
+    }
+    if !query.order.is_empty() {
+        validate_order_values(&projected, &query.order)?;
+        projected.sort_by(|(left, _), (right, _)| compare_order(left, right, &query.order));
+    }
+
     let columns = query.returns.clone();
     *return_columns = Some(columns.clone());
     if let SinkFlow::Stop = sink.on_meta(&columns) {
         return Ok(());
     }
-    for binding in bindings {
+    for (_, row) in projected {
         execution.check()?;
-        let row = query
-            .returns
-            .iter()
-            .map(|name| {
-                binding
-                    .get(name)
-                    .map(BoundValue::result_cell)
-                    .ok_or_else(|| DatabaseError::UnknownVariable(name.clone()))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
         if let SinkFlow::Stop = sink.push(row) {
             break;
         }
@@ -266,31 +308,88 @@ fn snapshot(database: &Database) -> Result<Vec<Arc<Posit<LiteralValue>>>, Databa
         .collect()
 }
 
-fn parse_query(command: Pair<'_, Rule>, resolved_now: &Time) -> Result<Query, DatabaseError> {
-    let mut patterns = Vec::new();
+fn parse_query(
+    command: Pair<'_, Rule>,
+    execution: &ExecutionContext,
+) -> Result<Query, DatabaseError> {
+    let mut branches = Vec::new();
+    let mut not_exists = Vec::new();
     let mut predicates = Vec::new();
     let mut returns = Vec::new();
+    let mut distinct = false;
+    let mut order = Vec::new();
     for clause in command.into_inner() {
         match clause.as_rule() {
-            Rule::search_clause => {
+            Rule::search_clause | Rule::union_clause => {
+                let mut branch = Vec::new();
                 for pattern in clause.into_inner() {
                     if pattern.as_rule() == Rule::posit_search {
-                        patterns.push(parse_pattern(pattern, resolved_now)?);
+                        branch.push(parse_pattern(pattern, execution)?);
                     }
                 }
+                branches.push(branch);
+            }
+            Rule::not_exists_clause => {
+                let mut block = Vec::new();
+                for pattern in clause.into_inner() {
+                    if pattern.as_rule() == Rule::posit_search {
+                        block.push(parse_pattern(pattern, execution)?);
+                    }
+                }
+                not_exists.push(block);
             }
             Rule::where_clause => {
                 for condition in clause.into_inner() {
                     if condition.as_rule() == Rule::condition {
-                        predicates.push(parse_predicate(condition, resolved_now)?);
+                        predicates.push(parse_predicate(condition, execution)?);
                     }
                 }
             }
             Rule::return_clause => {
                 for variable in clause.into_inner() {
-                    if matches!(variable.as_rule(), Rule::recall | Rule::insert) {
-                        returns.push(variable_name(&variable));
+                    match variable.as_rule() {
+                        Rule::distinct => distinct = true,
+                        Rule::variable_reference
+                        | Rule::query_variable
+                        | Rule::recall
+                        | Rule::insert => returns.push(variable_name(&variable)),
+                        rule => {
+                            return Err(DatabaseError::Invariant(format!(
+                                "unexpected return component {rule:?}"
+                            )));
+                        }
                     }
+                }
+            }
+            Rule::order_by_clause => {
+                for item in clause.into_inner() {
+                    if item.as_rule() != Rule::order_item {
+                        continue;
+                    }
+                    let mut variable = None;
+                    let mut descending = false;
+                    for part in item.into_inner() {
+                        match part.as_rule() {
+                            Rule::variable_reference
+                            | Rule::query_variable
+                            | Rule::recall
+                            | Rule::insert => variable = Some(variable_name(&part)),
+                            Rule::direction => {
+                                descending = part.as_str().eq_ignore_ascii_case("desc")
+                            }
+                            rule => {
+                                return Err(DatabaseError::Invariant(format!(
+                                    "unexpected order component {rule:?}"
+                                )));
+                            }
+                        }
+                    }
+                    order.push(OrderItem {
+                        variable: variable.ok_or_else(|| {
+                            DatabaseError::Invariant("order item has no variable".into())
+                        })?,
+                        descending,
+                    });
                 }
             }
             Rule::limit_clause => {}
@@ -301,7 +400,7 @@ fn parse_query(command: Pair<'_, Rule>, resolved_now: &Time) -> Result<Query, Da
             }
         }
     }
-    if patterns.is_empty() {
+    if branches.first().is_none_or(Vec::is_empty) {
         return Err(DatabaseError::Execution(
             "a search requires at least one posit pattern".into(),
         ));
@@ -312,34 +411,47 @@ fn parse_query(command: Pair<'_, Rule>, resolved_now: &Time) -> Result<Query, Da
         ));
     }
     Ok(Query {
-        patterns,
+        branches,
+        not_exists,
         predicates,
         returns,
+        distinct,
+        order,
     })
 }
 
 fn parse_pattern(
     pattern: Pair<'_, Rule>,
-    resolved_now: &Time,
+    execution: &ExecutionContext,
 ) -> Result<PositPattern, DatabaseError> {
+    let resolved_now = &execution.metadata.resolved_now;
     let mut posit = None;
     let mut appearances = None;
     let mut value = None;
     let mut time = None;
     let mut cutoff = None;
+    let mut latest_matching = false;
+    let mut legacy_syntax = false;
     for component in pattern.into_inner() {
         match component.as_rule() {
             Rule::insert | Rule::recall if appearances.is_none() => {
                 posit = Some(variable_name(&component));
+                legacy_syntax = true;
+            }
+            Rule::posit_binding => {
+                posit = Some(variable_name(&component));
+            }
+            Rule::latest_marker => {
+                latest_matching = true;
             }
             Rule::appearance_set_search => {
                 appearances = Some(parse_appearance_set(component)?);
             }
             Rule::appearing_value_search => {
-                value = Some(parse_value_slot(component, resolved_now)?);
+                value = Some(parse_value_slot(component, execution)?);
             }
             Rule::appearance_time_search => {
-                time = Some(parse_time_slot(component, resolved_now)?);
+                time = Some(parse_time_slot(component, execution)?);
             }
             Rule::as_of_clause => {
                 let component = component
@@ -347,7 +459,10 @@ fn parse_pattern(
                     .next()
                     .ok_or_else(|| DatabaseError::Invariant("as-of clause has no cutoff".into()))?;
                 cutoff = Some(match component.as_rule() {
-                    Rule::recall | Rule::insert => Cutoff::Variable(variable_name(&component)),
+                    Rule::recall | Rule::insert | Rule::query_variable => {
+                        legacy_syntax |= component.as_rule() != Rule::query_variable;
+                        Cutoff::Variable(variable_name(&component))
+                    }
                     Rule::constant | Rule::time => Cutoff::Literal(
                         parse_time_with_now(component.as_str(), resolved_now).ok_or_else(|| {
                             DatabaseError::Execution(format!(
@@ -355,6 +470,17 @@ fn parse_pattern(
                                 component.as_str()
                             ))
                         })?,
+                    ),
+                    Rule::parameter => Cutoff::Literal(
+                        execution
+                            .parameter(component.as_str())?
+                            .time()
+                            .ok_or_else(|| {
+                                DatabaseError::Parameter(format!(
+                                    "{} is a literal parameter, not a time parameter",
+                                    component.as_str()
+                                ))
+                            })?,
                     ),
                     rule => {
                         return Err(DatabaseError::Invariant(format!(
@@ -370,27 +496,54 @@ fn parse_pattern(
             }
         }
     }
+    let mut appearances = appearances.ok_or_else(|| {
+        DatabaseError::Invariant("posit pattern has no appearance-set slot".into())
+    })?;
+    legacy_syntax |= appearances
+        .members
+        .iter()
+        .any(AppearancePattern::uses_legacy_syntax);
+    legacy_syntax |= matches!(&value, Some(ValueSlot::LegacyVariable(_)));
+    legacy_syntax |= matches!(&time, Some(TimeSlot::LegacyVariable(_)));
+    if legacy_syntax && !appearances.open {
+        appearances.open = true;
+    }
     Ok(PositPattern {
         posit,
-        appearances: appearances.ok_or_else(|| {
-            DatabaseError::Invariant("posit pattern has no appearance-set slot".into())
-        })?,
+        appearances,
         value: value
             .ok_or_else(|| DatabaseError::Invariant("posit pattern has no value slot".into()))?,
         time: time
             .ok_or_else(|| DatabaseError::Invariant("posit pattern has no time slot".into()))?,
         cutoff,
-        latest_matching: false,
+        latest_matching,
     })
 }
 
 fn parse_appearance_set(pattern: Pair<'_, Rule>) -> Result<AppearanceSetPattern, DatabaseError> {
     let mut members = Vec::new();
     let mut any = false;
+    let mut binding = None;
+    let mut open = false;
     for member in pattern.into_inner() {
         match member.as_rule() {
             Rule::wildcard => any = true,
             Rule::appearance_search => members.push(parse_appearance(member)?),
+            Rule::appearance_set_binding => binding = Some(variable_name(&member)),
+            Rule::appearance_list => {
+                for item in member.into_inner() {
+                    match item.as_rule() {
+                        Rule::appearance_search => members.push(parse_appearance(item)?),
+                        Rule::ellipsis => open = true,
+                        rule => {
+                            return Err(DatabaseError::Invariant(format!(
+                                "unexpected appearance-list member {rule:?}"
+                            )));
+                        }
+                    }
+                }
+            }
+            Rule::ellipsis => open = true,
             rule => {
                 return Err(DatabaseError::Invariant(format!(
                     "unexpected appearance-set member {rule:?}"
@@ -399,9 +552,9 @@ fn parse_appearance_set(pattern: Pair<'_, Rule>) -> Result<AppearanceSetPattern,
         }
     }
     Ok(AppearanceSetPattern {
-        binding: None,
+        binding,
         members,
-        open: true,
+        open,
         any,
     })
 }
@@ -416,11 +569,12 @@ fn parse_appearance(appearance: Pair<'_, Rule>) -> Result<AppearancePattern, Dat
         .ok_or_else(|| DatabaseError::Invariant("appearance lacks a Role slot".into()))?;
     let thing = match thing.as_rule() {
         Rule::wildcard => ThingSlot::Wildcard,
-        Rule::insert | Rule::recall => ThingSlot::Variable(variable_name(&thing)),
-        Rule::recall_union => ThingSlot::OneOf(
+        Rule::query_variable => ThingSlot::Variable(variable_name(&thing)),
+        Rule::insert | Rule::recall => ThingSlot::LegacyVariable(variable_name(&thing)),
+        Rule::recall_union | Rule::query_union => ThingSlot::OneOf(
             thing
                 .into_inner()
-                .filter(|part| part.as_rule() == Rule::recall)
+                .filter(|part| matches!(part.as_rule(), Rule::recall | Rule::query_variable))
                 .map(|part| variable_name(&part))
                 .collect(),
         ),
@@ -433,7 +587,9 @@ fn parse_appearance(appearance: Pair<'_, Rule>) -> Result<AppearancePattern, Dat
     let role = match role.as_rule() {
         Rule::wildcard => RoleSlot::Wildcard,
         Rule::role => RoleSlot::Named(canonical_role_name(role.as_str())),
-        Rule::insert | Rule::recall => RoleSlot::Variable(variable_name(&role)),
+        Rule::query_variable | Rule::insert | Rule::recall => {
+            RoleSlot::Variable(variable_name(&role))
+        }
         rule => {
             return Err(DatabaseError::Invariant(format!(
                 "unexpected Role slot {rule:?}"
@@ -443,31 +599,55 @@ fn parse_appearance(appearance: Pair<'_, Rule>) -> Result<AppearancePattern, Dat
     Ok(AppearancePattern { thing, role })
 }
 
-fn parse_value_slot(slot: Pair<'_, Rule>, resolved_now: &Time) -> Result<ValueSlot, DatabaseError> {
+fn parse_value_slot(
+    slot: Pair<'_, Rule>,
+    execution: &ExecutionContext,
+) -> Result<ValueSlot, DatabaseError> {
     let value = slot
         .into_inner()
         .next()
         .ok_or_else(|| DatabaseError::Invariant("value pattern is empty".into()))?;
     match value.as_rule() {
         Rule::wildcard => Ok(ValueSlot::Wildcard),
-        Rule::insert | Rule::recall => Ok(ValueSlot::Variable(variable_name(&value))),
-        rule => parse_lossless_literal(rule, value.as_str(), resolved_now).map(ValueSlot::Literal),
+        Rule::query_variable => Ok(ValueSlot::Variable(variable_name(&value))),
+        Rule::insert | Rule::recall => Ok(ValueSlot::LegacyVariable(variable_name(&value))),
+        Rule::parameter => Ok(ValueSlot::Literal(
+            execution.parameter(value.as_str())?.literal(),
+        )),
+        rule => parse_lossless_literal(rule, value.as_str(), &execution.metadata.resolved_now)
+            .map(ValueSlot::Literal),
     }
 }
 
-fn parse_time_slot(slot: Pair<'_, Rule>, resolved_now: &Time) -> Result<TimeSlot, DatabaseError> {
+fn parse_time_slot(
+    slot: Pair<'_, Rule>,
+    execution: &ExecutionContext,
+) -> Result<TimeSlot, DatabaseError> {
     let time = slot
         .into_inner()
         .next()
         .ok_or_else(|| DatabaseError::Invariant("time pattern is empty".into()))?;
     match time.as_rule() {
         Rule::wildcard => Ok(TimeSlot::Wildcard),
-        Rule::insert | Rule::recall => Ok(TimeSlot::Variable(variable_name(&time))),
-        Rule::constant | Rule::time => parse_time_with_now(time.as_str(), resolved_now)
+        Rule::query_variable => Ok(TimeSlot::Variable(variable_name(&time))),
+        Rule::insert | Rule::recall => Ok(TimeSlot::LegacyVariable(variable_name(&time))),
+        Rule::parameter => execution
+            .parameter(time.as_str())?
+            .time()
             .map(TimeSlot::Literal)
             .ok_or_else(|| {
-                DatabaseError::Execution(format!("invalid time literal '{}'", time.as_str()))
+                DatabaseError::Parameter(format!(
+                    "{} is a literal parameter, not a time parameter",
+                    time.as_str()
+                ))
             }),
+        Rule::constant | Rule::time => {
+            parse_time_with_now(time.as_str(), &execution.metadata.resolved_now)
+                .map(TimeSlot::Literal)
+                .ok_or_else(|| {
+                    DatabaseError::Execution(format!("invalid time literal '{}'", time.as_str()))
+                })
+        }
         rule => Err(DatabaseError::Invariant(format!(
             "unexpected time slot {rule:?}"
         ))),
@@ -476,7 +656,7 @@ fn parse_time_slot(slot: Pair<'_, Rule>, resolved_now: &Time) -> Result<TimeSlot
 
 fn parse_predicate(
     condition: Pair<'_, Rule>,
-    resolved_now: &Time,
+    execution: &ExecutionContext,
 ) -> Result<Predicate, DatabaseError> {
     let mut parts = condition.into_inner();
     let left = parts
@@ -491,33 +671,61 @@ fn parse_predicate(
     Ok(Predicate {
         left: variable_name(&left),
         operator: operator.as_str().to_string(),
-        right: parse_operand(right, resolved_now)?,
+        right: parse_operand(right, execution)?,
     })
 }
 
-fn parse_operand(operand: Pair<'_, Rule>, resolved_now: &Time) -> Result<Operand, DatabaseError> {
-    if operand.as_rule() == Rule::rhs_value {
+fn parse_operand(
+    operand: Pair<'_, Rule>,
+    execution: &ExecutionContext,
+) -> Result<Operand, DatabaseError> {
+    if matches!(
+        operand.as_rule(),
+        Rule::rhs_value | Rule::variable_reference
+    ) {
         return parse_operand(
             operand
                 .into_inner()
                 .next()
                 .ok_or_else(|| DatabaseError::Invariant("empty right operand".into()))?,
-            resolved_now,
+            execution,
         );
     }
     match operand.as_rule() {
-        Rule::recall | Rule::insert => Ok(Operand::Variable(variable_name(&operand))),
-        Rule::constant | Rule::time => parse_time_with_now(operand.as_str(), resolved_now)
-            .map(Operand::Time)
-            .ok_or_else(|| {
-                DatabaseError::Execution(format!("invalid time literal '{}'", operand.as_str()))
-            }),
-        rule => parse_lossless_literal(rule, operand.as_str().trim(), resolved_now)
-            .map(Operand::Literal),
+        Rule::query_variable | Rule::recall | Rule::insert => {
+            Ok(Operand::Variable(variable_name(&operand)))
+        }
+        Rule::parameter => match execution.parameter(operand.as_str())? {
+            ResolvedParameter::Literal(literal) => Ok(Operand::Literal(literal.clone())),
+            ResolvedParameter::Time { time, .. } => Ok(Operand::Time(time.clone())),
+        },
+        Rule::constant | Rule::time => {
+            parse_time_with_now(operand.as_str(), &execution.metadata.resolved_now)
+                .map(Operand::Time)
+                .ok_or_else(|| {
+                    DatabaseError::Execution(format!("invalid time literal '{}'", operand.as_str()))
+                })
+        }
+        rule => parse_lossless_literal(
+            rule,
+            operand.as_str().trim(),
+            &execution.metadata.resolved_now,
+        )
+        .map(Operand::Literal),
     }
 }
 
 fn variable_name(variable: &Pair<'_, Rule>) -> String {
+    if matches!(
+        variable.as_rule(),
+        Rule::variable_reference
+            | Rule::posit_binding
+            | Rule::appearance_set_binding
+            | Rule::order_item
+    ) && let Some(inner) = variable.clone().into_inner().next()
+    {
+        return variable_name(&inner);
+    }
     variable
         .as_str()
         .trim()
@@ -526,21 +734,44 @@ fn variable_name(variable: &Pair<'_, Rule>) -> String {
 }
 
 fn canonical_role_name(token: &str) -> String {
-    token.trim().nfc().collect()
+    let token = token.trim();
+    let token = token
+        .strip_prefix('`')
+        .and_then(|token| token.strip_suffix('`'))
+        .unwrap_or(token);
+    token.nfc().collect()
+}
+
+impl AppearancePattern {
+    fn uses_legacy_syntax(&self) -> bool {
+        matches!(
+            self.thing,
+            ThingSlot::LegacyVariable(_) | ThingSlot::OneOf(_)
+        )
+    }
 }
 
 fn validate_domains(query: &Query) -> Result<HashMap<String, Domain>, DatabaseError> {
     let mut domains = HashMap::new();
-    for pattern in &query.patterns {
-        register_pattern(pattern, &mut domains)?;
+    for branch in &query.branches {
+        for pattern in branch {
+            register_pattern(pattern, &mut domains)?;
+        }
     }
-    for pattern in &query.patterns {
-        for dependency in pattern.dependencies() {
-            if !domains.contains_key(dependency) {
-                return Err(DatabaseError::InvalidRecall(format!(
-                    "'{dependency}' is not bound by a positive pattern"
-                )));
+    for branch in &query.branches {
+        for pattern in branch {
+            for dependency in pattern.dependencies() {
+                if !domains.contains_key(dependency) {
+                    return Err(DatabaseError::InvalidRecall(format!(
+                        "'{dependency}' is not bound by a positive pattern"
+                    )));
+                }
             }
+        }
+    }
+    for block in &query.not_exists {
+        for pattern in block {
+            register_pattern(pattern, &mut domains)?;
         }
     }
     for predicate in &query.predicates {
@@ -551,6 +782,15 @@ fn validate_domains(query: &Query) -> Result<HashMap<String, Domain>, DatabaseEr
     }
     for returned in &query.returns {
         require_variable(&domains, returned)?;
+    }
+    for item in &query.order {
+        require_variable(&domains, &item.variable)?;
+        if !query.returns.contains(&item.variable) {
+            return Err(DatabaseError::InvalidRecall(format!(
+                "ORDER BY variable '{}' must be projected",
+                item.variable
+            )));
+        }
     }
     Ok(domains)
 }
@@ -566,17 +806,17 @@ fn register_pattern(
         register_domain(domains, name, Domain::AppearanceSet)?;
     }
     for member in &pattern.appearances.members {
-        if let ThingSlot::Variable(name) = &member.thing {
+        if let ThingSlot::Variable(name) | ThingSlot::LegacyVariable(name) = &member.thing {
             register_domain(domains, name, Domain::Thing)?;
         }
         if let RoleSlot::Variable(name) = &member.role {
             register_domain(domains, name, Domain::Role)?;
         }
     }
-    if let ValueSlot::Variable(name) = &pattern.value {
+    if let ValueSlot::Variable(name) | ValueSlot::LegacyVariable(name) = &pattern.value {
         register_domain(domains, name, Domain::Literal)?;
     }
-    if let TimeSlot::Variable(name) = &pattern.time {
+    if let TimeSlot::Variable(name) | TimeSlot::LegacyVariable(name) = &pattern.time {
         register_domain(domains, name, Domain::Time)?;
     }
     Ok(())
@@ -624,17 +864,17 @@ impl PositPattern {
             names.insert(name.as_str());
         }
         for member in &self.appearances.members {
-            if let ThingSlot::Variable(name) = &member.thing {
+            if let ThingSlot::Variable(name) | ThingSlot::LegacyVariable(name) = &member.thing {
                 names.insert(name.as_str());
             }
             if let RoleSlot::Variable(name) = &member.role {
                 names.insert(name.as_str());
             }
         }
-        if let ValueSlot::Variable(name) = &self.value {
+        if let ValueSlot::Variable(name) | ValueSlot::LegacyVariable(name) = &self.value {
             names.insert(name.as_str());
         }
-        if let TimeSlot::Variable(name) = &self.time {
+        if let TimeSlot::Variable(name) | TimeSlot::LegacyVariable(name) = &self.time {
             names.insert(name.as_str());
         }
         names
@@ -654,10 +894,13 @@ impl PositPattern {
     }
 }
 
-fn plan_patterns(patterns: &[PositPattern]) -> Result<Vec<&PositPattern>, DatabaseError> {
+fn plan_patterns<'a>(
+    patterns: &'a [PositPattern],
+    initially_available: &HashSet<&str>,
+) -> Result<Vec<&'a PositPattern>, DatabaseError> {
     let mut pending: Vec<_> = patterns.iter().collect();
     let mut planned = Vec::with_capacity(patterns.len());
-    let mut available = HashSet::new();
+    let mut available = initially_available.clone();
     while !pending.is_empty() {
         let Some(index) = pending
             .iter()
@@ -820,7 +1063,9 @@ fn match_appearance(
     let mut binding = input.clone();
     let thing_matches = match &pattern.thing {
         ThingSlot::Wildcard => true,
-        ThingSlot::Variable(name) => binding.bind(name, BoundValue::Thing(stored.thing()))?,
+        ThingSlot::Variable(name) | ThingSlot::LegacyVariable(name) => {
+            binding.bind(name, BoundValue::Thing(stored.thing()))?
+        }
         ThingSlot::OneOf(names) => {
             let mut matches = false;
             for name in names {
@@ -865,7 +1110,7 @@ fn match_fields(
     }
     let value_matches = match &pattern.value {
         ValueSlot::Wildcard => true,
-        ValueSlot::Variable(name) => {
+        ValueSlot::Variable(name) | ValueSlot::LegacyVariable(name) => {
             binding.bind(name, BoundValue::Literal(posit.value().clone()))?
         }
         ValueSlot::Literal(literal) => posit
@@ -878,7 +1123,9 @@ fn match_fields(
     }
     let time_matches = match &pattern.time {
         TimeSlot::Wildcard => true,
-        TimeSlot::Variable(name) => binding.bind(name, BoundValue::Time(posit.time().clone()))?,
+        TimeSlot::Variable(name) | TimeSlot::LegacyVariable(name) => {
+            binding.bind(name, BoundValue::Time(posit.time().clone()))?
+        }
         TimeSlot::Literal(time) => posit.time() == time,
     };
     Ok(time_matches.then_some(binding))
@@ -897,6 +1144,92 @@ fn maximal(matches: Vec<StructuralMatch>) -> Vec<StructuralMatch> {
         })
         .map(|(_, candidate)| candidate.clone())
         .collect()
+}
+
+fn block_has_match(
+    patterns: &[PositPattern],
+    outer: &Binding,
+    posits: &[Arc<Posit<LiteralValue>>],
+    domains: &HashMap<String, Domain>,
+    execution: &ExecutionContext,
+) -> Result<bool, DatabaseError> {
+    let available: HashSet<_> = outer.0.keys().map(String::as_str).collect();
+    let planned = plan_patterns(patterns, &available)?;
+    let mut bindings = vec![outer.clone()];
+    for pattern in planned {
+        let mut joined = Vec::new();
+        for binding in &bindings {
+            execution.check()?;
+            joined.extend(evaluate_pattern(
+                pattern, binding, posits, domains, execution,
+            )?);
+        }
+        bindings = joined;
+        if bindings.is_empty() {
+            return Ok(false);
+        }
+    }
+    Ok(!bindings.is_empty())
+}
+
+fn validate_order_values(
+    projected: &[(Binding, Vec<ResultCell>)],
+    order: &[OrderItem],
+) -> Result<(), DatabaseError> {
+    for item in order {
+        for (binding, _) in projected {
+            let value = binding
+                .get(&item.variable)
+                .ok_or_else(|| DatabaseError::UnknownVariable(item.variable.clone()))?;
+            if let BoundValue::Literal(literal) = value
+                && !matches!(
+                    literal.family(),
+                    LiteralFamily::Integer | LiteralFamily::Decimal | LiteralFamily::Certainty
+                )
+            {
+                return Err(DatabaseError::Comparison(format!(
+                    "ORDER BY is unsupported for {:?} literals",
+                    literal.family()
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn compare_order(left: &Binding, right: &Binding, order: &[OrderItem]) -> std::cmp::Ordering {
+    for item in order {
+        let Some(left) = left.get(&item.variable) else {
+            continue;
+        };
+        let Some(right) = right.get(&item.variable) else {
+            continue;
+        };
+        let mut comparison = order_value(left, right);
+        if item.descending {
+            comparison = comparison.reverse();
+        }
+        if comparison != std::cmp::Ordering::Equal {
+            return comparison;
+        }
+    }
+    std::cmp::Ordering::Equal
+}
+
+fn order_value(left: &BoundValue, right: &BoundValue) -> std::cmp::Ordering {
+    match (left, right) {
+        (
+            BoundValue::Thing(left) | BoundValue::Posit(left),
+            BoundValue::Thing(right) | BoundValue::Posit(right),
+        ) => left.cmp(right),
+        (BoundValue::Role(left), BoundValue::Role(right)) => left.role().cmp(&right.role()),
+        (BoundValue::AppearanceSet(left), BoundValue::AppearanceSet(right)) => left.cmp(right),
+        (BoundValue::Literal(left), BoundValue::Literal(right)) => left
+            .semantic_cmp(right)
+            .unwrap_or(std::cmp::Ordering::Equal),
+        (BoundValue::Time(left), BoundValue::Time(right)) => left.cmp(right),
+        _ => std::cmp::Ordering::Equal,
+    }
 }
 
 fn evaluate_predicate(predicate: &Predicate, binding: &Binding) -> Result<bool, DatabaseError> {

@@ -530,7 +530,7 @@ async function runQuery() {
   console.log('script:', script);
   const doStream = els.streamMode.checked;
   const doWasm = els.wasmMode.checked;
-  const payload = { traqula_version: 1, script: script, stream: doStream };
+  const payload = { traqula_version: 1, script: script, stream: doStream, parameters: {} };
   const timeoutMs = parseInt(els.timeout.value || '0',10);
   els.runBtn.disabled = true; setStatus('Running...'); els.progress.style.visibility='visible'; els.progress.value=15;
   const controller = timeoutMs>0 ? new AbortController() : null;

@@ -24,6 +24,9 @@
       "include": "#variables"
     },
     {
+      "include": "#roles"
+    },
+    {
       "include": "#constants"
     },
     {
@@ -47,7 +50,7 @@
       "patterns": [
         {
           "name": "keyword.control.traqula",
-          "match": "\\b(add|role|posit|search|return|where|as|of|limit|and)\\b"
+          "match": "\\b(add|role|posit|search|return|where|as|of|limit|and|latest|union|not|exists|distinct|order|by|asc|desc)\\b"
         }
       ]
     },
@@ -87,7 +90,12 @@
     },
     "variables": {
       "name": "variable.traqula",
-      "match": "\\b[a-zA-Z][a-zA-Z0-9_]*\\b"
+      "match": "[$?]?\\b[a-zA-Z][a-zA-Z0-9_]*\\b"
+    },
+    "roles": {
+      "name": "entity.name.type.traqula",
+      "begin": "`",
+      "end": "`"
     },
     "constants": {
       "name": "constant.traqula",
@@ -99,7 +107,7 @@
     },
     "punctuation": {
       "name": "punctuation.traqula",
-      "match": "[\\[\\]\\(\\)\\{\\},;.]"
+      "match": "(\\.\\.\\.|[\\[\\]\\(\\)\\{\\},;.])"
     }
   }
 }

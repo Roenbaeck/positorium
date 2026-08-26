@@ -141,7 +141,7 @@ The accepted decisions now define the required fixes.
         - Resolve `@NOW` once per complete script at full supported UTC datetime
             precision; support a deterministic execution-option override and report the
             resolved value in execution metadata (D011).
-- [ ] **Keep `as of` as derived Traqula syntax only.**
+- [x] **Keep `as of` as derived Traqula syntax only.**
         - Define it as latest ordinary posit(s) per appearance set at or before a
             cutoff, with identical behavior for literal and variable cutoffs.
         - For ordinary `[pattern] as of T`, select appearance sets by structure, reduce
@@ -152,7 +152,7 @@ The accepted decisions now define the required fixes.
             selection in the beta algebra.
         - Add equivalence tests between the shorthand and its expanded query.
         - Do not make `as of` implicitly inspect assertions, positors, or certainty.
-- [ ] **Stabilize binding and result semantics.**
+- [x] **Stabilize binding and result semantics.**
         - Review the existing `Binding` evaluator, variable-to-variable comparisons,
             cross-search binding lifetime, multiplicity, projection, and limits.
         - Separate ordered script commands from declarative search semantics; pattern
@@ -185,7 +185,7 @@ Keep the posit-shaped notation, but define Traqula over a small semantic algebra
 freezing its surface syntax. Every shorthand must have an equivalent expansion in
 this algebra.
 
-- [ ] **Define structural variable domains and declarative unification.**
+- [x] **Define structural variable domains and declarative unification.**
         - Distinguish Thing, Role, Posit, AppearanceSet, LiteralValue, and Time
             variables and reject reuse across incompatible domains.
         - Use one unification rule for query variables: the first occurrence binds and
@@ -200,7 +200,7 @@ this algebra.
             `using` until a concrete post-beta workflow requires them.
         - Keep command order meaningful for scripts without making join order part of
             declarative search semantics.
-- [ ] **Distinguish exact and open appearance-set matching.**
+- [x] **Distinguish exact and open appearance-set matching.**
         - Make `{(?thing, role)}` exact and a trailing ellipsis, as in
             `{(?thing, role), ...}`, open for subset matching (D014).
         - Bind a complete stored set with `?appearances = { ... }`, allow Role variables
@@ -208,7 +208,7 @@ this algebra.
             `...` permit zero or more additional members.
         - Define grouping for snapshot reduction by the complete stored appearance
             set, even when the query pattern is open.
-- [ ] **Implement the beta query-algebra nucleus.**
+- [x] **Implement the beta query-algebra nucleus.**
         - Provide scans, natural joins, selection, projection, union, safe
             anti-join/`NOT EXISTS`, grouping/maximum, distinctness, ordering, and limit.
         - Define `NOT EXISTS` as absence of recorded evidence under an open-world
@@ -236,7 +236,7 @@ this algebra.
             presentation-sensitive.
         - Keep constraints conformance-only in beta. Fail unsupported operand pairs,
             including heterogeneous-role pairs, with a typed comparison error.
-- [ ] **Specify result cardinality and ordering.**
+- [x] **Specify result cardinality and ordering.**
         - Give joins bag semantics and require explicit `DISTINCT` for duplicate
             elimination (D018).
         - Leave row order unspecified without `ORDER BY`; never promise index or append

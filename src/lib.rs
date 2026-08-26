@@ -75,6 +75,6 @@ pub use interface::{CancelToken, QueryHandle, QueryId, QueryInterface, QueryOpti
 pub use literal::{LiteralFamily, LiteralValue};
 pub use traqula::{
     CancellationToken, CollectedResult, CollectedResultSet, Engine, ExecutionMetadata,
-    ExecutionOptions, ExecutionWarning, MultiStreamCallbacks, ResultCell, ResultCellKind, RowSink,
-    SinkFlow, TRAQULA_VERSION,
+    ExecutionOptions, ExecutionParameter, ExecutionWarning, MultiStreamCallbacks, ResultCell,
+    ResultCellKind, RowSink, SinkFlow, TRAQULA_VERSION,
 };

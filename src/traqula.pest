@@ -18,14 +18,18 @@ json_array = { "[" ~ (json_string | json_object | json_array | !("{" | "}" | "["
 json = @{ json_object }
 string = @{ json_string }
 // Reserved keywords (cannot be used as bare variable names)
-keyword = { "add" | "role" | "posit" | "search" | "return" | "where" | "as" | "of" | "limit" | "and" }
+keyword = { "add" | "role" | "posit" | "search" | "return" | "where" | "as" | "of" | "limit" | "and" | "latest" | "union" | "not" | "exists" | "distinct" | "order" | "by" | "asc" | "desc" }
 // A variable is an identifier not exactly equal to a reserved keyword.
 // Negative lookahead excludes exact keyword tokens but allows identifiers like 'limitX'.
 variable = ${ !(keyword ~ ! (CASED_LETTER | digit | "_" )) ~ CASED_LETTER ~ (CASED_LETTER | digit | "_" )* }
 constant = { "@" ~ UPPERCASE_LETTER+ }
+query_variable = @{ "?" ~ variable }
+parameter = @{ "$" ~ variable }
 
 // add role command
-role = { (CASED_LETTER | NONSPACING_MARK | SPACING_MARK | SPACE_SEPARATOR)+ }
+bare_role = @{ (CASED_LETTER | NONSPACING_MARK | SPACING_MARK) ~ (CASED_LETTER | NONSPACING_MARK | SPACING_MARK | digit | "_")* }
+quoted_role = @{ "`" ~ (!"`" ~ ANY)+ ~ "`" }
+role = { quoted_role | bare_role }
 add_role = { ^"add role" ~ (role ~ ","?)+ ~ ";" }
 
 // add posit command
@@ -33,8 +37,8 @@ insert = { "+" ~ variable }
 recall = { variable }
 appearance = { "(" ~ (insert | recall) ~ "," ~ role ~ ")" } 
 appearance_set = { "{" ~ (appearance ~ ","?)+ ~ "}" }
-appearing_value = { constant | json | string | time | certainty | decimal | int }
-appearance_time = { constant | time }
+appearing_value = { parameter | constant | json | string | time | certainty | decimal | int }
+appearance_time = { parameter | constant | time }
 posit = { 
     insert? ~ 
     "[" ~ appearance_set ~ "," ~ appearing_value ~ "," ~ appearance_time ~ "]" 
@@ -44,23 +48,36 @@ add_posit = { ^"add posit" ~ (posit ~ ","?)+ ~ ";" }
 // search command
 wildcard = { "*" }
 recall_union = { recall ~ ("|" ~ recall)+ }
-appearance_search = { "(" ~ (wildcard | insert | recall_union | recall) ~ "," ~ (wildcard | role) ~ ")" } 
-appearance_set_search = { (wildcard | "{" ~ (appearance_search ~ ","?)+ ~ "}") }
-appearing_value_search = { (wildcard | insert | recall | constant | json | string | time | certainty | decimal | int) }
-appearance_time_search = { (wildcard | insert | recall | constant | time) }
-posit_search = { 
-    insert? ~ 
+query_union = { query_variable ~ ("|" ~ query_variable)+ }
+appearance_search = { "(" ~ (wildcard | query_union | recall_union | query_variable | insert | recall) ~ "," ~ (wildcard | query_variable | role) ~ ")" }
+ellipsis = { "..." }
+appearance_list = { (appearance_search ~ ("," ~ appearance_search)* ~ ("," ~ ellipsis)?) | ellipsis }
+appearance_set_binding = { query_variable ~ "=" }
+appearance_set_search = { appearance_set_binding? ~ (wildcard | "{" ~ appearance_list? ~ "}") }
+appearing_value_search = { (wildcard | query_variable | insert | recall | parameter | constant | json | string | time | certainty | decimal | int) }
+appearance_time_search = { (wildcard | query_variable | insert | recall | parameter | constant | time) }
+posit_binding = { query_variable ~ "=" }
+latest_marker = { ^"latest" }
+posit_search = {
+    latest_marker? ~ (posit_binding | insert)? ~
     "[" ~ appearance_set_search ~ "," ~ appearing_value_search ~ "," ~ appearance_time_search ~ "]" ~ as_of_clause?
 }
-return_clause = { ^"return" ~ (recall ~ ","?)+ }
+variable_reference = { query_variable | recall }
+distinct = { ^"distinct" }
+return_clause = { ^"return" ~ distinct? ~ (variable_reference ~ ","?)+ }
 search_clause = { ^"search" ~ (posit_search ~ ","?)+ }
+union_clause = { ^"union" ~ (posit_search ~ ","?)+ }
+not_exists_clause = { ^"not exists" ~ "{" ~ (posit_search ~ ","?)+ ~ "}" }
 // where clause: variable comparator value/variable. Initially engine only enforced time, but grammar now allows broader RHS.
 comparator = { "===" | "?=" | "<=" | ">=" | "==" | "<" | ">" | "=" }
-rhs_value = { constant | time | certainty | decimal | int | string | json }
-condition = { recall ~ comparator ~ (rhs_value | recall) }
+rhs_value = { parameter | constant | time | certainty | decimal | int | string | json }
+condition = { variable_reference ~ comparator ~ (rhs_value | variable_reference) }
 where_clause = { ^"where" ~ condition ~ ("and" ~ condition)* }
 limit_clause = { ^"limit" ~ int }
-search = { search_clause ~ where_clause? ~ return_clause ~ limit_clause? ~ ";" }
+direction = { ^"asc" | ^"desc" }
+order_item = { variable_reference ~ direction? }
+order_by_clause = { ^"order by" ~ order_item ~ ("," ~ order_item)* }
+search = { search_clause ~ union_clause* ~ not_exists_clause* ~ where_clause? ~ return_clause ~ order_by_clause? ~ limit_clause? ~ ";" }
 
 // Optional per-pattern 'as of' clause
-as_of_clause = { "as of" ~ (constant | time | recall) }
+as_of_clause = { "as of" ~ (parameter | constant | time | query_variable | recall) }

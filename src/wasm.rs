@@ -1,5 +1,6 @@
 use crate::construct::{Database, PersistenceMode};
-use crate::traqula::Engine;
+use crate::traqula::{Engine, ExecutionOptions, ExecutionParameter};
+use std::collections::HashMap;
 use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 
@@ -27,9 +28,36 @@ impl WasmEngine {
     }
 
     pub fn execute(&self, script: &str) -> Result<JsValue, JsValue> {
+        self.execute_with_options(script, ExecutionOptions::default())
+    }
+
+    pub fn execute_with_parameters(
+        &self,
+        script: &str,
+        parameters: JsValue,
+    ) -> Result<JsValue, JsValue> {
+        let parameters: HashMap<String, ExecutionParameter> =
+            serde_wasm_bindgen::from_value(parameters)
+                .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        self.execute_with_options(
+            script,
+            ExecutionOptions {
+                parameters,
+                ..ExecutionOptions::default()
+            },
+        )
+    }
+}
+
+impl WasmEngine {
+    fn execute_with_options(
+        &self,
+        script: &str,
+        options: ExecutionOptions,
+    ) -> Result<JsValue, JsValue> {
         let engine = Engine::new(&self.db);
         let result_sets = engine
-            .execute_collect_multi(script)
+            .execute_collect_multi_with_options(script, options)
             .map_err(|error| JsValue::from_str(&error.to_string()))?;
         serde_wasm_bindgen::to_value(&WasmQueryResponse {
             interface_version: WASM_INTERFACE_VERSION,
@@ -74,5 +102,25 @@ mod tests {
         let script = "invalid syntax;";
         let result = engine.execute(script);
         assert!(result.is_err());
+    }
+
+    #[wasm_bindgen_test]
+    fn test_wasm_typed_parameters() {
+        let engine = WasmEngine::new().expect("Failed to create engine");
+        engine
+            .execute("add role number; add posit [{(+item, number)}, +0010.00, @NOW];")
+            .unwrap();
+        let parameters = serde_wasm_bindgen::to_value(&serde_json::json!({
+            "target": { "kind": "literal", "text": "10" }
+        }))
+        .unwrap();
+        let output = engine
+            .execute_with_parameters(
+                "search [{(?item, number)}, ?value, *] where ?value = $target return ?value;",
+                parameters,
+            )
+            .unwrap();
+        let output: serde_json::Value = serde_wasm_bindgen::from_value(output).unwrap();
+        assert_eq!(output["result_sets"][0]["rows"][0][0]["text"], "+0010.00");
     }
 }

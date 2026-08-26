@@ -1,7 +1,7 @@
 use crate::error::DatabaseError;
 use crate::interface::QueryInterface;
 use crate::traqula::{
-    CancellationToken, CollectedResultSet, ExecutionOptions, ExecutionWarning,
+    CancellationToken, CollectedResultSet, ExecutionOptions, ExecutionParameter, ExecutionWarning,
     MultiStreamCallbacks, ResultCell, RowSink, SinkFlow, TRAQULA_VERSION, script_counts,
 };
 use axum::extract::{DefaultBodyLimit, State, rejection::JsonRejection};
@@ -130,6 +130,8 @@ pub struct QueryRequest {
     pub stream: bool,
     #[serde(default)]
     pub timeout_ms: Option<u64>,
+    #[serde(default)]
+    pub parameters: std::collections::HashMap<String, ExecutionParameter>,
 }
 
 #[derive(Serialize)]
@@ -244,6 +246,7 @@ async fn query(
         timeout: Some(timeout),
         cancellation: Some(cancellation.clone()),
         max_rows_per_search: Some(state.config.max_rows_per_search),
+        parameters: request.parameters,
         ..ExecutionOptions::default()
     };
 
@@ -548,6 +551,7 @@ fn database_error_response(error: DatabaseError, started: Instant) -> Response {
         | DatabaseError::VariableDomain { .. }
         | DatabaseError::InvalidRecall(_)
         | DatabaseError::Comparison(_)
+        | DatabaseError::Parameter(_)
         | DatabaseError::Execution(_) => StatusCode::BAD_REQUEST,
         DatabaseError::Cancelled | DatabaseError::Timeout => StatusCode::REQUEST_TIMEOUT,
         DatabaseError::Config(_)
@@ -643,6 +647,7 @@ mod tests {
                 script: "not traqula".into(),
                 stream: false,
                 timeout_ms: None,
+                parameters: std::collections::HashMap::new(),
             })),
         )
         .await;
@@ -663,6 +668,7 @@ mod tests {
                 script: "add role never_created;".into(),
                 stream: false,
                 timeout_ms: None,
+                parameters: std::collections::HashMap::new(),
             })),
         )
         .await;

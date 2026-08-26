@@ -36,6 +36,8 @@ pub enum DatabaseError {
     InvalidRecall(String),
     #[error("Unsupported comparison: {0}")]
     Comparison(String),
+    #[error("Invalid parameter: {0}")]
+    Parameter(String),
     #[error("Internal invariant violated: {0}")]
     Invariant(String),
     #[error("Lock poisoned: {0}")]

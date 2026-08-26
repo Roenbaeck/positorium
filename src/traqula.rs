@@ -64,6 +64,7 @@ use std::time::{Duration, Instant};
 // used for internal result sets
 use roaring::RoaringTreemap;
 use tracing::info;
+use unicode_normalization::UnicodeNormalization;
 // (Bit*Assign imports previously used by legacy toggle-based set ops removed)
 
 type Variables = HashMap<String, ResultSet, OtherHasher>;
@@ -430,6 +431,86 @@ fn parse_lossless_literal(
     };
     LiteralValue::new(token, family).map_err(DatabaseError::Execution)
 }
+
+fn parse_role_name(token: &str) -> String {
+    let token = token.trim();
+    let token = token
+        .strip_prefix('`')
+        .and_then(|token| token.strip_suffix('`'))
+        .unwrap_or(token);
+    token.nfc().collect()
+}
+
+fn validate_parameter_name(name: &str) -> Result<(), DatabaseError> {
+    let mut characters = name.chars();
+    if !characters.next().is_some_and(char::is_alphabetic)
+        || !characters.all(|character| character.is_alphanumeric() || character == '_')
+    {
+        return Err(DatabaseError::Parameter(format!(
+            "'{name}' is not a valid parameter name"
+        )));
+    }
+    Ok(())
+}
+
+fn resolve_parameter(
+    parameter: ExecutionParameter,
+    resolved_now: &Time,
+) -> Result<ResolvedParameter, DatabaseError> {
+    match parameter {
+        ExecutionParameter::Literal { text } => {
+            if text.trim() != text {
+                return Err(DatabaseError::Parameter(
+                    "literal parameter text may not contain surrounding whitespace".into(),
+                ));
+            }
+            let family = if text.starts_with('"') {
+                LiteralFamily::String
+            } else if text.starts_with('{') {
+                LiteralFamily::Json
+            } else if text.starts_with('\'') || text.starts_with('@') {
+                if parse_time_with_now(&text, resolved_now).is_none() {
+                    return Err(DatabaseError::Parameter(format!(
+                        "invalid temporal literal parameter '{text}'"
+                    )));
+                }
+                LiteralFamily::Time
+            } else if text.ends_with('%') {
+                LiteralFamily::Certainty
+            } else if text.contains('.') {
+                LiteralFamily::Decimal
+            } else {
+                LiteralFamily::Integer
+            };
+            let text = match text.as_str() {
+                "@NOW" => format!("'{resolved_now}'"),
+                _ => text,
+            };
+            LiteralValue::new(text, family)
+                .map(ResolvedParameter::Literal)
+                .map_err(DatabaseError::Parameter)
+        }
+        ExecutionParameter::Time { text } => {
+            if text.trim() != text {
+                return Err(DatabaseError::Parameter(
+                    "time parameter text may not contain surrounding whitespace".into(),
+                ));
+            }
+            let time = parse_time_with_now(&text, resolved_now).ok_or_else(|| {
+                DatabaseError::Parameter(format!("invalid time parameter '{text}'"))
+            })?;
+            let token = match text.as_str() {
+                "@NOW" => format!("'{resolved_now}'"),
+                "@BOT" | "@EOT" => text,
+                _ => text,
+            };
+            let literal =
+                LiteralValue::new(token, LiteralFamily::Time).map_err(DatabaseError::Parameter)?;
+            Ok(ResolvedParameter::Time { time, literal })
+        }
+    }
+}
+
 /// Parse a time literal or constant used in Traqula.
 pub fn parse_time(value: &str) -> Option<Time> {
     parse_time_with_now(value, &Time::new())
@@ -646,6 +727,16 @@ pub struct CollectedResultSet {
     pub metadata: ExecutionMetadata,
 }
 
+/// A typed value supplied separately from Traqula source for a `$name` placeholder.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ExecutionParameter {
+    /// Complete lossless Traqula literal token, such as `10.00`, `"name"`, or JSON.
+    Literal { text: String },
+    /// Traqula time token or constant, such as `'2024-05'` or `@NOW`.
+    Time { text: String },
+}
+
 /// Options that affect one complete Traqula script execution.
 #[derive(Debug, Clone, Default)]
 pub struct ExecutionOptions {
@@ -657,6 +748,8 @@ pub struct ExecutionOptions {
     pub cancellation: Option<CancellationToken>,
     /// Maximum rows emitted by each search. A lower Traqula `LIMIT` wins.
     pub max_rows_per_search: Option<usize>,
+    /// Typed `$name` values. Names exclude the leading dollar sign.
+    pub parameters: HashMap<String, ExecutionParameter>,
 }
 
 /// A clonable cooperative cancellation token for one script execution.
@@ -698,6 +791,28 @@ struct ExecutionContext {
     deadline: Option<Instant>,
     cancellation: CancellationToken,
     max_rows_per_search: Option<usize>,
+    parameters: HashMap<String, ResolvedParameter>,
+}
+
+#[derive(Debug, Clone)]
+enum ResolvedParameter {
+    Literal(LiteralValue),
+    Time { time: Time, literal: LiteralValue },
+}
+
+impl ResolvedParameter {
+    fn literal(&self) -> LiteralValue {
+        match self {
+            Self::Literal(literal) | Self::Time { literal, .. } => literal.clone(),
+        }
+    }
+
+    fn time(&self) -> Option<Time> {
+        match self {
+            Self::Literal(_) => None,
+            Self::Time { time, .. } => Some(time.clone()),
+        }
+    }
 }
 
 impl ExecutionOptions {
@@ -710,15 +825,25 @@ impl ExecutionOptions {
                 })
             })
             .transpose()?;
+        let resolved_now = self.now.unwrap_or_default();
+        let parameters = self
+            .parameters
+            .into_iter()
+            .map(|(name, parameter)| {
+                validate_parameter_name(&name)?;
+                resolve_parameter(parameter, &resolved_now).map(|parameter| (name, parameter))
+            })
+            .collect::<Result<HashMap<_, _>, DatabaseError>>()?;
         Ok(ExecutionContext {
             metadata: ExecutionMetadata {
                 traqula_version: TRAQULA_VERSION,
-                resolved_now: self.now.unwrap_or_default(),
+                resolved_now,
                 warnings: execution_warnings(source),
             },
             deadline,
             cancellation: self.cancellation.unwrap_or_default(),
             max_rows_per_search: self.max_rows_per_search,
+            parameters,
         })
     }
 }
@@ -780,6 +905,13 @@ fn execution_warnings(source: &str) -> Vec<ExecutionWarning> {
 }
 
 impl ExecutionContext {
+    fn parameter(&self, token: &str) -> Result<&ResolvedParameter, DatabaseError> {
+        let name = token.strip_prefix('$').unwrap_or(token);
+        self.parameters
+            .get(name)
+            .ok_or_else(|| DatabaseError::Parameter(format!("missing parameter '${name}'")))
+    }
+
     fn check(&self) -> Result<(), DatabaseError> {
         if self.cancellation.is_cancelled() {
             return Err(DatabaseError::Cancelled);
@@ -969,7 +1101,7 @@ impl<'en> Engine<'en> {
     fn add_role(&self, command: Pair<Rule>) -> Result<(), DatabaseError> {
         let names: Vec<String> = command
             .into_inner()
-            .map(|role| role.as_str().trim().to_string())
+            .map(|role| parse_role_name(role.as_str()))
             .collect();
         let kept = self
             .database
@@ -1004,7 +1136,7 @@ impl<'en> Engine<'en> {
             let mut value: Option<LiteralValue> = None;
             let mut time: Option<Time> = None;
             let mut local_variables = Vec::new();
-            let mut roles = Vec::new();
+            let mut roles: Vec<String> = Vec::new();
             match structure.as_rule() {
                 Rule::posit => {
                     for component in structure.into_inner() {
@@ -1074,7 +1206,7 @@ impl<'en> Engine<'en> {
                                                 );
                                             }
                                             Rule::role => {
-                                                roles.push(appearance.as_str());
+                                                roles.push(parse_role_name(appearance.as_str()));
                                             }
                                             rule => {
                                                 return Err(DatabaseError::Invariant(format!(
@@ -1087,16 +1219,33 @@ impl<'en> Engine<'en> {
                             }
                             Rule::appearing_value => {
                                 for value_type in component.into_inner() {
-                                    value = Some(parse_lossless_literal(
-                                        value_type.as_rule(),
-                                        value_type.as_str(),
-                                        resolved_now,
-                                    )?);
+                                    value = Some(if value_type.as_rule() == Rule::parameter {
+                                        execution.parameter(value_type.as_str())?.literal()
+                                    } else {
+                                        parse_lossless_literal(
+                                            value_type.as_rule(),
+                                            value_type.as_str(),
+                                            resolved_now,
+                                        )?
+                                    });
                                 }
                             }
                             Rule::appearance_time => {
                                 for time_type in component.into_inner() {
                                     match time_type.as_rule() {
+                                        Rule::parameter => {
+                                            time = Some(
+                                                execution
+                                                    .parameter(time_type.as_str())?
+                                                    .time()
+                                                    .ok_or_else(|| {
+                                                    DatabaseError::Parameter(format!(
+                                                        "{} is a literal parameter, not a time parameter",
+                                                        time_type.as_str()
+                                                    ))
+                                                })?,
+                                            );
+                                        }
                                         Rule::constant => {
                                             time = parse_time_constant_with_now(
                                                 time_type.as_str(),
@@ -1181,7 +1330,7 @@ impl<'en> Engine<'en> {
                     // Reorder roles and their candidate lists by ascending cardinality to improve iteration locality
                     let mut order: Vec<usize> = (0..things_for_roles.len()).collect();
                     order.sort_by_key(|&i| things_for_roles[i].len());
-                    let roles_ord: Vec<&str> = order.iter().map(|&i| roles[i]).collect();
+                    let roles_ord: Vec<&str> = order.iter().map(|&i| roles[i].as_str()).collect();
                     let things_for_roles_ord: Vec<&[Thing]> =
                         order.iter().map(|&i| things_for_roles[i]).collect();
 
