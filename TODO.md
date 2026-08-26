@@ -474,10 +474,10 @@ posit replay.
             on Linux, macOS, and Windows.
         - Run formatting, linting, unit, integration, doctest, and storage recovery
             checks appropriate to each target.
-- [ ] **Automate native releases.**
+- [x] **Automate native releases.**
         - Publish versioned binaries and checksums for supported platforms on tags.
         - Document configuration, backup, restore, migration, and compatibility.
-- [ ] **Finish the existing WASM path.**
+- [x] **Finish the existing WASM path.**
         - Validate the current feature-gated engine in browsers and package its
             structured API for a zero-install testbed.
         - Host the web console and WASM engine on GitHub Pages after browser smoke

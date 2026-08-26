@@ -1,0 +1,79 @@
+name: Native release
+
+on:
+  push:
+    tags: ["v[0-9]*.[0-9]*.[0-9]*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux-x86_64
+            archive: tar
+          - os: macos-14
+            label: macos-aarch64
+            archive: tar
+          - os: windows-latest
+            label: windows-x86_64
+            archive: zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build release binaries
+        run: cargo build --release --all-features --bins --locked
+      - name: Archive Unix binaries
+        if: matrix.archive == 'tar'
+        shell: bash
+        run: |
+          mkdir -p dist/package
+          cp target/release/positorium target/release/positorium-store dist/package/
+          cp positorium.json README.md OPERATIONS.md CONTRACTS.md TRANSFER.md STORAGE.md LICENSE.MIT LICENSE.Apache-2.0 dist/package/
+          archive="positorium-${GITHUB_REF_NAME}-${{ matrix.label }}.tar.gz"
+          tar -czf "dist/${archive}" -C dist/package .
+          (cd dist && shasum -a 256 "${archive}" > "${archive}.sha256")
+      - name: Archive Windows binaries
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/package | Out-Null
+          Copy-Item target/release/positorium.exe,target/release/positorium-store.exe -Destination dist/package
+          Copy-Item positorium.json,README.md,OPERATIONS.md,CONTRACTS.md,TRANSFER.md,STORAGE.md,LICENSE.MIT,LICENSE.Apache-2.0 -Destination dist/package
+          $archive = "positorium-$env:GITHUB_REF_NAME-${{ matrix.label }}.zip"
+          Compress-Archive -Path dist/package/* -DestinationPath "dist/$archive"
+          $hash = (Get-FileHash "dist/$archive" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $archive" | Set-Content -NoNewline "dist/$archive.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: positorium-${{ matrix.label }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Create release with generated changelog
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          prerelease=()
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then prerelease=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" artifacts/* --verify-tag --generate-notes --title "$GITHUB_REF_NAME" "${prerelease[@]}"

@@ -15,7 +15,8 @@ All constructs follow a keeper pattern for canonical storage and deduplication u
 - `lib.rs`: Crate-level docs and module wiring.
 - `construct.rs`: Core data structures and keepers (`Database`, `RoleKeeper`, `AppearanceKeeper`, `AppearanceSetKeeper`, `PositKeeper`), lookups, identity generator.
 - `datatype.rs`: `DataType` trait and built-ins: `String`, `i64`, `Decimal`, `JSON`, `Time`, `Certainty`.
-- `persist.rs`: SQLite persistence layer with schema management and (re)hydration.
+- `storage.rs`: Private append-only framing, commit, replay, locking, and recovery machinery.
+- `maintenance.rs`: Validated inspection, physical backup, and versioned logical transfer.
 - `traqula.rs`: Pest-based parser and execution engine for the Traqula DSL.
 - `traqula.pest`: Grammar definition for the query language.
 - `interface.rs`: Minimal thread-per-query interface with cooperative cancellation and optional streaming of results.
@@ -29,17 +30,17 @@ All constructs follow a keeper pattern for canonical storage and deduplication u
 - Build: use `cargo build` (Rust edition 2024).
 - Run: prefer `cargo run` (binary reads `positorium.json` and starts an HTTP server on the configured interface and port, serving the web console and REST API).
 - Config (`positorium.json`):
-	- `database_file_and_path`: SQLite file path (or create if missing).
-	- `enable_persistence`: `true|false` to enable/disable file-based persistence at runtime. When false, no writes occur.
-	- `recreate_database_on_startup`: `true|false` to remove the DB file at startup.
+	- `database_file_and_path`: append-only store directory (created if missing).
+	- `enable_persistence`: optional `true|false`; false selects an ephemeral in-memory engine.
+	- `recreate_database_on_startup`: `true|false` to remove the store directory at startup.
 	- `traqula_file_to_run_on_startup`: path to a Traqula script executed on boot.
 	- `listen_interface`: IP address to bind the HTTP server (default: "127.0.0.1").
 	- `listen_port`: Port number for the HTTP server (default: 8080).
-- Debug: the binary prints the integrity ledger head (superhash and posit count) after running the startup script. In debug builds, additional logging is available via tracing.
+- Diagnostics use `tracing`; startup and boundary failures are returned rather than printed and ignored.
 
 ## Coding Patterns
-- Keeper pattern: do not construct roles/appearances/posits directly. Always call `Database::{create_role, create_apperance, create_appearance_set, create_posit}` or the corresponding `keep_*` variants when rehydrating.
-- Identity management: things and posits are identities; use `ThingGenerator` via `Database::create_thing()` or the `create_*` helpers.
+- Keeper pattern: roles, appearances, appearance sets, and posits are canonicalized internally. Keep mutation helpers crate-private and route public writes through versioned Traqula execution.
+- Identity management: things and posits are identities; allocate them only through the crate-private database mutation path so replay, durability, and collision checks stay coupled.
 - AppearanceSet ordering: maintain sorted order by `(role, thing)`; ensure at most one appearance per role (enforced by `AppearanceSet::new`).
 - Data type indexing: record data types per role set in `role_name_to_data_type_lookup` to avoid runtime type probing.
 - Bitmaps: use roaring bitmaps (`RoaringTreemap`) for set operations; prefer union/intersection methods over per-element loops.
@@ -53,25 +54,24 @@ All constructs follow a keeper pattern for canonical storage and deduplication u
 - WHERE clauses: time-only comparisons supported with `AND` conjunctions (e.g., `t <= '1999-12-31'`).
 - Result sets: engine uses tri-state `ResultSetMode` (Empty/Thing/Multi) backed by roaring bitmaps for efficient set algebra.
 
-## Persistence Schema
-- Thing(Thing_Identity)
-- Role(Role_Identity, Role, Reserved)
-- DataType(DataType_Identity, DataType)
-- Posit(Posit_Identity, AppearanceSet, AppearingValue, ValueType_Identity, AppearanceTime)
-- AppearanceSets are serialized as pipe-separated `thing_id,role_id` pairs in natural order.
-- SQLite tables use `STRICT` mode; WAL is enabled when file-backed.
+## Persistence Contract
+- The first published backend is the versioned append-only store specified in `STORAGE.md`.
+- A store directory contains `manifest.pmf`, `store.lock`, and framed `.ptl` log segments.
+- Each mutation command is one logical batch terminated by a Commit record. The manifest exposes only the flushed committed prefix.
+- Replay validates headers, checksums, sequence numbers, batches, canonical encodings, identity invariants, and resource bounds before rebuilding in-memory indexes.
+- Physical codecs are private. Logical transfer preserves lossless literal tokens through the versioned JSONL contract in `TRANSFER.md`.
+- There is no SQLite compatibility boundary, importer, dependency, or migration path: no Positorium release used the prototype backend (D031).
 
 ### Operational persistence behavior
-- Startup: The SQLite database is read once to (re)hydrate the in-memory `Database` (keepers, lookups, generator). After this, the in-memory engine is the source of truth for reads.
-- Writes: Persistence writes occur only on "add" operations for previously unseen constructs (roles, posits). Updates are idempotent and effectively serialized.
-- Concurrency stance: Because writes are logically serialized and reads are served from memory, it is acceptable (and simpler) to keep the `Persistor` serialized behind a single owner/lock instead of making it fully `Send + Sync`.
+- Startup: validated replay reconstructs keepers, lookups, and the identity generator before the engine accepts work. Corruption and unsupported formats fail closed.
+- Writes: persistence appends each successful mutation command as one durable batch before publishing it to in-memory state.
+- Ownership: one `Database` owns one store and one execution mutex; query interfaces sharing it serialize execution. The OS store lock rejects a second writer.
 
 ### DataType maintenance
-When adding a new `DataType` implementation:
-- Pick a stable, unused numeric `UID` and name string.
-- Implement `DataType::convert` for restoration from `ValueRef`.
-- Extend `persist::Persistor::restore_posits` to reconstruct the value based on `DATA_TYPE`.
-- Ensure the new type is inserted into the `DataType` catalog on first use (handled in `persist_posit`).
+When adding a literal family or representation:
+- Preserve the exact source token and update `LiteralFamily` behavior explicitly.
+- Keep storage codec identifiers private and stable; add a codec only with complete bounded decoding and replay validation.
+- Update logical transfer, structured-result, comparison, property, and malformed-input tests together.
 
 ## Performance Considerations
 - Roaring bitmaps enable fast set operations without exploding joins.
@@ -80,11 +80,10 @@ When adding a new `DataType` implementation:
 - Avoid premature allocation by relying on `ResultSetMode` and in-place roaring operations.
 
 ## Concurrency and Interface
-`interface.rs` provides a minimal query interface with cooperative cancellation and optional streaming via channels. `server.rs` implements an HTTP server using Axum for REST API endpoints and serving the web console. Recommended deployment: a single worker thread that owns the `Database` and serializes query execution. REST or other frontends enqueue scripts to this worker and optionally receive streamed results.
-	- Rationale: writes are serialized anyway and reads are in-memory, so a single owner avoids `Send/Sync` requirements on the SQLite connection while preserving correctness.
-	- For file-backed DBs, the `Persistor` can open a fresh SQLite connection per call (WAL enabled) when needed, but with a single worker most writes still occur sequentially.
-	- For in-memory DBs, use the primary connection owned by the worker.
-	- Engine cancellation is coarse (between commands); long-running commands may not be interruptible yet.
+`interface.rs` provides a query interface with bounded execution-lock waiting, cooperative cancellation, and optional streaming via channels. `server.rs` implements an Axum HTTP/SSE boundary and the web console. All frontends sharing a `Database` use its execution owner, so separately created interfaces cannot bypass serialization.
+	- File-backed and in-memory modes have the same logical execution semantics.
+	- Cancellation is cooperative and must be checked at bounded points in parsing, command execution, result production, and execution-lock waiting.
+	- Shutdown stops intake, finishes or cancels active work according to the boundary contract, and flushes the owned store.
 
 ## Error Handling
 Domain-specific errors (`DatabaseError`) are defined in `error.rs` with variants for config, persistence, data corruption, parse, execution, invariant, and lock errors. Propagate or extend this type for new boundary failures.
@@ -98,9 +97,9 @@ Domain-specific errors (`DatabaseError`) are defined in `error.rs` with variants
 - Builds cleanly: `cargo build` (and optionally `cargo clippy`, `cargo fmt`).
 - Doctests pass: `cargo test`.
 - If grammar changed: update `traqula.pest` and keep `traqula-vscode/` syntax in sync.
-- If adding a `DataType`: update `persist::restore_posits` and ensure stable `UID`/`DATA_TYPE`.
-- If touching persistence: consider schema migrations; keep `STRICT` and uniqueness constraints intact.
-- Keepers & lookups: always use `Database::create_*`/`keep_*` and update lookups consistently.
+- If changing literal behavior: update lossless transfer, comparison, result, and malformed-input tests.
+- If touching persistence: follow `STORAGE.md`; preserve atomic batches, fail-closed replay, and bounded decoding. Do not add SQLite compatibility work.
+- Keepers & lookups: keep construction internal and update canonical keepers plus every dependent lookup atomically.
 - Add minimal examples in docs or `traqula/example.traqula` when introducing new syntax or behavior.
 
 ## License

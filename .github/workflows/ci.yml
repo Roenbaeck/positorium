@@ -51,3 +51,7 @@ jobs:
         run: rustup target add wasm32-unknown-unknown
       - name: Check in-memory WASM build
         run: cargo check --target wasm32-unknown-unknown --no-default-features --features wasm
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --locked --version 0.14.0
+      - name: Run browser smoke tests
+        run: wasm-pack test --headless --chrome . --no-default-features --features wasm
