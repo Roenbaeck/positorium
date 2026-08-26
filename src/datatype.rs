@@ -25,7 +25,9 @@
 //!     const UID: u8 = 250; // choose a free id
 //!     const DATA_TYPE: &'static str = "MyCount";
 //!     #[cfg(feature = "persistence")]
-//!     fn convert(v:&ValueRef)->Self { MyCount(v.as_i64().unwrap()) }
+//!     fn convert(v:&ValueRef)->Result<Self, String> {
+//!         v.as_i64().map(MyCount).map_err(|error| error.to_string())
+//!     }
 //! }
 //! assert_eq!(MyCount(3).data_type(), "MyCount");
 //! ```
@@ -78,7 +80,9 @@ pub trait DataType: fmt::Display + Eq + Ord + Hash + Send + Sync + ToSql {
     /// Stable human readable name stored in persistence.
     const DATA_TYPE: &'static str;
     /// Convert from a raw SQLite value (during restore).
-    fn convert(value: &ValueRef) -> Self;
+    fn convert(value: &ValueRef) -> std::result::Result<Self, String>
+    where
+        Self: Sized;
     /// Returns the textual data type name.
     fn data_type(&self) -> &'static str {
         Self::DATA_TYPE
@@ -110,106 +114,83 @@ impl DataType for Certainty {
     const UID: u8 = 1;
     const DATA_TYPE: &'static str = "Certainty";
     #[cfg(feature = "persistence")]
-    fn convert(value: &ValueRef) -> Certainty {
-        let raw_i64 = value.as_i64().unwrap_or_else(|e| {
-            panic!("[positorium][restore] Expected integer for Certainty, got error: {e:?}")
-        });
-        let alpha = i8::try_from(raw_i64).unwrap_or_else(|e| {
-            panic!("[positorium][restore] Certainty value out of i8 range (raw={raw_i64}) -> {e:?}")
-        });
-        Certainty { alpha }
+    fn convert(value: &ValueRef) -> std::result::Result<Certainty, String> {
+        let raw_i64 = value.as_i64().map_err(|error| error.to_string())?;
+        let alpha = i8::try_from(raw_i64)
+            .map_err(|error| format!("certainty {raw_i64} is out of range: {error}"))?;
+        Ok(Certainty { alpha })
     }
 }
 impl DataType for String {
     const UID: u8 = 2;
     const DATA_TYPE: &'static str = "String";
     #[cfg(feature = "persistence")]
-    fn convert(value: &ValueRef) -> String {
-        match value.as_str() {
-            Ok(s) => s.to_string(),
-            Err(e) => panic!("[positorium][restore] Failed to read persisted String value: {e:?}"),
-        }
+    fn convert(value: &ValueRef) -> std::result::Result<String, String> {
+        value
+            .as_str()
+            .map(str::to_string)
+            .map_err(|error| error.to_string())
     }
 }
 impl DataType for NaiveDateTime {
     const UID: u8 = 3;
     const DATA_TYPE: &'static str = "NaiveDateTime";
     #[cfg(feature = "persistence")]
-    fn convert(value: &ValueRef) -> NaiveDateTime {
-        let raw = value.as_str().unwrap_or_else(|e| {
-            panic!("[positorium][restore] NaiveDateTime not stored as text: {e:?}")
-        });
-        NaiveDateTime::from_str(raw).unwrap_or_else(|e| {
-            panic!("[positorium][restore] Failed to parse NaiveDateTime from '{raw}': {e:?}")
-        })
+    fn convert(value: &ValueRef) -> std::result::Result<NaiveDateTime, String> {
+        let raw = value.as_str().map_err(|error| error.to_string())?;
+        NaiveDateTime::parse_from_str(raw, "%Y-%m-%d %H:%M:%S%.f")
+            .map_err(|error| error.to_string())
     }
 }
 impl DataType for NaiveDate {
     const UID: u8 = 4;
     const DATA_TYPE: &'static str = "NaiveDate";
     #[cfg(feature = "persistence")]
-    fn convert(value: &ValueRef) -> NaiveDate {
-        let raw = value.as_str().unwrap_or_else(|e| {
-            panic!("[positorium][restore] NaiveDate not stored as text: {e:?}")
-        });
-        NaiveDate::from_str(raw).unwrap_or_else(|e| {
-            panic!("[positorium][restore] Failed to parse NaiveDate from '{raw}': {e:?}")
-        })
+    fn convert(value: &ValueRef) -> std::result::Result<NaiveDate, String> {
+        let raw = value.as_str().map_err(|error| error.to_string())?;
+        NaiveDate::from_str(raw).map_err(|error| error.to_string())
     }
 }
 impl DataType for i64 {
     const UID: u8 = 5;
     const DATA_TYPE: &'static str = "i64";
     #[cfg(feature = "persistence")]
-    fn convert(value: &ValueRef) -> i64 {
-        value
-            .as_i64()
-            .unwrap_or_else(|e| panic!("[positorium][restore] Failed to read i64 value: {e:?}"))
+    fn convert(value: &ValueRef) -> std::result::Result<i64, String> {
+        value.as_i64().map_err(|error| error.to_string())
     }
 }
 impl DataType for Decimal {
     const UID: u8 = 6;
     const DATA_TYPE: &'static str = "Decimal";
     #[cfg(feature = "persistence")]
-    fn convert(value: &ValueRef) -> Decimal {
-        let raw = value
-            .as_str()
-            .unwrap_or_else(|e| panic!("[positorium][restore] Decimal not stored as text: {e:?}"));
-        match BigDecimal::from_str(raw) {
-            Ok(d) => Decimal(d),
-            Err(e) => panic!("[positorium][restore] Failed to parse Decimal from '{raw}': {e:?}"),
-        }
+    fn convert(value: &ValueRef) -> std::result::Result<Decimal, String> {
+        let raw = value.as_str().map_err(|error| error.to_string())?;
+        BigDecimal::from_str(raw)
+            .map(Decimal)
+            .map_err(|error| error.to_string())
     }
 }
 impl DataType for JSON {
     const UID: u8 = 7;
     const DATA_TYPE: &'static str = "JSON";
     #[cfg(feature = "persistence")]
-    fn convert(value: &ValueRef) -> JSON {
-        let raw = value
-            .as_str()
-            .unwrap_or_else(|e| panic!("[positorium][restore] JSON not stored as text: {e:?}"));
-        match Json::from_str(raw) {
-            Ok(j) => JSON(j),
-            Err(e) => panic!("[positorium][restore] Failed to parse JSON from '{raw}': {e:?}"),
-        }
+    fn convert(value: &ValueRef) -> std::result::Result<JSON, String> {
+        let raw = value.as_str().map_err(|error| error.to_string())?;
+        Json::from_str(raw)
+            .map(JSON)
+            .map_err(|error| error.to_string())
     }
 }
 impl DataType for Time {
     const UID: u8 = 8;
     const DATA_TYPE: &'static str = "Time";
     #[cfg(feature = "persistence")]
-    fn convert(value: &ValueRef) -> Time {
-        let raw = value
-            .as_str()
-            .unwrap_or_else(|e| panic!("[positorium][restore] Time not stored as text: {e:?}"));
+    fn convert(value: &ValueRef) -> std::result::Result<Time, String> {
+        let raw = value.as_str().map_err(|error| error.to_string())?;
         // Try persisted canonical formats first, then fall back to script literals.
-        match Time::parse_persisted(raw) {
-            Some(t) => t,
-            None => parse_time(raw).unwrap_or_else(|| {
-                panic!("[positorium][restore] Failed to parse Time literal '{raw}' from persistence (no recognized format)")
-            }),
-        }
+        Time::parse_persisted(raw)
+            .or_else(|| parse_time(raw))
+            .ok_or_else(|| format!("unrecognized persisted time literal '{raw}'"))
     }
 }
 

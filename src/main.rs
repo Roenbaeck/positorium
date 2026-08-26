@@ -99,10 +99,12 @@ async fn real_main() -> Result<()> {
     // Minimal informational output (always show integrity ledger head if available)
     #[cfg(feature = "persistence")]
     {
-        if let Ok(p) = db.persistor.lock() {
-            if let Some((head, count)) = p.current_superhash() {
-                println!("Integrity ledger head: {} ({} posits)", head, count);
-            }
+        let p = db
+            .persistor
+            .lock()
+            .map_err(|error| DatabaseError::Lock(error.to_string()))?;
+        if let Some((head, count)) = p.current_superhash()? {
+            println!("Integrity ledger head: {} ({} posits)", head, count);
         }
     }
     // Derive listen interface & port (optional in config)

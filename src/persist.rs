@@ -25,12 +25,12 @@
 //! match section in `restore_posits` so the value can be reconstructed.
 //!
 //! # Error Handling
-//! Current implementation panics on unexpected SQLite errors. A future revision
-//! could propagate a domain error type instead.
+//! SQLite, decoding, and integrity failures are propagated as [`DatabaseError`];
+//! restore never returns a partially decoded database.
 // used for persistence
 use crate::error::{DatabaseError, Result};
 use blake3;
-use rusqlite::{Connection, Error, params};
+use rusqlite::{Connection, Error, OptionalExtension, params};
 
 /// 64 zero hex string representing the genesis (no previous) hash in the integrity chain.
 const GENESIS_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -38,6 +38,7 @@ const GENESIS_HASH: &str = "0000000000000000000000000000000000000000000000000000
 // our own stuff
 use crate::construct::{Appearance, AppearanceSet, Database, Posit, Role, Thing};
 use crate::datatype::{Certainty, DataType, Decimal, JSON, Time};
+use chrono::{NaiveDate, NaiveDateTime};
 
 // ------------- Persistence -------------
 pub struct Persistor {
@@ -396,68 +397,94 @@ impl Persistor {
                 }
             })?;
             let (kept_appearance_set, _) = db.keep_appearance_set(aset_res);
-            let time =
-                Time::convert(&row.get_ref(4).map_err(|e| DatabaseError::DataCorruption {
-                    message: format!("Bad time ref: {e}"),
-                })?);
+            let time_ref = row.get_ref(4).map_err(|e| DatabaseError::DataCorruption {
+                message: format!("Bad time ref for posit {thing}: {e}"),
+            })?;
+            let time = Time::convert(&time_ref).map_err(|error| DatabaseError::DataCorruption {
+                message: format!("Bad appearance time for posit {thing}: {error}"),
+            })?;
+            let value_ref = row.get_ref(2).map_err(|e| DatabaseError::DataCorruption {
+                message: format!("Bad value ref for posit {thing}: {e}"),
+            })?;
             match value_type.as_str() {
                 String::DATA_TYPE => {
-                    let v = <String as DataType>::convert(&row.get_ref(2).map_err(|e| {
+                    let v = <String as DataType>::convert(&value_ref).map_err(|error| {
                         DatabaseError::DataCorruption {
-                            message: format!("Bad string value: {e}"),
+                            message: format!("Bad String value for posit {thing}: {error}"),
                         }
-                    })?);
+                    })?;
                     db.keep_posit(Posit::new(thing, kept_appearance_set, v, time.clone()));
                 }
                 i64::DATA_TYPE => {
-                    let v = <i64 as DataType>::convert(&row.get_ref(2).map_err(|e| {
+                    let v = <i64 as DataType>::convert(&value_ref).map_err(|error| {
                         DatabaseError::DataCorruption {
-                            message: format!("Bad i64 value: {e}"),
+                            message: format!("Bad i64 value for posit {thing}: {error}"),
                         }
-                    })?);
+                    })?;
+                    db.keep_posit(Posit::new(thing, kept_appearance_set, v, time.clone()));
+                }
+                NaiveDateTime::DATA_TYPE => {
+                    let v = <NaiveDateTime as DataType>::convert(&value_ref).map_err(|error| {
+                        DatabaseError::DataCorruption {
+                            message: format!("Bad NaiveDateTime value for posit {thing}: {error}"),
+                        }
+                    })?;
+                    db.keep_posit(Posit::new(thing, kept_appearance_set, v, time.clone()));
+                }
+                NaiveDate::DATA_TYPE => {
+                    let v = <NaiveDate as DataType>::convert(&value_ref).map_err(|error| {
+                        DatabaseError::DataCorruption {
+                            message: format!("Bad NaiveDate value for posit {thing}: {error}"),
+                        }
+                    })?;
                     db.keep_posit(Posit::new(thing, kept_appearance_set, v, time.clone()));
                 }
                 Decimal::DATA_TYPE => {
-                    let v = <Decimal as DataType>::convert(&row.get_ref(2).map_err(|e| {
+                    let v = <Decimal as DataType>::convert(&value_ref).map_err(|error| {
                         DatabaseError::DataCorruption {
-                            message: format!("Bad decimal value: {e}"),
+                            message: format!("Bad Decimal value for posit {thing}: {error}"),
                         }
-                    })?);
+                    })?;
                     db.keep_posit(Posit::new(thing, kept_appearance_set, v, time.clone()));
                 }
                 Time::DATA_TYPE => {
-                    let v = <Time as DataType>::convert(&row.get_ref(2).map_err(|e| {
+                    let v = <Time as DataType>::convert(&value_ref).map_err(|error| {
                         DatabaseError::DataCorruption {
-                            message: format!("Bad time value: {e}"),
+                            message: format!("Bad Time value for posit {thing}: {error}"),
                         }
-                    })?);
+                    })?;
                     db.keep_posit(Posit::new(thing, kept_appearance_set, v, time.clone()));
                 }
                 JSON::DATA_TYPE => {
-                    let v = <JSON as DataType>::convert(&row.get_ref(2).map_err(|e| {
+                    let v = <JSON as DataType>::convert(&value_ref).map_err(|error| {
                         DatabaseError::DataCorruption {
-                            message: format!("Bad json value: {e}"),
+                            message: format!("Bad JSON value for posit {thing}: {error}"),
                         }
-                    })?);
+                    })?;
                     db.keep_posit(Posit::new(thing, kept_appearance_set, v, time.clone()));
                 }
                 Certainty::DATA_TYPE => {
-                    let v = <Certainty as DataType>::convert(&row.get_ref(2).map_err(|e| {
+                    let v = <Certainty as DataType>::convert(&value_ref).map_err(|error| {
                         DatabaseError::DataCorruption {
-                            message: format!("Bad certainty value: {e}"),
+                            message: format!("Bad Certainty value for posit {thing}: {error}"),
                         }
-                    })?);
+                    })?;
                     db.keep_posit(Posit::new(thing, kept_appearance_set, v, time.clone()));
                 }
-                _ => { /* unknown type silently skipped */ }
+                _ => {
+                    return Err(DatabaseError::DataCorruption {
+                        message: format!(
+                            "Unknown persisted value type '{value_type}' for posit {thing}"
+                        ),
+                    });
+                }
             }
         }
         Ok(())
     }
 
-    /// Verify the integrity chain of posits (no auto backfill / rebuild).
-    /// Emits warnings if ledger missing or hashes mismatch.
-    pub fn verify_integrity(&mut self) -> Result<()> {
+    /// Verify the integrity chain of posits without changing persisted state.
+    pub fn verify_integrity(&self) -> Result<()> {
         if self.db_path.is_none() {
             return Ok(());
         }
@@ -481,7 +508,12 @@ impl Persistor {
                 posit_count
             )));
         }
-        let mut stmt = conn.prepare("select p.Posit_Identity, p.AppearanceSet, cast(p.AppearingValue as text), p.ValueType_Identity, p.AppearanceTime, h.Hash from Posit p join PositHash h on h.Posit_Identity = p.Posit_Identity order by p.Posit_Identity asc").map_err(DatabaseError::from)?;
+        if hash_count != posit_count {
+            return Err(DatabaseError::Invariant(format!(
+                "Integrity ledger length mismatch: {posit_count} posits, {hash_count} hashes"
+            )));
+        }
+        let mut stmt = conn.prepare("select p.Posit_Identity, p.AppearanceSet, cast(p.AppearingValue as text), p.ValueType_Identity, p.AppearanceTime, h.PrevHash, h.Hash from Posit p join PositHash h on h.Posit_Identity = p.Posit_Identity order by p.Posit_Identity asc").map_err(DatabaseError::from)?;
         let mut rows = stmt.query([]).map_err(DatabaseError::from)?;
         let mut prev = GENESIS_HASH.to_string();
         let mut mismatches = 0usize;
@@ -503,7 +535,11 @@ impl Persistor {
             let atime: String = row.get(4).map_err(|e| DatabaseError::DataCorruption {
                 message: format!("Bad AppearanceTime: {e}"),
             })?;
-            let stored_hash: String = row.get(5).map_err(|e| DatabaseError::DataCorruption {
+            let stored_prev_hash: String =
+                row.get(5).map_err(|e| DatabaseError::DataCorruption {
+                    message: format!("Bad stored previous hash: {e}"),
+                })?;
+            let stored_hash: String = row.get(6).map_err(|e| DatabaseError::DataCorruption {
                 message: format!("Bad stored hash: {e}"),
             })?;
             let input = format!(
@@ -511,7 +547,7 @@ impl Persistor {
                 thing, aset, vtid, aval, atime, prev
             );
             let calc = blake3::hash(input.as_bytes()).to_hex().to_string();
-            if calc != stored_hash {
+            if stored_prev_hash != prev || calc != stored_hash {
                 mismatches += 1;
                 if first_bad.is_none() {
                     first_bad = Some(thing);
@@ -520,35 +556,44 @@ impl Persistor {
             prev = stored_hash.clone();
             last_hash = stored_hash;
         }
-        conn.prepare("insert into LedgerHead (Name, HeadHash, Count) values ('PositLedger', ?, ?) on conflict(Name) do update set HeadHash=excluded.HeadHash, Count=excluded.Count")
-            .map_err(DatabaseError::from)?
-            .execute(params![&last_hash, &posit_count])
-            .map_err(DatabaseError::from)?;
         if mismatches > 0 {
             return Err(DatabaseError::Invariant(format!(
                 "Integrity violation: {mismatches} mismatched hashes (first at {:?})",
                 first_bad
             )));
         }
+        let ledger_head = conn
+            .query_row(
+                "select HeadHash, Count from LedgerHead where Name = 'PositLedger'",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()
+            .map_err(DatabaseError::from)?
+            .ok_or_else(|| {
+                DatabaseError::Invariant("Integrity ledger head is missing".to_string())
+            })?;
+        if ledger_head != (last_hash.clone(), posit_count) {
+            return Err(DatabaseError::Invariant(format!(
+                "Integrity ledger head mismatch: expected ({last_hash}, {posit_count}), found ({}, {})",
+                ledger_head.0, ledger_head.1
+            )));
+        }
         Ok(())
     }
 
     /// Returns the current integrity ledger head hash and count, when persistence is enabled and the ledger exists.
-    pub fn current_superhash(&self) -> Option<(String, i64)> {
+    pub fn current_superhash(&self) -> Result<Option<(String, i64)>> {
         if self.db_path.is_none() {
-            return None;
+            return Ok(None);
         }
-        let conn = Connection::open(self.db_path.as_ref().unwrap()).unwrap();
-        let mut stmt = conn
-            .prepare("select HeadHash, Count from LedgerHead where Name = 'PositLedger'")
-            .unwrap();
-        let mut rows = stmt.query([]).unwrap();
-        if let Some(row) = rows.next().unwrap() {
-            let head: String = row.get_unwrap(0);
-            let count: i64 = row.get_unwrap(1);
-            Some((head, count))
-        } else {
-            None
-        }
+        let conn = Connection::open(self.db_path.as_ref().unwrap()).map_err(DatabaseError::from)?;
+        conn.query_row(
+            "select HeadHash, Count from LedgerHead where Name = 'PositLedger'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(DatabaseError::from)
     }
 }

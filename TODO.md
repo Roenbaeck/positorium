@@ -52,7 +52,7 @@ The accepted decisions now define the required fixes.
         - `Time` `Display` for year-month lacks zero padding (`2024-5`), so the
             persisted canonical text differs from the accepted `YYYY-MM` input form
             (src/datatype.rs).
-- [ ] **Silent data loss and partial state on restore.**
+- [x] **Silent data loss and partial state on restore.**
         - `restore_posits` silently skips unknown value types and has no arms for
             `NaiveDateTime`/`NaiveDate` although both implement `DataType` (UIDs 3/4),
             so such posits vanish on restart (src/persist.rs). Relevant to D025/D026.
