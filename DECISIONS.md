@@ -73,10 +73,10 @@ excluded from proposition identity. Re-encoding or compacting a value must not
 create a new posit. User-facing Traqula does not expose casts, storage types, or
 datatype declarations merely to constrain data.
 
-Still unresolved: whether lexical fidelity is byte-for-byte for the complete
-value token (including leading zeros, explicit signs, JSON whitespace/key order,
-and escape choices) or preserves only agreed meaningful presentation metadata.
-Whitespace and comments outside the value token are not part of the value.
+As accepted in D002, lexical fidelity preserves the complete UTF-8 value token,
+including leading zeros, explicit signs, JSON whitespace/key order, and escape
+choices. Whitespace and comments outside the value token are not part of the
+value.
 
 ---
 
@@ -84,7 +84,8 @@ Whitespace and comments outside the value token are not part of the value.
 
 ### D001: Role Identity And Names
 
-**Status:** Unresolved  
+**Status:** Accepted
+
 **Blocks:** Core equality, role catalog, import, appearance-set encoding
 
 A Role is itself a Thing. The model must decide whether role identity or role
@@ -117,15 +118,23 @@ accepting A requires reworking `Eq`/`Hash`/`Ord` to identity-based equality.
 
 **Response:**
 
-- Choice:
-- Name normalization:
-- Rename/alias policy:
-- Reasoning:
-- Accepted on:
+- Choice: A. Role equality, ordering, and hashing use immutable Role Thing
+  identity. The catalog enforces one canonical name per role and one role per
+  canonical name.
+- Name normalization: Names are case-sensitive and NFC-normalized at the parser
+  and catalog boundary.
+- Rename/alias policy: Roles are immutable. A rename creates a new role. Aliases
+  are represented as ordinary posits; dedicated alias features are deferred
+  beyond beta.
+- Reasoning: Identity-based equality is consistent with roles being Things and
+  keeps mutable catalog metadata out of equality. The implementation must replace
+  the current name-based `Eq`/`Hash`/`Ord` behavior.
+- Accepted on: 2026-08-26
 
 ### D002: Posit Proposition Equality
 
-**Status:** Unresolved  
+**Status:** Accepted
+
 **Blocks:** Deduplication, identity assignment, replay, import
 
 A posit has a Thing identity, but that identity should not make two otherwise
@@ -159,15 +168,26 @@ the identity field that `PartialEq` excludes (see TODO.md).
 
 **Response:**
 
-- Choice:
-- Lexical-fidelity boundary:
-- JSON literal identity policy:
-- Reasoning:
-- Accepted on:
+- Choice: A. Proposition equality is exactly `(AppearanceSet, LiteralValue,
+  Time)`; the canonical posit Thing is excluded from equality and ordering.
+- Lexical-fidelity boundary: The complete UTF-8 value token is identity-bearing,
+  including numeric spelling, explicit signs, leading zeros, string escape
+  choices, and whitespace internal to structured literals. Comments and
+  whitespace outside the token are excluded. No Unicode normalization is
+  applied to literal values.
+- JSON literal identity policy: JSON token spelling, whitespace, object key order,
+  number spelling, and escape choices are identity-bearing. Structural equality
+  is a separate nominal comparison under D017.
+- Reasoning: Raw-token fidelity is the only unambiguous WYSIWYG contract and
+  cleanly separates literal identity from semantic comparison and physical
+  codecs. Re-adding an identical proposition returns its canonical posit and has
+  no other effect. `Posit::Ord` must use the same proposition key as equality.
+- Accepted on: 2026-08-26
 
 ### D003: Thing Identity Scope And Import
 
-**Status:** Unresolved  
+**Status:** Accepted
+
 **Blocks:** Store UUID, backup, export/import, database merging
 
 Numeric Thing identities can collide when two independent stores are combined.
@@ -192,15 +212,22 @@ ids are never preserved verbatim.
 
 **Response:**
 
-- Choice:
-- External identity representation:
-- Collision/remapping policy:
-- Reasoning:
-- Accepted on:
+- Choice: A internally and C in logical exports and external APIs.
+- External identity representation: `(store UUID, local u64)` wherever a stable
+  cross-store reference is required. The immutable store UUID is recorded in the
+  manifest and each log file header.
+- Collision/remapping policy: Import always creates an explicit remap table and
+  rewrites every internal reference. Foreign local identifiers are never retained
+  verbatim.
+- Reasoning: Compact local identities suit the in-memory engine, while composite
+  external identities prevent accidental cross-store collisions and make import
+  semantics explicit.
+- Accepted on: 2026-08-26
 
 ### D004: Identity Equivalence And Merging
 
-**Status:** Unresolved  
+**Status:** Accepted
+
 **Blocks:** Identification cookbook, imports, future canonicalization policies
 
 Later evidence may suggest that two Things refer to the same external entity.
@@ -225,14 +252,20 @@ explicitly; no storage-layer alias or remap records in beta.
 
 **Response:**
 
-- Choice:
-- Required equivalence roles/patterns, if any:
-- Reasoning:
-- Accepted on:
+- Choice: A. Destructive merge and storage-layer aliases are forbidden in beta.
+- Required equivalence roles/patterns, if any: The modeling cookbook will define
+  a reified identification Thing, one membership posit for each identified Thing,
+  and separate posits for evidence and certainty. No additional built-in roles
+  are reserved by this decision.
+- Reasoning: Equivalence is evidence that can itself conflict or change. Keeping
+  it in ordinary posits preserves history and makes equivalence an explicit query
+  policy rather than hidden storage behavior.
+- Accepted on: 2026-08-26
 
 ### D005: Appearance-Set Cardinality And Value Slots
 
-**Status:** Unresolved  
+**Status:** Accepted
+
 **Blocks:** Core model, modeling guidance, exact matching, snapshots
 
 An AppearanceSet currently permits at most one Thing for each Role. Posits with
@@ -260,15 +293,20 @@ the rule is a public contract (see TODO.md).
 
 **Response:**
 
-- Choice:
-- Intended multivalue modeling pattern:
-- Intended repeated-participant pattern:
-- Reasoning:
-- Accepted on:
+- Choice: A. An appearance set is a finite partial function `Role -> Thing` and
+  identifies one value-bearing transition slot.
+- Intended multivalue modeling pattern: Use one reified member Thing per value so
+  every member has its own appearance set and timeline.
+- Intended repeated-participant pattern: Use a reified relation Thing and one
+  posit per participant role. Do not repeat a role within one appearance set.
+- Reasoning: The invariant gives exact matching and snapshots a stable grouping
+  key. Duplicate-role construction must return a domain error and never panic.
+- Accepted on: 2026-08-26
 
 ### D006: Reserved Role Vocabulary
 
-**Status:** Unresolved  
+**Status:** Accepted
+
 **Blocks:** Initial role catalog, assertions, classification examples
 
 The implementation and theory currently disagree about names such as `class` and
@@ -304,11 +342,16 @@ disagrees with. Reintroduce class vocabulary with the post-beta class layer.
 
 **Response:**
 
-- Choice:
-- Exact beta vocabulary:
-- Fixed identity policy:
-- Reasoning:
-- Accepted on:
+- Choice: A.
+- Exact beta vocabulary: Reserve only `posit` and `ascertains`. `thing`, `class`,
+  `classification`, `named`, `subclass`, and `superclass` are ordinary roles
+  until a class model is specified.
+- Fixed identity policy: The two reserved roles have fixed identities and names
+  recorded as persisted compatibility data.
+- Reasoning: Assertions need a minimal stable vocabulary; freezing the currently
+  inconsistent classification vocabulary would turn an unfinished model into a
+  compatibility obligation.
+- Accepted on: 2026-08-26
 
 ---
 
@@ -316,7 +359,8 @@ disagrees with. Reintroduce class vocabulary with the post-beta class layer.
 
 ### D007: Meaning Of Imprecise Time
 
-**Status:** Unresolved  
+**Status:** Accepted
+
 **Blocks:** Time encoding, comparisons, snapshots, indexes
 
 Year, year-month, date, and datetime values have different precision. Treating a
@@ -353,16 +397,24 @@ disagrees with the manual `PartialOrd` entirely (see TODO.md).
 
 **Response:**
 
-- Choice:
-- Interval boundary convention:
-- Datetime/timezone policy:
-- BOT/EOT policy:
-- Reasoning:
-- Accepted on:
+- Choice: A. Every time literal denotes a precision-preserving interval.
+- Interval boundary convention: Intervals are half-open. For example, `2024`
+  denotes `[2024-01-01T00:00:00Z, 2025-01-01T00:00:00Z)`.
+- Datetime/timezone policy: Datetimes are interpreted as UTC. Traqula has no local
+  timezone or offset coercion in beta; clients convert before submission. Leap
+  seconds are not supported.
+- BOT/EOT policy: `@BOT` and `@EOT` are unbounded sentinels below and above every
+  finite interval, respectively.
+- Reasoning: Half-open intervals preserve stated precision without manufacturing
+  an exact point and give comparison, overlap, and snapshot operations one
+  consistent model. `Time` equality and ordering implementations must obey these
+  semantics without conflicting derived traits.
+- Accepted on: 2026-08-26
 
 ### D008: Temporal Comparison Vocabulary
 
-**Status:** Unresolved  
+**Status:** Accepted
+
 **Blocks:** `where`, mixed-precision queries, query planner
 
 Under interval or partial-order semantics, ordinary `<` may be definitely true,
@@ -387,15 +439,21 @@ definite operators rather than erroring, so mixed-precision data stays queryable
 
 **Response:**
 
-- Choice:
-- Required temporal predicates:
-- Equality meaning:
-- Reasoning:
-- Accepted on:
+- Choice: A. Ordinary ordering operators are conservative, definite relations.
+- Required temporal predicates: `<` and `>` mean definitely before and after.
+  `<=` and `>=` additionally include identical stored times. Beta also provides
+  `possibly before`, `possibly after`, `overlaps`, `contains`, and `within`.
+- Equality meaning: `=` means identical stored time, including precision and
+  value. It is not interval overlap.
+- Reasoning: Mixed-precision data remains queryable without treating a possible
+  ordering as fact. An indeterminate definite relation evaluates to false;
+  explicit interval predicates express broader questions.
+- Accepted on: 2026-08-26
 
 ### D009: Snapshot Maxima And Conflicts
 
-**Status:** Unresolved  
+**Status:** Accepted
+
 **Blocks:** `as of`, ordinary state queries, deterministic tests
 
 At a cutoff, several posits for one appearance set can share the latest time or
@@ -420,15 +478,21 @@ visible in results and never resolved by identity or append order.
 
 **Response:**
 
-- Choice:
-- Applicability rule at cutoff:
-- Tie/incomparability behavior:
-- Reasoning:
-- Accepted on:
+- Choice: A. Return all maximal applicable posits for each appearance set.
+- Applicability rule at cutoff: A posit applies when its time is definitely before
+  the cutoff or is the identical stored time. Equivalently, it satisfies the D008
+  definite `<=` relation.
+- Tie/incomparability behavior: Preserve equal-time conflicts and incomparable
+  maximal intervals as separate result rows. Identity and append sequence are
+  never tie-breakers.
+- Reasoning: Selecting one row would silently add truth semantics to an internal
+  identifier or storage order, contrary to Positorium's conflict-preserving model.
+- Accepted on: 2026-08-26
 
 ### D010: Snapshot And Value-Filter Order
 
-**Status:** Unresolved  
+**Status:** Accepted
+
 **Blocks:** `as of` expansion and optimizer correctness
 
 These are different questions:
@@ -457,14 +521,22 @@ the roadmap already calls for.
 
 **Response:**
 
-- Choice:
-- Latest-matching-history syntax/operation:
-- Reasoning:
-- Accepted on:
+- Choice: A. Ordinary `[pattern] as of T` selects appearance sets by appearance
+  structure, reduces each to its D009 snapshot, and only then applies value and
+  other posit-field predicates.
+- Latest-matching-history syntax/operation: `latest [pattern] as of T` performs
+  pattern filtering first and then returns every maximal matching posit per
+  appearance set. It desugars to filter, group by appearance set, and partial-order
+  maximal selection in the D015 algebra.
+- Reasoning: State-at-time and latest-matching-history answer different questions;
+  distinct syntax prevents optimizer order from changing meaning. Both forms
+  require shorthand-versus-expansion contract tests.
+- Accepted on: 2026-08-26
 
 ### D011: Evaluation Of `@NOW`
 
-**Status:** Unresolved  
+**Status:** Accepted
+
 **Blocks:** Repeatability, multi-pattern snapshots, testing
 
 **Options:**
@@ -487,11 +559,17 @@ of the option chosen (see TODO.md).
 
 **Response:**
 
-- Choice:
-- Precision of generated time:
-- Override/parameter policy:
-- Reasoning:
-- Accepted on:
+- Choice: A. Resolve `@NOW` once at the beginning of a complete script and reuse
+  that value at every occurrence.
+- Precision of generated time: Full UTC datetime at the engine's supported
+  subsecond precision.
+- Override/parameter policy: Execution options may supply the resolved value for
+  deterministic tests and replay. The engine exposes the resolved value in
+  execution metadata.
+- Reasoning: Script-scoped resolution makes multi-command and multi-pattern
+  behavior coherent and reproducible without requiring every client to provide a
+  clock value.
+- Accepted on: 2026-08-26
 
 ---
 
@@ -499,7 +577,8 @@ of the option chosen (see TODO.md).
 
 ### D012: Allocation And Query Variable Syntax
 
-**Status:** Unresolved  
+**Status:** Accepted
+
 **Blocks:** Traqula grammar, AST, documentation, migration
 
 The current `+x` syntax means allocation during `add` and binding during
@@ -533,15 +612,24 @@ copies of `traqula.tmLanguage.json` in the same change.
 
 **Response:**
 
-- Choice:
-- Preferred syntax:
-- Compatibility/deprecation approach:
-- Reasoning:
-- Accepted on:
+- Choice: A.
+- Preferred syntax: `+x` allocates only inside `add`; `?x` is a non-allocating
+  query variable; and `?p = [...]` explicitly binds posit identity. Variables
+  have checked Thing, Role, AppearanceSet, LiteralValue, Time, or Posit domains.
+- Compatibility/deprecation approach: The default grammar adopts the new syntax.
+  An explicitly selected legacy Traqula version accepts search-side `+x` and bare
+  variable recalls for one beta minor release, emits deprecation warnings with
+  mechanical rewrite hints, and is then removed. The Pest and VS Code grammars
+  change together.
+- Reasoning: Allocation and unification must be visibly distinct, and explicit
+  posit binding removes position-dependent meaning. A versioned compatibility
+  mode avoids silently changing old source semantics.
+- Accepted on: 2026-08-26
 
 ### D013: Query Variable Scope
 
-**Status:** Unresolved  
+**Status:** Accepted
+
 **Blocks:** Multi-command scripts, optimizer, client behavior
 
 Current search bindings can persist implicitly across later searches.
@@ -566,14 +654,20 @@ must be migrated with this decision.
 
 **Response:**
 
-- Choice:
-- Explicit cross-search mechanism, if required for beta:
-- Reasoning:
-- Accepted on:
+- Choice: A. Query variables are lexical to one `search`. Allocation binders from
+  `add` remain script-visible to later mutation commands but do not become query
+  variables.
+- Explicit cross-search mechanism, if required for beta: None. Defer `let`, named
+  results, and `using` until a concrete workflow requires one.
+- Reasoning: Local query scope makes each search independently understandable and
+  optimizable. Ordered mutation remains possible without preserving hidden query
+  result state. Existing cross-search-retention tests must be migrated.
+- Accepted on: 2026-08-26
 
 ### D014: Exact And Open Appearance-Set Matching
 
-**Status:** Unresolved  
+**Status:** Accepted
+
 **Blocks:** Pattern meaning, generic exploration, backwards compatibility
 
 A pattern containing one appearance can mean either "exactly this set" or
@@ -605,17 +699,26 @@ users rewrite scripts once.
 
 **Response:**
 
-- Choice:
-- Complete-set binding syntax:
-- Role-variable syntax:
-- Wildcard/ellipsis meaning:
-- Compatibility approach:
-- Reasoning:
-- Accepted on:
+- Choice: A. A closed appearance set is exact; a trailing ellipsis makes it an
+  open subset pattern.
+- Complete-set binding syntax: `?appearances = { ... }` binds the complete stored
+  appearance set while the right-hand pattern controls exact or open matching,
+  for example `?appearances = {(?thing, ?role), ...}`.
+- Role-variable syntax: `(?thing, ?role)` binds a Role-valued query variable and
+  supports schema-free exploration.
+- Wildcard/ellipsis meaning: `*` consumes exactly one anonymous field and never
+  binds it. `...` permits zero or more additional appearance-set members.
+- Compatibility approach: Ship with D012. For one beta minor release, old subset
+  semantics are available only through the explicitly selected legacy Traqula
+  version; the default grammar never gives closed braces two meanings.
+- Reasoning: Exactness is visible at the use site, complete-set and Role bindings
+  enable generic tooling, and version selection prevents a silent semantic break.
+- Accepted on: 2026-08-26
 
 ### D015: Query Algebra Required For Beta
 
-**Status:** Unresolved  
+**Status:** Accepted
+
 **Blocks:** AST, planner, `as of` desugaring
 
 **Candidate operations:**
@@ -650,15 +753,22 @@ first since it composes with the existing bitmap indexes.
 
 **Response:**
 
-- Choice:
-- Required operations:
-- Deferred operations:
-- Reasoning:
-- Accepted on:
+- Choice: A.
+- Required operations: Typed posit scan with exact/open appearance matching,
+  natural join through repeated variables, typed selection, projection, union,
+  safe anti-join, grouping with partial-order maximal selection, `DISTINCT`,
+  `ORDER BY`, and `LIMIT`.
+- Deferred operations: Optional/left join and general aggregation. `count` is the
+  first aggregation candidate after beta.
+- Reasoning: This is the smallest coherent algebra that can define snapshot and
+  latest-history expansion, absence queries, duplicate behavior, and deterministic
+  limiting without evaluator-order accidents.
+- Accepted on: 2026-08-26
 
 ### D016: Negation And Open-World Semantics
 
-**Status:** Unresolved  
+**Status:** Accepted
+
 **Blocks:** `NOT EXISTS`, contradiction queries, documentation
 
 Absence of a posit is not evidence that its proposition is false.
@@ -682,14 +792,20 @@ assert contrary evidence.
 
 **Response:**
 
-- Choice:
-- Preferred syntax:
-- Reasoning:
-- Accepted on:
+- Choice: A. Support safe absence queries only; missing data is never interpreted
+  as a false proposition.
+- Preferred syntax: `not exists { <patterns> }`. Correlated variables must already
+  be bound by the outer query, variables introduced inside are local existential
+  variables, and no inner binding may escape the block.
+- Reasoning: This expresses “no recorded match exists” under an open world without
+  conflating absence with contrary evidence. Negative certainty remains the way
+  to record such evidence.
+- Accepted on: 2026-08-26
 
 ### D017: Literal Interpretation And Comparison
 
-**Status:** Unresolved  
+**Status:** Accepted
+
 **Blocks:** Predicates, posit equality, value results
 
 **Options:**
@@ -740,21 +856,41 @@ The current evaluator's `f64` conversion and `1e-9` epsilon must be removed.
 
 **Response:**
 
-- Choice: Partial decision: `=` is nominal equality and `?=` is compatible with.
-- Supported cross-family semantic relations:
-- String ordering policy:
-- JSON comparison policy:
-- Constraint/interpretation interaction:
-- Unsupported-comparison behavior:
-- Exact literal identity syntax:
+- Choice: A. `=` is nominal equality, `?=` is possible-value compatibility, and
+  neither relation changes literal or proposition identity.
+- Supported cross-family semantic relations: Integer and decimal values compare
+  across their families using exact arbitrary-precision numeric equality and
+  ordering. Certainty compares only with certainty using its exact percentage
+  value; it is not an ordinary number. Current numeric, string, certainty, and
+  JSON literals denote singleton possible values, so `?=` reduces to nominal
+  equality for them. Time values use the D007 interval relations. A future
+  literal family may define a non-singleton possible-value set explicitly; no
+  family receives an inferred epsilon or tolerance.
+- String ordering policy: Strings support equality only in beta, comparing their
+  Unicode scalar sequences without normalization. Collation and ordering are
+  deferred.
+- JSON comparison policy: Nominal equality is structural: object key order and
+  insignificant whitespace are ignored, array order is significant, and numbers
+  compare by exact numeric value. Duplicate object keys are rejected. Exact
+  identity remains presentation-sensitive under D002.
+- Constraint/interpretation interaction: Constraints report conformance only in
+  beta and do not refine nominal or possible-value interpretations.
+- Unsupported-comparison behavior: Fail the query with a typed comparison error,
+  including when a heterogeneous role produces an unsupported operand pair. Do
+  not silently return false or convert to strings.
+- Exact literal identity syntax: `===`. The existing `==` spelling is not beta
+  syntax; the D012 legacy grammar treats it as nominal `=` with a deprecation
+  warning for one beta minor release.
 - Reasoning: Preserve precision in proposition identity while allowing useful
-  value-level matching. Compatibility is denotational overlap, not approximate
-  equality with an arbitrary tolerance.
-- Accepted on:
+  value-level matching. Compatibility is explicit denotational overlap, not
+  approximate equality with an arbitrary tolerance. The evaluator must replace
+  its current `f64` conversion and epsilon comparison.
+- Accepted on: 2026-08-26
 
 ### D018: Result Cardinality And Ordering
 
-**Status:** Unresolved  
+**Status:** Accepted
+
 **Blocks:** Rust/HTTP/WASM results, streaming, `LIMIT`
 
 **Options:**
@@ -776,16 +912,21 @@ SSE schema rather than inventing a second mechanism.
 
 **Response:**
 
-- Choice:
-- Default ordering, if any:
-- LIMIT pipeline position:
-- Streaming `more available` policy:
-- Reasoning:
-- Accepted on:
+- Choice: A. Joins have bag semantics and `DISTINCT` is explicit.
+- Default ordering, if any: None. Row order is unspecified without `ORDER BY`;
+  index or append order is not an API promise.
+- LIMIT pipeline position: Filtering, then projection/`DISTINCT`, then `ORDER BY`,
+  then `LIMIT`.
+- Streaming `more available` policy: The versioned SSE end event uses
+  `limited: true` exactly when additional rows existed beyond the applied limit.
+- Reasoning: Explicit distinctness and ordering preserve ordinary join behavior
+  while keeping internal index choices free to change.
+- Accepted on: 2026-08-26
 
 ### D019: Role And Parameter Syntax
 
-**Status:** Unresolved  
+**Status:** Accepted
+
 **Blocks:** Grammar stability, safe client queries, namespaces
 
 **Options:**
@@ -808,12 +949,19 @@ in the API request, typed like literals and never spliced into source text.
 
 **Response:**
 
-- Choice:
-- Quoted role syntax:
-- Parameter syntax:
-- Namespace reservation:
-- Reasoning:
-- Accepted on:
+- Choice: A.
+- Quoted role syntax: Bare role names remain identifier-like. Backticks quote a
+  literal role name containing whitespace, punctuation, or a reserved word, for
+  example `` `postal code` ``.
+- Parameter syntax: `$name`, bound through a separate API object as a typed
+  literal or time value. Parameters are never source text, role names, variable
+  names, or syntax fragments.
+- Namespace reservation: Unquoted `::` is reserved and rejected in beta for a
+  possible future qualified-name syntax. All content inside backticks is forever
+  literal, including `::`.
+- Reasoning: Common roles stay concise, arbitrary names remain representable, and
+  typed parameters let clients issue safe queries without source interpolation.
+- Accepted on: 2026-08-26
 
 ---
 
@@ -821,7 +969,8 @@ in the API request, typed like literals and never spliced into source text.
 
 ### D020: Durable Thing Allocation
 
-**Status:** Unresolved  
+**Status:** Accepted
+
 **Blocks:** Record types, `create_thing`, replay identity generator
 
 A Thing may be allocated before any role or posit refers to it.
@@ -846,14 +995,21 @@ identities — both would change under this decision.
 
 **Response:**
 
-- Choice:
-- API behavior before first durable reference:
-- Reasoning:
-- Accepted on:
+- Choice: C. Standalone durable Thing allocation is not part of the public beta
+  API. Internally this has B semantics.
+- API behavior before first durable reference: An allocated identity becomes
+  durable only when a committed role or posit first references it. Failed or
+  abandoned commands may leave gaps, but released identities are never recycled.
+  The current `create_thing` is internal or explicitly unstable.
+- Reasoning: Empty durable identities add format and API surface without modeled
+  information. Monotonic non-reuse keeps replay and import safe without requiring
+  allocation records.
+- Accepted on: 2026-08-26
 
 ### D021: Atomicity Unit
 
-**Status:** Unresolved  
+**Status:** Accepted
+
 **Blocks:** Commit records, execution rollback, API success semantics
 
 **Options:**
@@ -875,15 +1031,21 @@ Script-level transactions are a post-beta addition behind explicit syntax.
 
 **Response:**
 
-- Choice:
-- Multi-posit `add posit` atomicity:
-- Future transaction policy:
-- Reasoning:
-- Accepted on:
+- Choice: B. Each semicolon-delimited command is one atomic batch. Commands
+  committed before a later failure remain committed.
+- Multi-posit `add posit` atomicity: Every role, Thing reference, and posit created
+  by one command commits together or none of them do.
+- Future transaction policy: Script-level atomicity is deferred to an explicit
+  transaction construct after beta; it will not silently change default command
+  semantics.
+- Reasoning: Command batches provide a clear success boundary, support streaming,
+  and bound rollback work without exposing partially applied commands.
+- Accepted on: 2026-08-26
 
 ### D022: Durability Levels And Acknowledgment
 
-**Status:** Unresolved  
+**Status:** Accepted
+
 **Blocks:** Flush behavior, API responses, benchmarks
 
 **Options:**
@@ -906,15 +1068,21 @@ names exist for them.
 
 **Response:**
 
-- Choice:
-- Success guarantee:
-- Flush policy:
-- Reasoning:
-- Accepted on:
+- Choice: A. Beta has one persistent durability level.
+- Success guarantee: In a persistent store, success is returned only after the
+  command's records, their required catalog records, and the commit frame are
+  durably flushed. Persistence-disabled execution makes no disk durability claim.
+- Flush policy: Flush the log through the commit frame before acknowledgment.
+  Manifest, new-file, and directory-entry changes required to reopen the commit
+  are also flushed before acknowledgment.
+- Reasoning: One strict meaning of success is testable and avoids making a weak
+  default permanent before real workloads justify additional modes.
+- Accepted on: 2026-08-26
 
 ### D023: Physical File Set And Cross-File Consistency
 
-**Status:** Unresolved  
+**Status:** Accepted
+
 **Blocks:** Manifest, role catalog, posit log, backup
 
 **Options:**
@@ -945,17 +1113,26 @@ better served by the logical export/dump tool the roadmap already plans.
 
 **Response:**
 
-- Choice:
-- File set:
-- Datatype metadata location:
-- Lock scope:
-- Backup consistency mechanism:
-- Reasoning:
-- Accepted on:
+- Choice: B.
+- File set: A small manifest contains the store UUID, format version, feature
+  flags, and active log file list. One interleaved append-only log contains all
+  ordered records and commit frames; future rotation may add immutable segments.
+- Datatype metadata location: Role and physical-codec metadata are ordinary
+  versioned records in the same log before records that depend on them.
+- Lock scope: One OS-level store lock covers the manifest and every active or
+  sealed log file. Beta permits one writer/owner for the complete store.
+- Backup consistency mechanism: Hold the store's read/backup lock while copying
+  the manifest and logs through a recorded committed length. Uncommitted tail
+  bytes are not part of the backup.
+- Reasoning: Interleaving reduces cross-file consistency to record order and one
+  commit boundary. Logical export, not physical file separation, provides human
+  inspection.
+- Accepted on: 2026-08-26
 
 ### D024: Record Framing And Integrity
 
-**Status:** Unresolved  
+**Status:** Accepted
+
 **Blocks:** Binary format specification and parser
 
 **Options:**
@@ -984,17 +1161,28 @@ maximum record size (e.g. 16 MiB) validated before allocation.
 
 **Response:**
 
-- Choice:
-- Payload encoding:
-- Checksum:
-- Rolling hash policy:
-- Maximum record size:
-- Reasoning:
-- Accepted on:
+- Choice: A. Files have fixed headers and versioned, length-delimited records with
+  sequence, type, payload length, payload, and checksum. Commit records delimit
+  atomic batches.
+- Payload encoding: A hand-specified, endian-independent binary format: fixed
+  integers are little-endian and lengths use unsigned LEB128. Rust memory layouts
+  and textual `Display` output are never persistence encodings.
+- Checksum: CRC32C over the complete framed record except the checksum field.
+- Rolling hash policy: No rolling cryptographic chain is required by the beta
+  format. Reserve a manifest feature flag for a future optional BLAKE3 chain over
+  committed framed bytes in sequence order; it must not be described as tamper
+  proof without an external trusted anchor.
+- Maximum record size: 16 MiB for the complete framed record, validated with
+  checked arithmetic before allocation.
+- Reasoning: Explicit framing supports safe scanning and recovery; CRC32C handles
+  accidental corruption. Deferring an unauthenticated hash chain avoids a second
+  integrity mechanism with no stronger beta guarantee.
+- Accepted on: 2026-08-26
 
 ### D025: Recovery And Corruption Policy
 
-**Status:** Unresolved  
+**Status:** Accepted
+
 **Blocks:** Replay, startup behavior, repair tools
 
 **Options:**
@@ -1018,15 +1206,23 @@ a format change (see TODO.md).
 
 **Response:**
 
-- Choice:
-- Tail truncation policy:
-- Read-only/salvage policy:
-- Reasoning:
-- Accepted on:
+- Choice: A.
+- Tail truncation policy: Writable recovery truncates only bytes after the last
+  valid commit frame. An incomplete or checksum-invalid uncommitted tail is
+  treated as a torn write. Corruption, unknown mandatory versions/codecs,
+  dangling references, or malformed data within committed history fails startup
+  with byte offset and record sequence.
+- Read-only/salvage policy: Read-only open may ignore an uncommitted tail but may
+  not hide committed corruption. A separate offline salvage tool may later expose
+  valid history up to the first corrupt record and never overwrites the source.
+- Reasoning: Normal startup must not silently turn corruption into missing facts;
+  explicit salvage keeps partial recovery visible and auditable.
+- Accepted on: 2026-08-26
 
 ### D026: Value Codec Registry
 
-**Status:** Unresolved  
+**Status:** Accepted
+
 **Blocks:** Lossless value bytes, replay, migration
 
 **Options:**
@@ -1049,17 +1245,25 @@ codec identifiers are a hard replay failure; custom codecs are deferred.
 
 **Response:**
 
-- Choice:
-- Built-in codec registry location:
-- Codec versioning policy:
-- Raw literal fallback policy:
-- Custom codec policy:
-- Reasoning:
-- Accepted on:
+- Choice: A, with a mandatory raw-literal fallback.
+- Built-in codec registry location: A closed registry in the storage-format
+  specification and private persistence implementation, not the public datatype
+  API.
+- Codec versioning policy: The `(codec identifier, codec version)` pair has
+  immutable decoding semantics. A changed encoding receives a new pair, and
+  unknown required pairs fail replay.
+- Raw literal fallback policy: Every beta literal family must support the raw
+  UTF-8 token codec. Writers use it whenever no compact lossless codec applies.
+- Custom codec policy: Plugin and user-defined physical codecs are deferred beyond
+  beta.
+- Reasoning: Physical codecs remain replaceable storage optimizations and can
+  never affect literal identity, proposition identity, or query results.
+- Accepted on: 2026-08-26
 
 ### D027: Format Evolution And Migration
 
-**Status:** Unresolved  
+**Status:** Accepted
+
 **Blocks:** Beta compatibility promise, importer/exporter
 
 **Options:**
@@ -1081,12 +1285,19 @@ removed together with the `rusqlite` dependency.
 
 **Response:**
 
-- Choice:
-- Minimum compatibility window:
-- Migration backup/rollback policy:
-- SQLite importer lifetime:
-- Reasoning:
-- Accepted on:
+- Choice: A.
+- Minimum compatibility window: Each engine reads its current format and at least
+  the immediately preceding beta format. Published standalone migrators remain
+  available so older beta stores have a documented stepwise path forward.
+- Migration backup/rollback policy: Breaking migration writes a new store beside
+  the source, validates it before activation, and never mutates the old files.
+  Rollback selects the retained old store.
+- SQLite importer lifetime: Ship and support it through the beta series. Remove it
+  and the `rusqlite` dependency at the first stable release, while retaining the
+  last beta importer as an archived migration tool.
+- Reasoning: This guarantees a supported logical-data path without requiring the
+  main engine to carry every historical physical decoder indefinitely.
+- Accepted on: 2026-08-26
 
 ---
 
@@ -1094,7 +1305,8 @@ removed together with the `rusqlite` dependency.
 
 ### D028: Stable Rust API Surface
 
-**Status:** Unresolved  
+**Status:** Accepted
+
 **Blocks:** Crate release and semantic versioning
 
 **Options:**
@@ -1117,15 +1329,24 @@ same narrowing so the deprecation happens once.
 
 **Response:**
 
-- Choice:
-- Stable modules/types:
-- Explicitly unstable modules/types:
-- Reasoning:
-- Accepted on:
+- Choice: A.
+- Stable modules/types: High-level `Database` construction/open and command/query
+  entry points; opaque logical and external identity handles; execution options;
+  lossless result and stream-event types; storage configuration; and
+  `DatabaseError`.
+- Explicitly unstable modules/types: Keepers, indexes and lookups,
+  `ThingGenerator`, parser internals, AST/planner internals, `Persistor`, physical
+  records and codecs, and all public fields currently exposing those details.
+  Rename `create_apperance` to `create_appearance` during this narrowing.
+- Reasoning: The beta contract should cover useful database behavior without
+  freezing storage, parser, or indexing implementation details that are expected
+  to change.
+- Accepted on: 2026-08-26
 
 ### D029: HTTP Beta Trust Boundary
 
-**Status:** Unresolved  
+**Status:** Accepted
+
 **Blocks:** Server documentation and defaults
 
 **Options:**
@@ -1146,16 +1367,27 @@ add request-size, runtime, and result-count limits (see TODO.md).
 
 **Response:**
 
-- Choice:
-- Default bind address:
-- Request/runtime/result limits:
-- CORS default:
-- Reasoning:
-- Accepted on:
+- Choice: A. The beta HTTP server is a trusted local interface with no
+  authentication or safe-Internet-exposure claim.
+- Default bind address: `127.0.0.1`. Binding to any non-loopback interface
+  requires explicit configuration and does not change the trust claim.
+- Request/runtime/result limits: Default request body 1 MiB, configurable up to a
+  16 MiB hard maximum; at most 1,000 commands per script; 5-second default runtime
+  with `timeout_ms` able to lower it and configuration able to raise it only to a
+  30-second hard maximum; and at most 100,000 rows per search across buffered and
+  streaming responses. Exceeding a limit returns a structured error or a
+  `limited` completion, as appropriate.
+- CORS default: Same-origin only. The server may allow an explicit configured list
+  of exact loopback origins; wildcard origins are forbidden.
+- Reasoning: Local-only scope avoids blocking beta on authentication, but enforced
+  resource and origin boundaries are still required. Remove any advertised option
+  that cannot be enforced before release.
+- Accepted on: 2026-08-26
 
 ### D030: Beta Compatibility Promise
 
-**Status:** Unresolved  
+**Status:** Accepted
+
 **Blocks:** Release notes, versioning, user expectations
 
 **Options:**
@@ -1179,12 +1411,21 @@ interface embedded in files and responses.
 
 **Response:**
 
-- Choice:
-- Logical data guarantee:
-- Language/API deprecation window:
-- Versioning scheme:
-- Reasoning:
-- Accepted on:
+- Choice: A.
+- Logical data guarantee: Roles, referenced Things, posits, assertions, exact
+  literal tokens, and times survive every beta upgrade through a supported direct
+  or stepwise migration path.
+- Language/API deprecation window: Provide one beta minor release of warnings and
+  mechanical guidance where practical. Security fixes, corruption fixes, and
+  behavior that was never part of a published contract may change immediately
+  with release notes.
+- Versioning scheme: Use 0.x SemVer: minor releases may contain documented beta
+  breaks and patch releases are compatible. Storage, Traqula, HTTP/SSE, and WASM
+  have independent versions embedded in their files, requests/responses, or
+  interface metadata as applicable.
+- Reasoning: Testers get a durable logical-data promise and visible migration path
+  while the young language and implementation retain controlled room to improve.
+- Accepted on: 2026-08-26
 
 ---
 
@@ -1194,33 +1435,33 @@ Update this table as decisions are accepted.
 
 | ID | Decision | Status | Choice |
 | --- | --- | --- | --- |
-| D001 | Role identity and names | Unresolved | |
-| D002 | Posit proposition equality | Unresolved | |
-| D003 | Thing identity scope and import | Unresolved | |
-| D004 | Identity equivalence and merging | Unresolved | |
-| D005 | Appearance-set cardinality and slots | Unresolved | |
-| D006 | Reserved role vocabulary | Unresolved | |
-| D007 | Meaning of imprecise time | Unresolved | |
-| D008 | Temporal comparison vocabulary | Unresolved | |
-| D009 | Snapshot maxima and conflicts | Unresolved | |
-| D010 | Snapshot and value-filter order | Unresolved | |
-| D011 | Evaluation of `@NOW` | Unresolved | |
-| D012 | Allocation and query variable syntax | Unresolved | |
-| D013 | Query variable scope | Unresolved | |
-| D014 | Exact and open appearance matching | Unresolved | |
-| D015 | Query algebra required for beta | Unresolved | |
-| D016 | Negation and open-world semantics | Unresolved | |
-| D017 | Literal interpretation and comparison | Unresolved | `=` nominal; `?=` compatible |
-| D018 | Result cardinality and ordering | Unresolved | |
-| D019 | Role and parameter syntax | Unresolved | |
-| D020 | Durable Thing allocation | Unresolved | |
-| D021 | Atomicity unit | Unresolved | |
-| D022 | Durability and acknowledgment | Unresolved | |
-| D023 | Physical file set and consistency | Unresolved | |
-| D024 | Record framing and integrity | Unresolved | |
-| D025 | Recovery and corruption | Unresolved | |
-| D026 | Value codec registry | Unresolved | |
-| D027 | Format evolution and migration | Unresolved | |
-| D028 | Stable Rust API surface | Unresolved | |
-| D029 | HTTP beta trust boundary | Unresolved | |
-| D030 | Beta compatibility promise | Unresolved | |
+| D001 | Role identity and names | Accepted | Identity; case-sensitive NFC names |
+| D002 | Posit proposition equality | Accepted | Proposition tuple; exact UTF-8 token |
+| D003 | Thing identity scope and import | Accepted | Local `u64`; external store UUID pair |
+| D004 | Identity equivalence and merging | Accepted | Ordinary posits; no destructive merge |
+| D005 | Appearance-set cardinality and slots | Accepted | Partial function `Role -> Thing` |
+| D006 | Reserved role vocabulary | Accepted | `posit` and `ascertains` only |
+| D007 | Meaning of imprecise time | Accepted | Half-open UTC intervals |
+| D008 | Temporal comparison vocabulary | Accepted | Definite ordering plus interval predicates |
+| D009 | Snapshot maxima and conflicts | Accepted | Return every maximal applicable posit |
+| D010 | Snapshot and value-filter order | Accepted | Snapshot first; explicit `latest` history |
+| D011 | Evaluation of `@NOW` | Accepted | Once per script, overrideable |
+| D012 | Allocation and query variable syntax | Accepted | `+x` allocates; `?x` queries |
+| D013 | Query variable scope | Accepted | Search-local; no beta cross-search state |
+| D014 | Exact and open appearance matching | Accepted | Closed exact; ellipsis opens |
+| D015 | Query algebra required for beta | Accepted | Core algebra; no optional/aggregation |
+| D016 | Negation and open-world semantics | Accepted | Safe correlated `not exists` |
+| D017 | Literal interpretation and comparison | Accepted | `===` literal; `=` nominal; `?=` compatible |
+| D018 | Result cardinality and ordering | Accepted | Bags; explicit distinct and ordering |
+| D019 | Role and parameter syntax | Accepted | Backtick roles; typed `$parameters` |
+| D020 | Durable Thing allocation | Accepted | Durable on committed reference; no reuse |
+| D021 | Atomicity unit | Accepted | One command per atomic batch |
+| D022 | Durability and acknowledgment | Accepted | Acknowledge only after durable flush |
+| D023 | Physical file set and consistency | Accepted | Manifest plus interleaved log |
+| D024 | Record framing and integrity | Accepted | Binary frames, CRC32C, 16 MiB maximum |
+| D025 | Recovery and corruption | Accepted | Truncate tail; fail on committed damage |
+| D026 | Value codec registry | Accepted | Closed versioned codecs plus raw fallback |
+| D027 | Format evolution and migration | Accepted | Previous-format reader plus offline migration |
+| D028 | Stable Rust API surface | Accepted | High-level contracts only |
+| D029 | HTTP beta trust boundary | Accepted | Loopback, same-origin, enforced limits |
+| D030 | Beta compatibility promise | Accepted | Logical-data migration; versioned surfaces |
