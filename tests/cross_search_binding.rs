@@ -23,5 +23,5 @@ return item, value;
     assert_eq!(results[1].row_count, 2);
     let mut values: Vec<&str> = results[1].rows.iter().map(|row| row[1].as_str()).collect();
     values.sort_unstable();
-    assert_eq!(values, vec!["blue", "red"]);
+    assert_eq!(values, vec!["\"blue\"", "\"red\""]);
 }

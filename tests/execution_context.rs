@@ -28,7 +28,7 @@ fn now_override_is_shared_by_the_complete_script_and_reported() {
     assert_eq!(
         result.rows,
         vec![vec![
-            "2026-08-26 12:34:56.789123456".to_string(),
+            "'2026-08-26 12:34:56.789123456'".to_string(),
             "2026-08-26 12:34:56.789123456".to_string(),
         ]]
     );
@@ -46,5 +46,7 @@ fn multi_searches_report_one_shared_now_value() {
 
     assert_eq!(results.len(), 2);
     assert_eq!(results[0].metadata, results[1].metadata);
-    assert_eq!(results[0].rows[0][0], results[1].rows[0][0]);
+    let now = results[0].metadata.resolved_now.to_string();
+    assert_eq!(results[0].rows[0][0], format!("'{now}'"));
+    assert_eq!(results[1].rows[0][0], now);
 }

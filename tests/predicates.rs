@@ -24,15 +24,19 @@ fn certainty_literal_equivalents() {
         let res = engine.execute_collect(&script).expect("query ok");
         assert_eq!(res.rows.len(), 1, "percent form {f} should match");
     }
-    let negative_match = ["0.75", "75", "74%", "0.749"]; // invalid certainty forms or different value
-    for f in &negative_match {
+    let unsupported = ["0.75", "75", "0.749"];
+    for f in &unsupported {
         let script = format!("search [{{(*, confidence)}}, +c, *] where c = {f} return c;");
-        // Forms without % are treated as decimal/int -> should not match certainty posit
-        let res = engine
-            .execute_collect(&script)
-            .unwrap_or_else(|e| panic!("unexpected error for form {f}: {e}"));
-        assert_eq!(res.rows.len(), 0, "form {f} should NOT match certainty 75%");
+        let error = engine.execute_collect(&script).unwrap_err();
+        assert!(
+            format!("{error}").contains("unsupported nominal comparison"),
+            "unexpected error for form {f}: {error}"
+        );
     }
+    let result = engine
+        .execute_collect("search [{(*, confidence)}, +c, *] where c = 74% return c;")
+        .expect("same-family comparison is valid");
+    assert_eq!(result.rows.len(), 0);
 }
 
 #[test]
@@ -44,7 +48,7 @@ fn one_percent_is_not_parsed_as_one_hundred_percent() {
     let result = engine
         .execute_collect("search [{(*, confidence)}, +c, *] return c;")
         .expect("query ok");
-    assert_eq!(result.rows, vec![vec!["0.01".to_string()]]);
+    assert_eq!(result.rows, vec![vec!["1%".to_string()]]);
 }
 
 #[test]

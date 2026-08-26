@@ -65,7 +65,9 @@ use std::hash::{Hash, Hasher};
 // used to overload common operations for datatypes
 use std::ops;
 
-use crate::literal::{LiteralFamily, LiteralValue};
+#[cfg(feature = "persistence")]
+use crate::literal::LiteralFamily;
+use crate::literal::LiteralValue;
 #[cfg(feature = "persistence")]
 use crate::traqula::parse_time;
 

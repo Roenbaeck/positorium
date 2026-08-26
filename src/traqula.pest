@@ -8,12 +8,15 @@ traqula = _{
 COMMENT = _{ "/*" ~ (!"*/" ~ ANY)* ~ "*/" }
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 digit = _{ '0'..'9' }
-int = { "-"? ~ digit+ }
-decimal = { "-"? ~ digit+ ~ "." ~ digit+ }
-certainty = { "-"? ~ digit{1,3} ~ "%" }
+int = { ("-" | "+")? ~ digit+ }
+decimal = { ("-" | "+")? ~ digit+ ~ "." ~ digit+ }
+certainty = { ("-" | "+")? ~ digit{1,3} ~ "%" }
 time = { "'" ~ (digit | "-" | ":")+ ~ "'" }
-json = @{ "{" ~ (json | !"}" ~ ANY)* ~ "}" }
-string = { "\"" ~ ( "\"\"" | (!"\"" ~ ANY) )* ~ "\"" }
+json_string = { "\"" ~ ("\\" ~ ANY | !"\"" ~ ANY)* ~ "\"" }
+json_object = { "{" ~ (json_string | json_object | json_array | !("{" | "}" | "[" | "]" | "\"") ~ ANY)* ~ "}" }
+json_array = { "[" ~ (json_string | json_object | json_array | !("{" | "}" | "[" | "]" | "\"") ~ ANY)* ~ "]" }
+json = @{ json_object }
+string = @{ json_string }
 // Reserved keywords (cannot be used as bare variable names)
 keyword = { "add" | "role" | "posit" | "search" | "return" | "where" | "as" | "of" | "limit" | "and" }
 // A variable is an identifier not exactly equal to a reserved keyword.

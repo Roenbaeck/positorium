@@ -88,7 +88,10 @@ fn snapshots_preserve_incomparable_and_equal_time_conflicts() {
 
     let mut values: Vec<&str> = result.rows.iter().map(|row| row[0].as_str()).collect();
     values.sort_unstable();
-    assert_eq!(values, vec!["broad", "specific-a", "specific-b"]);
+    assert_eq!(
+        values,
+        vec!["\"broad\"", "\"specific-a\"", "\"specific-b\""]
+    );
 }
 
 #[test]

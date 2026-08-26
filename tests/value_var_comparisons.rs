@@ -44,8 +44,8 @@ fn certainty_var_ordering() {
     let script = "search [{(*, confidence)}, +c1, *], [{(*, confidence)}, +c2, *] where c1 < c2 return c1, c2;";
     let res = engine.execute_collect(script).expect("query ok");
     assert_eq!(res.rows.len(), 1);
-    assert_eq!(res.rows[0][0], "0.60");
-    assert_eq!(res.rows[0][1], "0.75");
+    assert_eq!(res.rows[0][0], "60%");
+    assert_eq!(res.rows[0][1], "75%");
 }
 
 #[test]

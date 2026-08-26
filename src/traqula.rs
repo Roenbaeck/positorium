@@ -47,6 +47,7 @@
 use crate::construct::{Database, OtherHasher, Thing};
 use crate::datatype::{Certainty, Decimal, JSON, Time};
 use crate::error::DatabaseError;
+use crate::literal::{LiteralFamily, LiteralValue};
 use chrono::NaiveDateTime; // needed for defensive datetime validation in parse_time
 // (regex-based time parsing removed in favor of direct parsing)
 use chrono::NaiveDate;
@@ -417,45 +418,37 @@ pub fn posits_involving_thing(database: &Database, thing: Thing) -> ResultSet {
     result_set
 }
 
-// value parsers
-fn parse_string(value: &str) -> Option<String> {
-    let mut c = value.chars();
-    c.next();
-    c.next_back();
-    Some(c.collect::<String>().replace("\"\"", "\""))
-}
-fn parse_string_constant(_value: &str) -> Option<String> {
-    None
-}
-fn parse_i64(value: &str) -> Option<i64> {
-    value.parse::<i64>().ok()
-}
-fn parse_i64_constant(_value: &str) -> Option<i64> {
-    None
-}
-fn parse_certainty(value: &str) -> Option<Certainty> {
-    let token = value.trim();
-    let raw = token.strip_suffix('%')?;
-    let percent = raw.parse::<i16>().ok()?;
-    i8::try_from(percent)
-        .ok()
-        .filter(|value| (-100..=100).contains(value))
-        .map(Certainty::from_percent)
-}
-fn parse_certainty_constant(_value: &str) -> Option<Certainty> {
-    None
-}
-fn parse_decimal(value: &str) -> Option<Decimal> {
-    value.parse::<Decimal>().ok()
-}
-fn parse_decimal_constant(_value: &str) -> Option<Decimal> {
-    None
-}
-fn parse_json(value: &str) -> Option<JSON> {
-    value.parse::<JSON>().ok()
-}
-fn parse_json_constant(_value: &str) -> Option<JSON> {
-    None
+fn parse_lossless_literal(
+    rule: Rule,
+    token: &str,
+    resolved_now: &Time,
+) -> Result<LiteralValue, DatabaseError> {
+    let (token, family) = match rule {
+        Rule::string => (token.to_string(), LiteralFamily::String),
+        Rule::int => (token.to_string(), LiteralFamily::Integer),
+        Rule::decimal => (token.to_string(), LiteralFamily::Decimal),
+        Rule::certainty => (token.to_string(), LiteralFamily::Certainty),
+        Rule::json => (token.to_string(), LiteralFamily::Json),
+        Rule::time => (token.to_string(), LiteralFamily::Time),
+        Rule::constant => {
+            let resolved = match token.trim() {
+                "@NOW" => format!("'{}'", resolved_now),
+                "@BOT" | "@EOT" => token.trim().to_string(),
+                other => {
+                    return Err(DatabaseError::Execution(format!(
+                        "unknown value constant '{other}'"
+                    )));
+                }
+            };
+            (resolved, LiteralFamily::Time)
+        }
+        _ => {
+            return Err(DatabaseError::Invariant(format!(
+                "grammar rule {rule:?} is not a literal"
+            )));
+        }
+    };
+    LiteralValue::new(token, family).map_err(DatabaseError::Execution)
 }
 /// Parse a time literal or constant used in Traqula.
 pub fn parse_time(value: &str) -> Option<Time> {
@@ -872,12 +865,7 @@ impl<'en> Engine<'en> {
             execution.check()?;
             let mut variable: Option<String> = None;
             let mut posits: Vec<Thing> = Vec::new();
-            let mut value_as_json: Option<JSON> = None;
-            let mut value_as_string: Option<String> = None;
-            let mut value_as_time: Option<Time> = None;
-            let mut value_as_decimal: Option<Decimal> = None;
-            let mut value_as_i64: Option<i64> = None;
-            let mut value_as_certainty: Option<Certainty> = None;
+            let mut value: Option<LiteralValue> = None;
             let mut time: Option<Time> = None;
             let mut local_variables = Vec::new();
             let mut roles = Vec::new();
@@ -938,53 +926,11 @@ impl<'en> Engine<'en> {
                             }
                             Rule::appearing_value => {
                                 for value_type in component.into_inner() {
-                                    match value_type.as_rule() {
-                                        Rule::constant => {
-                                            //println!("Constant: {}", value_type.as_str());
-                                            value_as_json =
-                                                parse_json_constant(value_type.as_str());
-                                            value_as_string =
-                                                parse_string_constant(value_type.as_str());
-                                            value_as_time = parse_time_constant_with_now(
-                                                value_type.as_str(),
-                                                resolved_now,
-                                            );
-                                            value_as_certainty =
-                                                parse_certainty_constant(value_type.as_str());
-                                            value_as_decimal =
-                                                parse_decimal_constant(value_type.as_str());
-                                            value_as_i64 = parse_i64_constant(value_type.as_str());
-                                        }
-                                        Rule::json => {
-                                            //println!("JSON: {}", value_type.as_str());
-                                            value_as_json = parse_json(value_type.as_str());
-                                        }
-                                        Rule::string => {
-                                            //println!("String: {}", value_type.as_str());
-                                            value_as_string = parse_string(value_type.as_str());
-                                        }
-                                        Rule::time => {
-                                            //println!("Time: {}", value_type.as_str());
-                                            value_as_time = parse_time_with_now(
-                                                value_type.as_str(),
-                                                resolved_now,
-                                            );
-                                        }
-                                        Rule::certainty => {
-                                            //println!("Certainty: {}", value_type.as_str());
-                                            value_as_certainty =
-                                                parse_certainty(value_type.as_str());
-                                        }
-                                        Rule::decimal => {
-                                            //println!("Decimal: {}", value_type.as_str());
-                                            value_as_decimal = parse_decimal(value_type.as_str());
-                                        }
-                                        Rule::int => {
-                                            //println!("i64: {}", value_type.as_str());
-                                            value_as_i64 = parse_i64(value_type.as_str());
-                                        }
-                                        _ => println!("Unknown value type: {:?}", value_type),
-                                    }
+                                    value = Some(parse_lossless_literal(
+                                        value_type.as_rule(),
+                                        value_type.as_str(),
+                                        resolved_now,
+                                    )?);
                                 }
                             }
                             Rule::appearance_time => {
@@ -1095,68 +1041,28 @@ impl<'en> Engine<'en> {
 
                     // println!("Appearance sets {:?}", appearance_sets);
 
+                    let time_value = time.ok_or_else(|| {
+                        DatabaseError::Execution(
+                            "add posit requires a valid appearance time".to_string(),
+                        )
+                    })?;
+                    let value = value.ok_or_else(|| {
+                        DatabaseError::Execution(
+                            "add posit requires a valid appearing value".to_string(),
+                        )
+                    })?;
+
                     for appearance_set in appearance_sets {
                         execution.check()?;
-                        // create the posit of the found type
-                        if time.is_none() {
-                            eprintln!("Error: No valid time specified for posit. Skipping.");
-                            continue;
-                        }
-                        let time_value = time.clone().unwrap();
-
-                        if value_as_json.is_some() {
-                            let kept_posit = self.database.create_posit(
-                                appearance_set,
-                                value_as_json.clone().unwrap(),
-                                time_value.clone(),
-                            );
-                            posits.push(kept_posit.posit());
-                            // debug posit creation suppressed for clean startup output
-                        } else if value_as_string.is_some() {
-                            let kept_posit = self.database.create_posit(
-                                appearance_set,
-                                value_as_string.clone().unwrap(),
-                                time_value.clone(),
-                            );
-                            posits.push(kept_posit.posit());
-                            // debug posit creation suppressed
-                        } else if value_as_time.is_some() {
-                            let kept_posit = self.database.create_posit(
-                                appearance_set,
-                                value_as_time.clone().unwrap(),
-                                time_value.clone(),
-                            );
-                            posits.push(kept_posit.posit());
-                            // debug posit creation suppressed
-                        } else if value_as_certainty.is_some() {
-                            let kept_posit = self.database.create_posit(
-                                appearance_set,
-                                value_as_certainty.clone().unwrap(),
-                                time_value.clone(),
-                            );
-                            posits.push(kept_posit.posit());
-                            // debug posit creation suppressed
-                        } else if value_as_decimal.is_some() {
-                            let kept_posit = self.database.create_posit(
-                                appearance_set,
-                                value_as_decimal.clone().unwrap(),
-                                time_value.clone(),
-                            );
-                            posits.push(kept_posit.posit());
-                            // debug posit creation suppressed
-                        } else if value_as_i64.is_some() {
-                            let kept_posit = self.database.create_posit(
-                                appearance_set,
-                                value_as_i64.unwrap(),
-                                time_value.clone(),
-                            );
-                            posits.push(kept_posit.posit());
-                            // debug posit creation suppressed
-                        }
+                        let kept_posit = self.database.create_posit(
+                            appearance_set,
+                            value.clone(),
+                            time_value.clone(),
+                        );
+                        posits.push(kept_posit.posit());
                     }
                     if !posits.is_empty() {
-                        // summarize roles_ord (roles after reordering) if available
-                        info!(target: "positorium::traqula", event="add_posit", created=posits.len(), roles=%roles_ord.join(","), value_kind=%if value_as_json.is_some(){"json"} else if value_as_string.is_some(){"string"} else if value_as_time.is_some(){"time"} else if value_as_certainty.is_some(){"certainty"} else if value_as_decimal.is_some(){"decimal"} else if value_as_i64.is_some(){"i64"} else {"unknown"}, "posits created");
+                        info!(target: "positorium::traqula", event="add_posit", created=posits.len(), roles=%roles_ord.join(","), value_family=?value.family(), "posits created");
                     }
                 }
                 _ => println!("Unknown structure: {:?}", structure),
@@ -1217,31 +1123,6 @@ impl<'en> Engine<'en> {
                 (Less, "<" | "<=") | (Equal, "<=" | ">=" | "=" | "==") | (Greater, ">" | ">=")
             )
         }
-        fn cmp_bigdecimal(
-            lhs: &bigdecimal::BigDecimal,
-            rhs: &bigdecimal::BigDecimal,
-            op: &str,
-        ) -> bool {
-            cmp_ordering(lhs.cmp(rhs), op)
-        }
-        fn certainty_percent(display: &str) -> Option<i8> {
-            match display {
-                "-1" => Some(-100),
-                "0" => Some(0),
-                "1" => Some(100),
-                _ => {
-                    let (negative, digits) = display
-                        .strip_prefix("-0.")
-                        .map(|digits| (true, digits))
-                        .or_else(|| display.strip_prefix("0.").map(|digits| (false, digits)))?;
-                    if digits.len() != 2 || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
-                        return None;
-                    }
-                    let percent = digits.parse::<i8>().ok()?;
-                    Some(if negative { -percent } else { percent })
-                }
-            }
-        }
         // Track variables referenced in this search command to guide projection
         let mut active_vars: std::collections::HashSet<String> = std::collections::HashSet::new();
         // Track candidate posits per bound time variable name (e.g., t, tw, birth_t)
@@ -1251,28 +1132,21 @@ impl<'en> Engine<'en> {
         let mut where_time: Vec<(String, String, Time)> = Vec::new();
         // Parsed where conditions between time variables: (var1, comparator, var2)
         let mut where_time_var: Vec<(String, String, String)> = Vec::new();
-        // Parsed generic value conditions: (lhs_var, op, Rhs)
-        #[derive(Debug, Clone)]
-        enum RhsValueKind {
-            Cert(i8),
-            Int(i64),
-            Decimal(String),
-            String(String),
-            Const(String),
-        }
-        let mut where_value: Vec<(String, String, RhsValueKind)> = Vec::new();
+        // Parsed generic value conditions: (lhs_var, op, lossless literal)
+        let mut where_value: Vec<(String, String, LiteralValue)> = Vec::new();
         let mut where_value_var: Vec<(String, String, String)> = Vec::new();
-        fn parse_certainty_literal(raw: &str) -> Option<i8> {
-            let s = raw.trim();
-            if s.ends_with('%') {
-                if let Ok(v) = s.trim_end_matches('%').parse::<i16>()
-                    && (-100..=100).contains(&v)
-                {
-                    return Some(v as i8);
-                }
-                return None;
-            }
-            None // only percent-suffixed forms are certainty literals now
+        fn parse_where_literal(raw: &str) -> Result<LiteralValue, DatabaseError> {
+            let token = raw.trim();
+            let family = if token.starts_with('"') {
+                LiteralFamily::String
+            } else if token.ends_with('%') {
+                LiteralFamily::Certainty
+            } else if token.contains('.') {
+                LiteralFamily::Decimal
+            } else {
+                LiteralFamily::Integer
+            };
+            LiteralValue::new(token, family).map_err(DatabaseError::Execution)
         }
         // Parsed variable-to-variable value comparisons (both non-time for now): (lhs, op, rhs)
         // (variable-to-variable value comparisons omitted in current implementation)
@@ -1328,12 +1202,7 @@ impl<'en> Engine<'en> {
                         }
                         let mut variable: Option<String> = None;
                         let mut _posits: Vec<Thing> = Vec::new();
-                        let mut _value_as_json: Option<JSON> = None;
-                        let mut _value_as_string: Option<String> = None;
-                        let mut _value_as_time: Option<Time> = None;
-                        let mut _value_as_decimal: Option<Decimal> = None;
-                        let mut _value_as_i64: Option<i64> = None;
-                        let mut _value_as_certainty: Option<Certainty> = None;
+                        let mut _value_as_literal: Option<LiteralValue> = None;
                         let mut _value_as_variable: Option<&str> = None;
                         let mut _value_is_wildcard = false;
                         let mut _time: Option<Time> = None;
@@ -1493,60 +1362,26 @@ impl<'en> Engine<'en> {
                                                         _value_is_wildcard = true;
                                                         //println!("wildcard");
                                                     }
-                                                    Rule::constant => {
-                                                        //println!("Constant: {}", value_type.as_str());
-                                                        _value_as_json = parse_json_constant(
-                                                            value_type.as_str(),
-                                                        );
-                                                        _value_as_string = parse_string_constant(
-                                                            value_type.as_str(),
-                                                        );
-                                                        _value_as_time =
-                                                            parse_time_constant_with_now(
-                                                                value_type.as_str(),
-                                                                resolved_now,
-                                                            );
-                                                        _value_as_certainty =
-                                                            parse_certainty_constant(
-                                                                value_type.as_str(),
-                                                            );
-                                                        _value_as_decimal = parse_decimal_constant(
-                                                            value_type.as_str(),
-                                                        );
-                                                        _value_as_i64 =
-                                                            parse_i64_constant(value_type.as_str());
-                                                    }
-                                                    Rule::json => {
-                                                        //println!("JSON: {}", value_type.as_str());
-                                                        _value_as_json =
-                                                            parse_json(value_type.as_str());
-                                                    }
-                                                    Rule::string => {
-                                                        //println!("String: {}", value_type.as_str());
-                                                        _value_as_string =
-                                                            parse_string(value_type.as_str());
-                                                    }
-                                                    Rule::time => {
-                                                        //println!("Time: {}", value_type.as_str());
-                                                        _value_as_time = parse_time_with_now(
+                                                    Rule::constant
+                                                    | Rule::json
+                                                    | Rule::string
+                                                    | Rule::time
+                                                    | Rule::certainty
+                                                    | Rule::decimal
+                                                    | Rule::int => {
+                                                        match parse_lossless_literal(
+                                                            value_type.as_rule(),
                                                             value_type.as_str(),
                                                             resolved_now,
-                                                        );
-                                                    }
-                                                    Rule::certainty => {
-                                                        //println!("Certainty: {}", value_type.as_str());
-                                                        _value_as_certainty =
-                                                            parse_certainty(value_type.as_str());
-                                                    }
-                                                    Rule::decimal => {
-                                                        //println!("Decimal: {}", value_type.as_str());
-                                                        _value_as_decimal =
-                                                            parse_decimal(value_type.as_str());
-                                                    }
-                                                    Rule::int => {
-                                                        //println!("i64: {}", value_type.as_str());
-                                                        _value_as_i64 =
-                                                            parse_i64(value_type.as_str());
+                                                        ) {
+                                                            Ok(value) => {
+                                                                _value_as_literal = Some(value)
+                                                            }
+                                                            Err(error) => {
+                                                                *exec_error = Some(error);
+                                                                return;
+                                                            }
+                                                        }
                                                     }
                                                     _ => println!(
                                                         "Unknown value type: {:?}",
@@ -1755,13 +1590,7 @@ impl<'en> Engine<'en> {
                                             }
                                         }
                                         // Optional value filter for any role when a literal/constant value is provided
-                                        if _value_as_string.is_some()
-                                            || _value_as_i64.is_some()
-                                            || _value_as_decimal.is_some()
-                                            || _value_as_certainty.is_some()
-                                            || _value_as_time.is_some()
-                                            || _value_as_json.is_some()
-                                        {
+                                        if let Some(expected) = _value_as_literal.as_ref() {
                                             let mut filtered = RoaringTreemap::new();
                                             let pk = self.database.posit_keeper();
                                             let tp = self.database.role_name_to_data_type_lookup();
@@ -1787,52 +1616,23 @@ impl<'en> Engine<'en> {
                                                     else {
                                                         continue;
                                                     };
-                                                    let mut matches = false;
-                                                    if let Some(ref val) = _value_as_string
-                                                        && allowed.contains("String")
+                                                    let matches = if allowed
+                                                        .contains("LiteralValue")
                                                         && let Some(p) =
-                                                            pk_guard.posit::<String>(id)
-                                                        && p.value() == val
+                                                            pk_guard.posit::<LiteralValue>(id)
                                                     {
-                                                        matches = true;
-                                                    }
-                                                    if let Some(val) = _value_as_i64
-                                                        && allowed.contains("i64")
-                                                        && let Some(p) = pk_guard.posit::<i64>(id)
-                                                        && p.value() == &val
-                                                    {
-                                                        matches = true;
-                                                    }
-                                                    if let Some(ref val) = _value_as_decimal
-                                                        && allowed.contains("Decimal")
-                                                        && let Some(p) =
-                                                            pk_guard.posit::<Decimal>(id)
-                                                        && p.value() == val
-                                                    {
-                                                        matches = true;
-                                                    }
-                                                    if let Some(ref val) = _value_as_certainty
-                                                        && allowed.contains("Certainty")
-                                                        && let Some(p) =
-                                                            pk_guard.posit::<Certainty>(id)
-                                                        && p.value() == val
-                                                    {
-                                                        matches = true;
-                                                    }
-                                                    if let Some(ref val) = _value_as_time
-                                                        && allowed.contains("Time")
-                                                        && let Some(p) = pk_guard.posit::<Time>(id)
-                                                        && p.value() == val
-                                                    {
-                                                        matches = true;
-                                                    }
-                                                    if let Some(ref val) = _value_as_json
-                                                        && allowed.contains("JSON")
-                                                        && let Some(p) = pk_guard.posit::<JSON>(id)
-                                                        && p.value() == val
-                                                    {
-                                                        matches = true;
-                                                    }
+                                                        match p.value().nominally_equals(expected) {
+                                                            Ok(matches) => matches,
+                                                            Err(error) => {
+                                                                *exec_error = Some(
+                                                                    DatabaseError::Execution(error),
+                                                                );
+                                                                return;
+                                                            }
+                                                        }
+                                                    } else {
+                                                        false
+                                                    };
                                                     if matches {
                                                         filtered.insert(id);
                                                     }
@@ -2386,29 +2186,13 @@ impl<'en> Engine<'en> {
                                     where_time_var.push((lv.clone(), o.clone(), rv.clone()));
                                     where_value_var.push((lv, o, rv));
                                 } else if let Some(raw) = rhs_raw.clone() {
-                                    let trimmed = raw.trim();
-                                    let rhs_kind = if trimmed.starts_with('"')
-                                        && trimmed.ends_with('"')
-                                    {
-                                        RhsValueKind::String(trimmed.trim_matches('"').to_string())
-                                    } else if trimmed.ends_with('%') {
-                                        if let Some(cpct) = parse_certainty_literal(trimmed) {
-                                            RhsValueKind::Cert(cpct)
-                                        } else {
-                                            RhsValueKind::Const(trimmed.to_string())
+                                    match parse_where_literal(&raw) {
+                                        Ok(rhs) => where_value.push((lv, o, rhs)),
+                                        Err(error) => {
+                                            *exec_error = Some(error);
+                                            return;
                                         }
-                                    } else if trimmed.contains('.')
-                                        && trimmed
-                                            .chars()
-                                            .all(|c| c.is_ascii_digit() || c == '.' || c == '-')
-                                    {
-                                        RhsValueKind::Decimal(trimmed.to_string())
-                                    } else if let Ok(iv) = trimmed.parse::<i64>() {
-                                        RhsValueKind::Int(iv)
-                                    } else {
-                                        RhsValueKind::Const(trimmed.to_string())
-                                    };
-                                    where_value.push((lv, o, rhs_kind));
+                                    }
                                 }
                             }
                         }
@@ -2525,11 +2309,7 @@ impl<'en> Engine<'en> {
                         }
                         if !where_value_var.is_empty() {
                             let posit_keeper = self.database.posit_keeper();
-                            let type_partitions = self.database.role_name_to_data_type_lookup();
-                            let aset_lookup = self.database.posit_thing_to_appearance_set_lookup();
                             let mut pk_guard = posit_keeper.lock().unwrap();
-                            let tp_guard = type_partitions.lock().unwrap();
-                            let aset_guard = aset_lookup.lock().unwrap();
                             bindings.retain(|b| {
                                 if interrupted(execution, exec_error) {
                                     return false;
@@ -2539,41 +2319,37 @@ impl<'en> Engine<'en> {
                                     let (rpid, rkind) = if let Some(t) = b.value_slots.get(r) { *t } else { if exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Unknown variable in predicate: {}", r))); } return false; };
                                     if lkind == VarKind::Time || rkind == VarKind::Time { continue; } // handled by where_time_var stage
                                     if lkind != VarKind::Value || rkind != VarKind::Value { if exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Non-value variable used in value predicate: {} or {}", l, r))); } return false; }
-                                    let l_roles = if let Some(app) = aset_guard.get(&lpid) { app.roles() } else { return false; };
-                                    let r_roles = if let Some(app) = aset_guard.get(&rpid) { app.roles() } else { return false; };
-                                    let l_allowed = tp_guard.lookup(&l_roles).cloned().unwrap_or_default();
-                                    let r_allowed = tp_guard.lookup(&r_roles).cloned().unwrap_or_default();
-                                    let ordering = matches!(op.as_str(), "<"|"<="|">"|">=");
-                                    macro_rules! grab_val { ($allowed:expr, $pid:expr, $numeric_first:expr) => {{
-                                        let mut out: Option<(String,String)> = None;
-                                        if out.is_none() && $numeric_first && $allowed.contains("Decimal") { if let Some(p)=pk_guard.posit::<Decimal>($pid) { out=Some((p.value().to_string(), "Decimal".to_string())); } }
-                                        if out.is_none() && $numeric_first && $allowed.contains("i64") { if let Some(p)=pk_guard.posit::<i64>($pid) { out=Some((p.value().to_string(), "i64".to_string())); } }
-                                        if out.is_none() && $allowed.contains("String") { if let Some(p)=pk_guard.posit::<String>($pid) { out=Some((p.value().to_string(), "String".to_string())); } }
-                                        if out.is_none() && $allowed.contains("JSON") { if let Some(p)=pk_guard.posit::<JSON>($pid) { out=Some((p.value().to_string(), "JSON".to_string())); } }
-                                        if out.is_none() && $allowed.contains("Certainty") { if let Some(p)=pk_guard.posit::<Certainty>($pid) { out=Some((p.value().to_string(), "Certainty".to_string())); } }
-                                        if out.is_none() && !$numeric_first && $allowed.contains("Decimal") { if let Some(p)=pk_guard.posit::<Decimal>($pid) { out=Some((p.value().to_string(), "Decimal".to_string())); } }
-                                        if out.is_none() && !$numeric_first && $allowed.contains("i64") { if let Some(p)=pk_guard.posit::<i64>($pid) { out=Some((p.value().to_string(), "i64".to_string())); } }
-                                        out
-                                    }}}
-                                    let l_val = grab_val!(l_allowed, lpid, ordering);
-                                    let r_val = grab_val!(r_allowed, rpid, ordering);
-                                    let (l_text, l_type) = if let Some(v)=l_val { v } else { return false; };
-                                    let (r_text, r_type) = if let Some(v)=r_val { v } else { return false; };
-                                    let pass = if ordering {
-                                        if (l_type=="Certainty") ^ (r_type=="Certainty") { if exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Ordering comparison requires both sides to be certainties or percent sign (%) certainty mismatch: {} {} {}", l, op, r))); } false }
-                                        else if l_type=="Certainty" && r_type=="Certainty" {
-                                            match (certainty_percent(&l_text), certainty_percent(&r_text)) {
-                                                (Some(lhs), Some(rhs)) => cmp_ordering(lhs.cmp(&rhs), op),
-                                                _ => false,
+                                    let Some(lhs) = pk_guard
+                                        .posit::<LiteralValue>(lpid)
+                                        .map(|posit| posit.value().clone())
+                                    else {
+                                        return false;
+                                    };
+                                    let Some(rhs) = pk_guard
+                                        .posit::<LiteralValue>(rpid)
+                                        .map(|posit| posit.value().clone())
+                                    else {
+                                        return false;
+                                    };
+                                    let comparison = if matches!(op.as_str(), "<" | "<=" | ">" | ">=") {
+                                        lhs.semantic_cmp(&rhs)
+                                            .map(|ordering| cmp_ordering(ordering, op))
+                                            .map_err(|error| {
+                                                format!("Ordering comparison not allowed: {error}")
+                                            })
+                                    } else if op == "=" || op == "==" {
+                                        lhs.nominally_equals(&rhs)
+                                    } else {
+                                        Err(format!("unsupported comparison operator '{op}'"))
+                                    };
+                                    let pass = match comparison {
+                                        Ok(pass) => pass,
+                                        Err(error) => {
+                                            if exec_error.is_none() {
+                                                *exec_error = Some(DatabaseError::Execution(error));
                                             }
-                                        } else if (l_type=="i64" || l_type=="Decimal") && (r_type=="i64" || r_type=="Decimal") {
-                                            use bigdecimal::BigDecimal; use std::str::FromStr; let lbd=BigDecimal::from_str(&l_text).unwrap_or_else(|_| BigDecimal::from(0)); let rbd=BigDecimal::from_str(&r_text).unwrap_or_else(|_| BigDecimal::from(0)); cmp_bigdecimal(&lbd,&rbd,op)
-                                        } else { if exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Ordering comparison not allowed for value variables: {}({}) {} {}({})", l, l_type, op, r, r_type))); } false }
-                                    } else { // equality
-                                        if op != "=" && op != "==" { if exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Unsupported comparison operator '{}' for value variables", op))); } false }
-                                        else if l_type=="Certainty" && r_type=="Certainty" { l_text==r_text }
-                                        else if (l_type=="i64"||l_type=="Decimal") && (r_type=="i64"||r_type=="Decimal") { use bigdecimal::BigDecimal; use std::str::FromStr; match (BigDecimal::from_str(&l_text), BigDecimal::from_str(&r_text)) { (Ok(lhs), Ok(rhs)) => cmp_bigdecimal(&lhs, &rhs, op), _ => false } }
-                                        else { l_text==r_text }
+                                            false
+                                        }
                                     };
                                     if !pass { return false; }
                                 }
@@ -2588,9 +2364,7 @@ impl<'en> Engine<'en> {
                         }
                         if !where_value.is_empty() {
                             let posit_keeper = self.database.posit_keeper();
-                            let type_partitions = self.database.role_name_to_data_type_lookup();
                             let mut pk_guard = posit_keeper.lock().unwrap();
-                            let tp_guard = type_partitions.lock().unwrap();
                             bindings.retain(|b| {
                                 if interrupted(execution, exec_error) {
                                     return false;
@@ -2599,73 +2373,40 @@ impl<'en> Engine<'en> {
                                     // locate lhs posit/value
                                     let (pid, vkind) = if let Some(tup) = b.value_slots.get(lhs) { *tup } else { if exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Unknown variable in predicate: {}", lhs))); } return false; };
                                     if vkind != VarKind::Value { if exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Non-value variable used in value predicate: {}", lhs))); } return false; }
-                                    // Determine allowed types for this posit
-                                    // We need appearance set to determine role datatypes; reuse logic from projection path.
-                                    let aset_lookup = self.database.posit_thing_to_appearance_set_lookup();
-                                    let aset_guard = aset_lookup.lock().unwrap();
-                                    let val_string_opt = if let Some(appset) = aset_guard.get(&pid) {
-                                        let roles = appset.roles();
-                                        let allowed = tp_guard.lookup(&roles).cloned().unwrap_or_default();
-                                        let ordering = matches!(op.as_str(), "<"|"<="|">"|">=");
-                                        // Generic ordering mismatch: if RHS numeric and allowed doesn't include a numeric type
-                                        if ordering {
-                                            match rhs {
-                                                RhsValueKind::Int(_) | RhsValueKind::Decimal(_) => {
-                                                    let numeric_allowed = allowed.contains("i64") || allowed.contains("Decimal");
-                                                    if !numeric_allowed {
-                                                        // If this variable is a certainty, produce the more helpful percent sign guidance.
-                                                        if allowed.contains("Certainty") {
-                                                            if exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Ordering comparison requires a percent sign (%) for certainty variable '{}' (e.g. 75%)", lhs))); }
-                                                        } else {
-                                                            if exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Ordering comparison not allowed: variable '{}' of non-numeric type used with '{}'", lhs, op))); }
-                                                        }
-                                                        return false;
-                                                    }
-                                                }
-                                                _ => {}
+                                    let Some(stored) = pk_guard
+                                        .posit::<LiteralValue>(pid)
+                                        .map(|posit| posit.value().clone())
+                                    else {
+                                        return false;
+                                    };
+                                    let ordering = matches!(op.as_str(), "<" | "<=" | ">" | ">=");
+                                    let comparison = if ordering {
+                                        stored
+                                            .semantic_cmp(rhs)
+                                            .map(|ordering| cmp_ordering(ordering, op))
+                                            .map_err(|error| {
+                                                let guidance = if stored.family()
+                                                    == LiteralFamily::Certainty
+                                                    || rhs.family() == LiteralFamily::Certainty
+                                                {
+                                                    "; certainty comparisons require a percent sign (%) on both sides"
+                                                } else {
+                                                    ""
+                                                };
+                                                format!("Ordering comparison not allowed: {error}{guidance}")
+                                            })
+                                    } else if op == "=" || op == "==" {
+                                        stored.nominally_equals(rhs)
+                                    } else {
+                                        Err(format!("unsupported comparison operator '{op}'"))
+                                    };
+                                    let pass = match comparison {
+                                        Ok(pass) => pass,
+                                        Err(error) => {
+                                            if exec_error.is_none() {
+                                                *exec_error = Some(DatabaseError::Execution(error));
                                             }
-                                        }
-                                        // Helper macros to attempt extraction
-                                        macro_rules! grab_string { ($t:ty, $label:expr) => { if allowed.contains($label) { if let Some(p) = pk_guard.posit::<$t>(pid) { Some(format!("{}", p.value())) } else { None } } else { None } }; }
-                                        // Try in a precedence order; note we only need the one matching RHS kind.
-                                        match rhs {
-                                            RhsValueKind::Int(_) => grab_string!(i64, "i64"),
-                                            RhsValueKind::Cert(_) => grab_string!(Certainty, "Certainty"),
-                                            RhsValueKind::Decimal(_) => grab_string!(Decimal, "Decimal").or(grab_string!(i64, "i64")),
-                                            RhsValueKind::String(_) | RhsValueKind::Const(_) => grab_string!(String, "String").or(grab_string!(JSON, "JSON")).or(grab_string!(Certainty, "Certainty")).or(grab_string!(i64, "i64")),
-                                        }
-                                    } else { None };
-                                    let lhs_val = if let Some(v) = val_string_opt { v } else { return false; };
-                                    // Detect ordering mismatch: certainty value (by display pattern) vs int/decimal RHS lacking %.
-                                    let ordering = matches!(op.as_str(), "<"|"<="|">"|">=");
-                                    if ordering
-                                        && matches!(rhs, RhsValueKind::Int(_) | RhsValueKind::Decimal(_)) && (lhs_val == "1" || lhs_val == "-1" || lhs_val == "0" || lhs_val.starts_with("0.") || lhs_val.starts_with("-0.")) {
-                                            if exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Ordering comparison requires a percent sign (%) for certainty variable '{}' (e.g. 75%)", lhs))); }
-                                            return false;
-                                        }
-                                    // Comparison dispatch
-                                    let pass = match rhs {
-                                        RhsValueKind::Int(r) => {
-                                            if let Ok(l) = lhs_val.parse::<i64>() { cmp_ordering(l.cmp(r), op) } else { if ["<","<=",">",">="].contains(&op.as_str()) && exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Type mismatch for ordering: value '{}' not comparable to int literal {}", lhs_val, r))); } false }
-                                        }
-                                        RhsValueKind::Cert(rpct) => {
-                                            // lhs_val is display (e.g., 0.75, -0.25, 1, -1, 0)
-                                            if let Some(lpct) = certainty_percent(&lhs_val) { cmp_ordering(lpct.cmp(rpct), op) } else { if ["<","<=",">",">="].contains(&op.as_str()) && exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Type mismatch for ordering: value '{}' not comparable to certainty literal {}%", lhs_val, rpct))); } false }
-                                        }
-                                        RhsValueKind::Decimal(rraw) => {
-                                            // compare as BigDecimal via string parse fallback to f64
-                                            use bigdecimal::BigDecimal; use std::str::FromStr;
-                                            let lbd = BigDecimal::from_str(&lhs_val).or_else(|_| BigDecimal::from_str("0")).unwrap();
-                                            let rbd = BigDecimal::from_str(rraw).or_else(|_| BigDecimal::from_str("0")).unwrap();
-                                            cmp_bigdecimal(&lbd, &rbd, op)
-                                        }
-                                        RhsValueKind::String(rstr) => {
-                                            if ["<","<=",">",">="].contains(&op.as_str()) { if exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Ordering comparison not allowed for string literal: {} {} '{}'", lhs, op, rstr))); } return false; }
-                                            if op == "=" || op == "==" { lhs_val == *rstr } else { false }
-                                        }
-                                        RhsValueKind::Const(rconst) => {
-                                            if ["<","<=",">",">="].contains(&op.as_str()) { if exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Ordering comparison not allowed for constant literal: {} {} '{}'", lhs, op, rconst))); } return false; }
-                                            if op == "=" || op == "==" { lhs_val == *rconst } else { false }
+                                            false
                                         }
                                     };
                                     if !pass { return false; }
@@ -2735,7 +2476,16 @@ impl<'en> Engine<'en> {
                                                         break;
                                                     }
                                                 } else {
-                                                    if allowed.contains("String")
+                                                    if allowed.contains("LiteralValue")
+                                                        && let Some(p) =
+                                                            pk_guard.posit::<LiteralValue>(*pid)
+                                                    {
+                                                        captured =
+                                                            Some(p.value().token().to_string());
+                                                        types_row.push("Literal".into());
+                                                    }
+                                                    if captured.is_none()
+                                                        && allowed.contains("String")
                                                         && let Some(p) =
                                                             pk_guard.posit::<String>(*pid)
                                                     {
