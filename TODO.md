@@ -159,7 +159,7 @@ The accepted decisions now define the required fixes.
             evaluation order must not change the meaning of a search.
         - Return typed errors for unknown variables, incompatible variable domains,
             invalid recalls, and unsupported comparisons.
-- [ ] **Freeze the reserved role vocabulary.**
+- [x] **Freeze the reserved role vocabulary.**
         - Reserve only `posit` and `ascertains` for beta, with fixed identities and
             names persisted as compatibility data (D006).
         - Treat `thing`, `class`, `classification`, `named`, `subclass`, and

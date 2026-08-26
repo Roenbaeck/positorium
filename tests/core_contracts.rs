@@ -1,4 +1,6 @@
-use positorium::construct::{Appearance, AppearanceSet, Posit, Role, ThingGenerator};
+use positorium::construct::{
+    ASCERTAINS_ROLE_ID, Appearance, AppearanceSet, POSIT_ROLE_ID, Posit, Role, ThingGenerator,
+};
 use positorium::construct::{Database, PersistenceMode};
 use positorium::datatype::{Certainty, Time};
 use positorium::traqula::{Engine, posits_involving_thing};
@@ -152,22 +154,15 @@ fn certainty_boundaries_and_consistency_follow_the_signed_scale() {
 fn only_assertion_roles_are_reserved_by_default() {
     let db = Database::new(PersistenceMode::InMemory).unwrap();
     assert_eq!(db.role_keeper().lock().unwrap().len(), 2);
-    assert!(
-        db.role_keeper()
-            .lock()
-            .unwrap()
-            .get("posit")
-            .unwrap()
-            .reserved()
-    );
-    assert!(
-        db.role_keeper()
-            .lock()
-            .unwrap()
-            .get("ascertains")
-            .unwrap()
-            .reserved()
-    );
+    let keeper = db.role_keeper();
+    let keeper = keeper.lock().unwrap();
+    let posit = keeper.get("posit").unwrap();
+    let ascertains = keeper.get("ascertains").unwrap();
+    assert!(posit.reserved());
+    assert!(ascertains.reserved());
+    assert_eq!(posit.role(), POSIT_ROLE_ID);
+    assert_eq!(ascertains.role(), ASCERTAINS_ROLE_ID);
+    drop(keeper);
     let (thing, existed) = db.create_role("thing".to_string(), false);
     assert!(!existed);
     assert!(!thing.reserved());

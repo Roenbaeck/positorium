@@ -165,3 +165,23 @@ fn integrity_verification_does_not_rewrite_a_bad_head() {
     drop(db);
     remove_database_files(&path);
 }
+
+#[test]
+#[cfg(feature = "persistence")]
+fn incompatible_builtin_role_metadata_fails_open() {
+    let path = temporary_database_path("builtin-role");
+    {
+        Database::new(PersistenceMode::File(path.clone())).expect("create database");
+    }
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute("update Role set Reserved = 0 where Role = 'posit'", [])
+        .unwrap();
+
+    let error = match Database::new(PersistenceMode::File(path.clone())) {
+        Ok(_) => panic!("incompatible built-in metadata must fail startup"),
+        Err(error) => error,
+    };
+    assert!(format!("{error}").contains("built-in role 'posit'"));
+    remove_database_files(&path);
+}

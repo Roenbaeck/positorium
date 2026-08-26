@@ -82,6 +82,10 @@ impl TypeMap {
 pub type Thing = u64;
 /// Reserved identity constant representing the initial lower bound for the generator.
 pub const GENESIS: Thing = 0;
+/// Fixed store-local identity of the built-in `posit` role.
+pub const POSIT_ROLE_ID: Thing = 1;
+/// Fixed store-local identity of the built-in `ascertains` role.
+pub const ASCERTAINS_ROLE_ID: Thing = 2;
 
 pub type ThingHasher = BuildHasherDefault<SeaHasher>;
 pub type OtherHasher = BuildHasherDefault<SeaHasher>;
@@ -642,10 +646,8 @@ impl Database {
             persistor.verify_integrity()?;
         }
 
-        // Reserve some roles that will be necessary for implementing features
-        // commonly found in many other (including non-tradtional) databases.
-        database.create_role(String::from("posit"), true);
-        database.create_role(String::from("ascertains"), true);
+        database.ensure_builtin_role(POSIT_ROLE_ID, "posit")?;
+        database.ensure_builtin_role(ASCERTAINS_ROLE_ID, "ascertains")?;
 
         Ok(database)
     }
@@ -713,6 +715,53 @@ impl Database {
     pub fn keep_role(&self, role: Role) -> (Arc<Role>, bool) {
         let (kept_role, previously_kept) = self.role_keeper.lock().unwrap().keep(role);
         (kept_role, previously_kept)
+    }
+    fn ensure_builtin_role(&self, identity: Thing, name: &str) -> Result<(), DatabaseError> {
+        {
+            let keeper = self
+                .role_keeper
+                .lock()
+                .map_err(|error| DatabaseError::Lock(error.to_string()))?;
+            if let Some(existing) = keeper.get(name) {
+                if existing.role() != identity || !existing.reserved() {
+                    return Err(DatabaseError::DataCorruption {
+                        message: format!(
+                            "built-in role '{name}' must be reserved identity {identity}, found identity {} (reserved={})",
+                            existing.role(),
+                            existing.reserved()
+                        ),
+                    });
+                }
+                return Ok(());
+            }
+            if let Some(existing) = keeper.lookup(&identity) {
+                return Err(DatabaseError::DataCorruption {
+                    message: format!(
+                        "built-in role identity {identity} belongs to '{}', expected '{name}'",
+                        existing.name()
+                    ),
+                });
+            }
+        }
+
+        self.thing_generator
+            .lock()
+            .map_err(|error| DatabaseError::Lock(error.to_string()))?
+            .retain(identity);
+        let (builtin_role, existed) = self.keep_role(Role::new(identity, name.to_string(), true));
+        debug_assert!(!existed);
+        #[cfg(not(feature = "persistence"))]
+        let _ = builtin_role;
+        #[cfg(feature = "persistence")]
+        {
+            let mut persistor = self
+                .persistor
+                .lock()
+                .map_err(|error| DatabaseError::Lock(error.to_string()))?;
+            persistor.persist_thing(&identity)?;
+            persistor.persist_role(&builtin_role)?;
+        }
+        Ok(())
     }
     pub fn create_role(&self, role_name: String, reserved: bool) -> (Arc<Role>, bool) {
         let role_thing = self.thing_generator.lock().unwrap().generate();
