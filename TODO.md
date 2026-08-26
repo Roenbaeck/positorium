@@ -402,7 +402,7 @@ posit replay.
             details explicitly unstable.
         - Remove the unreleased `create_apperance` compatibility shim while narrowing
             the API; no release exposed it, so no deprecation window is needed (D031).
-- [ ] **Unify structured results.**
+- [x] **Unify structured results.**
         - Use one lossless literal result model for Rust, HTTP, streaming, and WASM
             instead of mixing normalized values, datatype names, and tab-separated text.
 - [x] **Stabilize physical codec identifiers.**

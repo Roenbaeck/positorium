@@ -16,13 +16,13 @@ use std::time::{Duration, Instant};
 use crate::construct::Database;
 use crate::error::{DatabaseError, Result};
 use crate::traqula::{
-    CollectedResult, CollectedResultSet, Engine, ExecutionOptions, MultiStreamCallbacks, RowSink,
+    CollectedResult, CollectedResultSet, Engine, ExecutionOptions, MultiStreamCallbacks,
+    ResultCell, RowSink,
 };
 
-/// A single row emitted by the engine. For now it's just a line of text (stdout-compatible).
-/// This can be evolved into a structured enum once projection returns tuples.
+/// A structured row emitted by the engine.
 #[derive(Debug, Clone)]
-pub struct Row(pub String);
+pub struct Row(pub Vec<ResultCell>);
 
 /// Cancellation token shared with the worker thread.
 pub use crate::traqula::CancellationToken as CancelToken;
@@ -42,7 +42,7 @@ pub struct QueryHandle {
     cancel: CancelToken,
     started: Instant,
     join: Option<JoinHandle<Result<()>>>,
-    pub results: Option<Receiver<Row>>, // None when sink is stdout
+    pub results: Option<Receiver<Row>>, // None when result streaming was not requested
 }
 impl QueryHandle {
     /// Request cancellation (cooperative). The worker may take a short time to observe it.
@@ -148,7 +148,7 @@ impl QueryInterface {
                         .iter()
                         .flat_map(|result_set| result_set.rows.iter())
                     {
-                        if sender.send(Row(row.join("\t"))).is_err() {
+                        if sender.send(Row(row.clone())).is_err() {
                             break;
                         }
                     }

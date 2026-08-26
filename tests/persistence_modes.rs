@@ -85,7 +85,7 @@ fn every_literal_family_survives_append_only_restart_losslessly() {
     let result = Engine::new(&restored)
         .execute_collect("search [{(*, value)}, +literal, *] return literal;")
         .expect("query restored literals");
-    let mut tokens: Vec<String> = result.rows.into_iter().map(|row| row[0].clone()).collect();
+    let mut tokens: Vec<String> = result.rows.iter().map(|row| row[0].text.clone()).collect();
     tokens.sort();
     assert_eq!(
         tokens,

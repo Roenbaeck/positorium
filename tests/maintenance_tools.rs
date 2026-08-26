@@ -71,7 +71,7 @@ fn query_tokens(path: &Path) -> Vec<String> {
     let mut tokens = result
         .rows
         .into_iter()
-        .map(|row| row[0].clone())
+        .map(|row| row[0].text.clone())
         .collect::<Vec<_>>();
     tokens.sort();
     tokens

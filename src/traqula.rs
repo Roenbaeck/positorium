@@ -571,6 +571,52 @@ pub enum SinkFlow {
     Continue,
     Stop,
 }
+/// Stable kind tag for a projected result cell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResultCellKind {
+    Thing,
+    Literal,
+    Time,
+}
+
+/// One lossless projected value shared by Rust, HTTP, SSE, and WASM.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+pub struct ResultCell {
+    pub kind: ResultCellKind,
+    pub text: String,
+}
+
+impl ResultCell {
+    pub fn new(kind: ResultCellKind, text: impl Into<String>) -> Self {
+        Self {
+            kind,
+            text: text.into(),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.text
+    }
+}
+
+impl std::fmt::Display for ResultCell {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.text)
+    }
+}
+
+impl PartialEq<String> for ResultCell {
+    fn eq(&self, other: &String) -> bool {
+        self.text == *other
+    }
+}
+
+impl PartialEq<&str> for ResultCell {
+    fn eq(&self, other: &&str) -> bool {
+        self.text == *other
+    }
+}
 /// Simple sink trait for capturing projected result rows. Returning Stop requests the engine to halt emission early.
 pub trait RowSink {
     /// Called for each execution warning before rows are emitted.
@@ -583,7 +629,7 @@ pub trait RowSink {
         SinkFlow::Continue
     }
     /// Called for each projected row.
-    fn push(&mut self, row: Vec<String>, types: Vec<String>) -> SinkFlow;
+    fn push(&mut self, row: Vec<ResultCell>) -> SinkFlow;
 }
 
 /// Callback interface for multi-search streaming. Implementors receive framing events for each result set.
@@ -593,27 +639,27 @@ pub trait MultiStreamCallbacks {
     /// Called once at the beginning of a result set with its index (0-based), column names, and raw search snippet.
     fn on_result_set_start(&mut self, set_index: usize, columns: &[String], search_text: &str);
     /// Called for every row. Return false to request early termination of this result set.
-    fn on_row(&mut self, set_index: usize, row: Vec<String>, types: Vec<String>) -> bool;
+    fn on_row(&mut self, set_index: usize, row: Vec<ResultCell>) -> bool;
     /// Called when a result set finishes (naturally or via limit/early stop).
     fn on_result_set_end(&mut self, set_index: usize, row_count: usize, limited: bool);
 }
-#[derive(Debug)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct CollectedResult {
     pub columns: Vec<String>,
-    pub rows: Vec<Vec<String>>,
-    pub row_types: Vec<Vec<String>>,
+    pub rows: Vec<Vec<ResultCell>>,
     pub row_count: usize,
     pub limited: bool,
+    #[serde(skip)]
     pub metadata: ExecutionMetadata,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct CollectedResultSet {
     pub columns: Vec<String>,
-    pub rows: Vec<Vec<String>>,
-    pub row_types: Vec<Vec<String>>,
+    pub rows: Vec<Vec<ResultCell>>,
     pub row_count: usize,
     pub limited: bool,
     pub search: Option<String>,
+    #[serde(skip)]
     pub metadata: ExecutionMetadata,
 }
 
@@ -892,14 +938,14 @@ impl<'en> Engine<'en> {
                         fn on_meta(&mut self, columns: &[String]) -> SinkFlow {
                             self.inner.on_meta(columns)
                         }
-                        fn push(&mut self, row: Vec<String>, types: Vec<String>) -> SinkFlow {
+                        fn push(&mut self, row: Vec<ResultCell>) -> SinkFlow {
                             if let Some(l) = self.limit
                                 && self.count >= l
                             {
                                 self.limited = true;
                                 return SinkFlow::Stop;
                             }
-                            match self.inner.push(row, types) {
+                            match self.inner.push(row) {
                                 SinkFlow::Continue => {
                                     self.count += 1;
                                     SinkFlow::Continue
@@ -2546,18 +2592,21 @@ impl<'en> Engine<'en> {
                                 return;
                             }
                             info!(target:"positorium::stream", event="row_binding_iter", identities=b.identities.len(), value_slots=b.value_slots.len(), posit_vars=b.posit_vars.len());
-                            let mut row: Vec<String> = Vec::with_capacity(returns.len());
-                            let mut types_row: Vec<String> = Vec::with_capacity(returns.len());
+                            let mut row: Vec<ResultCell> = Vec::with_capacity(returns.len());
                             let mut row_ok = true;
                             for rv in &returns {
                                 match variable_kinds.get(rv) {
                                     Some(VarKind::Identity) => {
                                         if let Some(idt) = b.identities.get(rv) {
-                                            row.push(format!("{}", idt));
-                                            types_row.push("Thing".into());
+                                            row.push(ResultCell::new(
+                                                ResultCellKind::Thing,
+                                                idt.to_string(),
+                                            ));
                                         } else if let Some(pid) = b.posit_vars.get(rv) {
-                                            row.push(format!("{}", pid));
-                                            types_row.push("Thing".into());
+                                            row.push(ResultCell::new(
+                                                ResultCellKind::Thing,
+                                                pid.to_string(),
+                                            ));
                                         } else {
                                             info!(target:"positorium::stream", event="row_skip", reason="missing_identity", var=%rv);
                                             row_ok = false;
@@ -2567,19 +2616,19 @@ impl<'en> Engine<'en> {
                                     Some(VarKind::Value) | Some(VarKind::Time) => {
                                         if let Some((pid, kind)) = b.value_slots.get(rv) {
                                             let captured = if *kind == VarKind::Time {
-                                                if let Some(pt) = time_guard.get(pid) {
-                                                    types_row.push("Time".into());
-                                                    Some(pt.to_string())
-                                                } else {
-                                                    None
-                                                }
-                                            } else if let Some(p) =
-                                                pk_guard.posit::<LiteralValue>(*pid)
-                                            {
-                                                types_row.push("Literal".into());
-                                                Some(p.value().token().to_string())
+                                                time_guard.get(pid).map(|pt| {
+                                                    ResultCell::new(
+                                                        ResultCellKind::Time,
+                                                        pt.to_string(),
+                                                    )
+                                                })
                                             } else {
-                                                None
+                                                pk_guard.posit::<LiteralValue>(*pid).map(|p| {
+                                                    ResultCell::new(
+                                                        ResultCellKind::Literal,
+                                                        p.value().token(),
+                                                    )
+                                                })
                                             };
                                             if let Some(cell) = captured {
                                                 row.push(cell);
@@ -2602,7 +2651,7 @@ impl<'en> Engine<'en> {
                                     }
                                 }
                             }
-                            if row_ok && let SinkFlow::Stop = sink.push(row, types_row) {
+                            if row_ok && let SinkFlow::Stop = sink.push(row) {
                                 break;
                             }
                         }
@@ -2623,8 +2672,7 @@ impl<'en> Engine<'en> {
         self.execute_collect_multi(traqula).map(|_| ())
     }
 
-    /// Execute a script and collect printed row outputs (one Vec<String> per returned row).
-    /// This is a stop-gap until the search pipeline is refactored to emit structured rows directly.
+    /// Execute a script and collect one structured result cell per projected value.
     pub fn execute_collect(&self, traqula: &str) -> Result<CollectedResult, DatabaseError> {
         self.execute_collect_with_options(traqula, ExecutionOptions::default())
     }
@@ -2641,13 +2689,12 @@ impl<'en> Engine<'en> {
         let metadata = execution.metadata.clone();
         let mut variables: Variables = Variables::default();
         struct CollectSink {
-            rows: Vec<Vec<String>>,
-            types: Vec<Vec<String>>,
+            rows: Vec<Vec<ResultCell>>,
             limit: Option<usize>,
             limited: bool,
         }
         impl RowSink for CollectSink {
-            fn push(&mut self, row: Vec<String>, types: Vec<String>) -> SinkFlow {
+            fn push(&mut self, row: Vec<ResultCell>) -> SinkFlow {
                 if let Some(l) = self.limit
                     && self.rows.len() >= l
                 {
@@ -2655,13 +2702,11 @@ impl<'en> Engine<'en> {
                     return SinkFlow::Stop;
                 }
                 self.rows.push(row);
-                self.types.push(types);
                 SinkFlow::Continue
             }
         }
         let mut collector = CollectSink {
             rows: Vec::new(),
-            types: Vec::new(),
             limit: None,
             limited: false,
         };
@@ -2741,7 +2786,6 @@ impl<'en> Engine<'en> {
         Ok(CollectedResult {
             columns: cols,
             rows: collector.rows,
-            row_types: collector.types,
             row_count,
             limited,
             metadata,
@@ -2804,13 +2848,12 @@ impl<'en> Engine<'en> {
                 Rule::search => {
                     let mut search_variables: Variables = Variables::default();
                     struct LocalSink {
-                        rows: Vec<Vec<String>>,
-                        types: Vec<Vec<String>>,
+                        rows: Vec<Vec<ResultCell>>,
                         limit: Option<usize>,
                         limited: bool,
                     }
                     impl RowSink for LocalSink {
-                        fn push(&mut self, row: Vec<String>, types: Vec<String>) -> SinkFlow {
+                        fn push(&mut self, row: Vec<ResultCell>) -> SinkFlow {
                             if let Some(l) = self.limit
                                 && self.rows.len() >= l
                             {
@@ -2818,13 +2861,11 @@ impl<'en> Engine<'en> {
                                 return SinkFlow::Stop;
                             }
                             self.rows.push(row);
-                            self.types.push(types);
                             SinkFlow::Continue
                         }
                     }
                     let mut sink = LocalSink {
                         rows: Vec::new(),
-                        types: Vec::new(),
                         limit: None,
                         limited: false,
                     };
@@ -2864,7 +2905,6 @@ impl<'en> Engine<'en> {
                     results.push(CollectedResultSet {
                         columns: cols,
                         rows: sink.rows,
-                        row_types: sink.types,
                         row_count,
                         limited,
                         search: Some(raw_search_string),
@@ -2969,8 +3009,8 @@ impl<'en> Engine<'en> {
                                 .on_result_set_start(self.idx, columns, self.search_text);
                             SinkFlow::Continue
                         }
-                        fn push(&mut self, row: Vec<String>, types: Vec<String>) -> SinkFlow {
-                            if self.cb.on_row(self.idx, row, types) {
+                        fn push(&mut self, row: Vec<ResultCell>) -> SinkFlow {
+                            if self.cb.on_row(self.idx, row) {
                                 SinkFlow::Continue
                             } else {
                                 SinkFlow::Stop
@@ -2987,14 +3027,14 @@ impl<'en> Engine<'en> {
                         fn on_meta(&mut self, columns: &[String]) -> SinkFlow {
                             self.inner.on_meta(columns)
                         }
-                        fn push(&mut self, row: Vec<String>, types: Vec<String>) -> SinkFlow {
+                        fn push(&mut self, row: Vec<ResultCell>) -> SinkFlow {
                             if let Some(l) = self.limit
                                 && self.count >= l
                             {
                                 self.limited = true;
                                 return SinkFlow::Stop;
                             }
-                            match self.inner.push(row, types) {
+                            match self.inner.push(row) {
                                 SinkFlow::Continue => {
                                     self.count += 1;
                                     SinkFlow::Continue

@@ -28,7 +28,7 @@ fn numeric_var_equality() {
     let mut pairs: Vec<(String, String)> = res
         .rows
         .into_iter()
-        .map(|r| (r[0].clone(), r[1].clone()))
+        .map(|r| (r[0].text.clone(), r[1].text.clone()))
         .collect();
     pairs.sort();
     assert_eq!(

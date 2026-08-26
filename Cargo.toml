@@ -13,7 +13,7 @@ default = ["server", "persistence", "cli"]
 server = ["tokio", "axum", "tokio-stream", "futures-util", "tower-http"]
 persistence = ["getrandom"]
 cli = ["config"]
-wasm = ["wasm-bindgen", "getrandom/js"]
+wasm = ["wasm-bindgen", "serde-wasm-bindgen", "getrandom/js"]
 
 [dependencies]
 # core dependencies
@@ -34,6 +34,7 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["fmt", "env-filter"] }
 unicode-normalization = "0.1"
 wasm-bindgen = { version = "0.2.100", optional = true }
+serde-wasm-bindgen = { version = "0.6", optional = true }
 getrandom = { version = "0.2", features = ["js"], optional = true }
 
 # Optional dependencies for features

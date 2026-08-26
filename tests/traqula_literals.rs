@@ -22,7 +22,7 @@ fn results_preserve_complete_literal_tokens() {
         )
         .expect("lossless literal script");
 
-    let mut tokens: Vec<String> = result.rows.into_iter().map(|row| row[0].clone()).collect();
+    let mut tokens: Vec<String> = result.rows.iter().map(|row| row[0].text.clone()).collect();
     tokens.sort();
     assert_eq!(
         tokens,
@@ -35,9 +35,10 @@ fn results_preserve_complete_literal_tokens() {
     );
     assert!(
         result
-            .row_types
+            .rows
             .iter()
-            .all(|types| types == &["Literal".to_string()])
+            .flatten()
+            .all(|cell| { cell.kind == positorium::ResultCellKind::Literal })
     );
 }
 

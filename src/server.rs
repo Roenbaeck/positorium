@@ -2,7 +2,7 @@ use crate::error::DatabaseError;
 use crate::interface::QueryInterface;
 use crate::traqula::{
     CancellationToken, CollectedResultSet, ExecutionOptions, ExecutionWarning,
-    MultiStreamCallbacks, RowSink, SinkFlow, script_counts,
+    MultiStreamCallbacks, ResultCell, RowSink, SinkFlow, script_counts,
 };
 use axum::extract::{DefaultBodyLimit, State, rejection::JsonRejection};
 use axum::http::{HeaderValue, Method, StatusCode, header};
@@ -141,13 +141,11 @@ pub struct QueryResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub columns: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub row_types: Option<Vec<Vec<String>>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub row_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limited: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub rows: Option<Vec<Vec<String>>>,
+    pub rows: Option<Vec<Vec<ResultCell>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -157,10 +155,9 @@ pub struct QueryResponse {
 #[derive(Serialize)]
 pub struct MultiResultSet {
     pub columns: Vec<String>,
-    pub row_types: Vec<Vec<String>>,
     pub row_count: usize,
     pub limited: bool,
-    pub rows: Vec<Vec<String>>,
+    pub rows: Vec<Vec<ResultCell>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub search: Option<String>,
 }
@@ -280,7 +277,6 @@ async fn query(
                     elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
                     warnings: Some(result.metadata.warnings),
                     columns: Some(result.columns),
-                    row_types: Some(result.row_types),
                     row_count: Some(result.row_count),
                     limited: Some(result.limited),
                     rows: Some(result.rows),
@@ -305,7 +301,6 @@ async fn query(
                     elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
                     warnings: Some(warnings),
                     columns: None,
-                    row_types: None,
                     row_count: Some(total_rows),
                     limited: None,
                     rows: None,
@@ -335,7 +330,6 @@ impl From<CollectedResultSet> for MultiResultSet {
     fn from(result: CollectedResultSet) -> Self {
         Self {
             columns: result.columns,
-            row_types: result.row_types,
             row_count: result.row_count,
             limited: result.limited,
             rows: result.rows,
@@ -427,12 +421,11 @@ impl RowSink for StreamingSink {
         self.send(event)
     }
 
-    fn push(&mut self, row: Vec<String>, types: Vec<String>) -> SinkFlow {
+    fn push(&mut self, row: Vec<ResultCell>) -> SinkFlow {
         let event = serde_json::json!({
             "version": 1,
             "event": "row",
-            "row": row,
-            "types": types
+            "row": row
         });
         let flow = self.send(event);
         if matches!(flow, SinkFlow::Continue) {
@@ -480,13 +473,12 @@ impl MultiStreamCallbacks for StreamingCallbacks {
         self.send(event);
     }
 
-    fn on_row(&mut self, index: usize, row: Vec<String>, types: Vec<String>) -> bool {
+    fn on_row(&mut self, index: usize, row: Vec<ResultCell>) -> bool {
         let event = serde_json::json!({
             "version": 1,
             "event": "row",
             "index": index,
-            "row": row,
-            "types": types
+            "row": row
         });
         if self.send(event) {
             self.total_rows += 1;
@@ -561,7 +553,6 @@ fn error_response(status: StatusCode, started: Instant, error: impl Into<String>
             elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
             warnings: None,
             columns: None,
-            row_types: None,
             row_count: None,
             limited: None,
             rows: None,

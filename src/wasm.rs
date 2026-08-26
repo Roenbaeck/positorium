@@ -3,6 +3,14 @@ use crate::traqula::Engine;
 use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 
+pub const WASM_INTERFACE_VERSION: &str = "1";
+
+#[derive(serde::Serialize)]
+struct WasmQueryResponse {
+    interface_version: &'static str,
+    result_sets: Vec<crate::traqula::CollectedResultSet>,
+}
+
 #[wasm_bindgen]
 pub struct WasmEngine {
     db: Arc<Database>,
@@ -17,29 +25,16 @@ impl WasmEngine {
         Ok(WasmEngine { db: Arc::new(db) })
     }
 
-    pub fn execute(&self, script: &str) -> Result<String, JsValue> {
+    pub fn execute(&self, script: &str) -> Result<JsValue, JsValue> {
         let engine = Engine::new(&self.db);
-        match engine.execute_collect(script) {
-            Ok(output) => {
-                // For now, join rows by newline for a simple text output
-                let mut result = String::new();
-                if !output.columns.is_empty() {
-                    result.push_str(&output.columns.join("\t"));
-                    result.push('\n');
-                    result.push_str(&"-".repeat(result.len()));
-                    result.push('\n');
-                }
-                for row in output.rows {
-                    result.push_str(&row.join("\t"));
-                    result.push('\n');
-                }
-                if output.limited {
-                    result.push_str("... (limited)\n");
-                }
-                Ok(result)
-            }
-            Err(e) => Err(JsValue::from_str(&e.to_string())),
-        }
+        let result_sets = engine
+            .execute_collect_multi(script)
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        serde_wasm_bindgen::to_value(&WasmQueryResponse {
+            interface_version: WASM_INTERFACE_VERSION,
+            result_sets,
+        })
+        .map_err(|error| JsValue::from_str(&error.to_string()))
     }
 }
 
@@ -61,13 +56,13 @@ mod tests {
     fn test_wasm_execution() {
         let engine = WasmEngine::new().expect("Failed to create engine");
         // Simple script to test integration
-        let script =
-            "add role person; add posit [{(+a, person)}, \"Alice\", @NOW]; search person -> *;";
+        let script = "add role person; add posit [{(+a, person)}, \"Alice\", @NOW]; search [{(*, person)}, +name, *] return name;";
         let output = engine.execute(script).expect("Execution failed");
 
-        // Check if output contains our expected value
-        assert!(output.contains("Alice"));
-        assert!(output.contains("person"));
+        let output: serde_json::Value = serde_wasm_bindgen::from_value(output).unwrap();
+        assert_eq!(output["interface_version"], "1");
+        assert_eq!(output["result_sets"][0]["rows"][0][0]["text"], "\"Alice\"");
+        assert_eq!(output["result_sets"][0]["rows"][0][0]["kind"], "literal");
     }
 
     #[wasm_bindgen_test]
