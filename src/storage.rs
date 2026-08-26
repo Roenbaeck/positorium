@@ -22,8 +22,8 @@ const LOG_NAME: &str = "log-0000000000000001.ptl";
 const MANIFEST_MAGIC: &[u8; 8] = b"POSITPMF";
 const LOG_MAGIC: &[u8; 8] = b"POSITLOG";
 const FRAME_MAGIC: &[u8; 4] = b"PTR1";
-const FORMAT_MAJOR: u16 = 1;
-const FORMAT_MINOR: u16 = 0;
+pub(crate) const FORMAT_MAJOR: u16 = 1;
+pub(crate) const FORMAT_MINOR: u16 = 0;
 const MANIFEST_HEADER_LEN: u32 = 48;
 const LOG_HEADER_LEN: u32 = 64;
 const MAX_FRAME_SIZE: usize = 16 * 1024 * 1024;
@@ -150,6 +150,16 @@ pub(crate) struct LogStore {
     batches: Vec<Vec<StoredRecord>>,
     next_sequence: u64,
     next_batch: u64,
+    poisoned: bool,
+}
+
+pub(crate) struct StoreSnapshot {
+    directory: PathBuf,
+    _lock: File,
+    log: File,
+    manifest: Manifest,
+    batches: Vec<Vec<StoredRecord>>,
+    file_length: u64,
 }
 
 impl LogStore {
@@ -211,6 +221,7 @@ impl LogStore {
             batches,
             next_sequence,
             next_batch,
+            poisoned: false,
         })
     }
 
@@ -227,11 +238,136 @@ impl LogStore {
     }
 }
 
+impl StoreSnapshot {
+    pub(crate) fn open(path: impl AsRef<Path>) -> Result<Self> {
+        let directory = path.as_ref().to_path_buf();
+        if !directory.is_dir() {
+            return Err(DatabaseError::Persistence(format!(
+                "store '{}' is not a directory",
+                directory.display()
+            )));
+        }
+        let lock_path = directory.join(LOCK_NAME);
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+            .map_err(DatabaseError::from_io)?;
+        File::try_lock_shared(&lock).map_err(|error| {
+            DatabaseError::Persistence(format!(
+                "store '{}' is currently owned by a writer: {error:?}",
+                directory.display()
+            ))
+        })?;
+
+        let manifest = read_manifest(&directory.join(MANIFEST_NAME))?;
+        let mut log = File::open(directory.join(LOG_NAME)).map_err(DatabaseError::from_io)?;
+        verify_log_header(&mut log, manifest.store_uuid)?;
+        let file_length = log.metadata().map_err(DatabaseError::from_io)?.len();
+        if manifest.committed_length < u64::from(LOG_HEADER_LEN)
+            || manifest.committed_length > file_length
+        {
+            return Err(DatabaseError::DataCorruption {
+                message: format!(
+                    "manifest committed length {} is invalid for log length {}",
+                    manifest.committed_length, file_length
+                ),
+            });
+        }
+        let (batches, _, _) = replay_committed(&mut log, manifest.committed_length)?;
+        Ok(Self {
+            directory,
+            _lock: lock,
+            log,
+            manifest,
+            batches,
+            file_length,
+        })
+    }
+
+    pub(crate) fn store_uuid(&self) -> [u8; 16] {
+        self.manifest.store_uuid
+    }
+
+    pub(crate) fn committed_length(&self) -> u64 {
+        self.manifest.committed_length
+    }
+
+    pub(crate) fn file_length(&self) -> u64 {
+        self.file_length
+    }
+
+    pub(crate) fn batch_count(&self) -> usize {
+        self.batches.len()
+    }
+
+    pub(crate) fn replay_logical(&self) -> Result<ReplayedStore> {
+        replay_logical(self.manifest.store_uuid, &self.batches)
+    }
+
+    pub(crate) fn backup_to(&mut self, destination: impl AsRef<Path>) -> Result<()> {
+        let destination = destination.as_ref();
+        if destination.exists() {
+            return Err(DatabaseError::Persistence(format!(
+                "backup destination '{}' already exists",
+                destination.display()
+            )));
+        }
+        std::fs::create_dir(destination).map_err(DatabaseError::from_io)?;
+
+        let backup_lock = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .open(destination.join(LOCK_NAME))
+            .map_err(DatabaseError::from_io)?;
+        backup_lock.sync_all().map_err(DatabaseError::from_io)?;
+
+        let mut backup_log = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(destination.join(LOG_NAME))
+            .map_err(DatabaseError::from_io)?;
+        self.log
+            .seek(SeekFrom::Start(0))
+            .map_err(DatabaseError::from_io)?;
+        let mut committed = (&mut self.log).take(self.manifest.committed_length);
+        let copied =
+            std::io::copy(&mut committed, &mut backup_log).map_err(DatabaseError::from_io)?;
+        if copied != self.manifest.committed_length {
+            return Err(DatabaseError::Persistence(format!(
+                "backup copied {copied} log bytes; expected {}",
+                self.manifest.committed_length
+            )));
+        }
+        backup_log.sync_all().map_err(DatabaseError::from_io)?;
+
+        let manifest_bytes =
+            std::fs::read(self.directory.join(MANIFEST_NAME)).map_err(DatabaseError::from_io)?;
+        let mut backup_manifest = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(destination.join(MANIFEST_NAME))
+            .map_err(DatabaseError::from_io)?;
+        backup_manifest
+            .write_all(&manifest_bytes)
+            .and_then(|_| backup_manifest.sync_all())
+            .map_err(DatabaseError::from_io)?;
+        sync_directory(destination)?;
+        sync_parent_directory(destination)?;
+        Ok(())
+    }
+}
+
 pub(crate) fn role_record(role: &Role) -> PendingRecord {
+    role_record_parts(role.role(), role.name(), role.reserved())
+}
+
+pub(crate) fn role_record_parts(identity: Thing, name: &str, reserved: bool) -> PendingRecord {
     let mut payload = Vec::new();
-    payload.extend_from_slice(&role.role().to_le_bytes());
-    payload.push(u8::from(role.reserved()));
-    encode_text(role.name(), &mut payload);
+    payload.extend_from_slice(&identity.to_le_bytes());
+    payload.push(u8::from(reserved));
+    encode_text(name, &mut payload);
     PendingRecord::new(RECORD_ROLE, payload)
 }
 
@@ -265,6 +401,15 @@ pub(crate) fn posit_record_parts(
         .iter()
         .map(|appearance| (appearance.role().role(), appearance.thing()))
         .collect();
+    posit_record_logical(identity, &mut appearances, value, time)
+}
+
+pub(crate) fn posit_record_logical(
+    identity: Thing,
+    appearances: &mut [(Thing, Thing)],
+    value: &LiteralValue,
+    time: &Time,
+) -> Result<PendingRecord> {
     appearances.sort_unstable();
     if appearances.windows(2).any(|pair| pair[0].0 == pair[1].0) {
         return Err(DatabaseError::InvalidAppearanceSet(
@@ -274,7 +419,7 @@ pub(crate) fn posit_record_parts(
     let mut payload = Vec::new();
     payload.extend_from_slice(&identity.to_le_bytes());
     encode_uleb128(appearances.len() as u64, &mut payload);
-    for (role, thing) in appearances {
+    for &(role, thing) in appearances.iter() {
         payload.extend_from_slice(&role.to_le_bytes());
         payload.extend_from_slice(&thing.to_le_bytes());
     }
@@ -321,7 +466,7 @@ fn encode_time(time: &Time, target: &mut Vec<u8>) {
 fn replay_logical(store_uuid: [u8; 16], batches: &[Vec<StoredRecord>]) -> Result<ReplayedStore> {
     let mut roles_by_identity: HashMap<Thing, ReplayedRole> = HashMap::new();
     let mut identities_by_name: HashMap<String, Thing> = HashMap::new();
-    let mut posit_identities = HashSet::new();
+    let mut construct_identities = HashSet::new();
     let mut propositions = HashSet::new();
     let mut roles = Vec::new();
     let mut posits = Vec::new();
@@ -333,6 +478,7 @@ fn replay_logical(store_uuid: [u8; 16], batches: &[Vec<StoredRecord>]) -> Result
                     let role = decode_role(&record.payload)?;
                     if roles_by_identity.contains_key(&role.identity)
                         || identities_by_name.contains_key(&role.name)
+                        || !construct_identities.insert(role.identity)
                     {
                         return record_corruption(record, "duplicate or conflicting Role record");
                     }
@@ -352,8 +498,8 @@ fn replay_logical(store_uuid: [u8; 16], batches: &[Vec<StoredRecord>]) -> Result
                         return record_corruption(record, "Posit precedes required raw codec");
                     }
                     let posit = decode_posit(&record.payload)?;
-                    if !posit_identities.insert(posit.identity) {
-                        return record_corruption(record, "duplicate Posit identity");
+                    if !construct_identities.insert(posit.identity) {
+                        return record_corruption(record, "duplicate Role or Posit identity");
                     }
                     if posit
                         .appearances
@@ -415,6 +561,9 @@ fn decode_role(payload: &[u8]) -> Result<ReplayedRole> {
     use unicode_normalization::UnicodeNormalization;
     let mut cursor = 0;
     let identity = take_u64(payload, &mut cursor, "Role identity")?;
+    if identity == 0 {
+        return corruption("Role identity 0 is reserved for genesis");
+    }
     let reserved = match take_byte(payload, &mut cursor, "Role reserved flag")? {
         0 => false,
         1 => true,
@@ -453,6 +602,9 @@ fn decode_raw_codec(payload: &[u8]) -> Result<()> {
 fn decode_posit(payload: &[u8]) -> Result<ReplayedPosit> {
     let mut cursor = 0;
     let identity = take_u64(payload, &mut cursor, "Posit identity")?;
+    if identity == 0 {
+        return corruption("Posit identity 0 is reserved for genesis");
+    }
     let count = usize::try_from(decode_uleb128(payload, &mut cursor)?).map_err(|_| {
         DatabaseError::DataCorruption {
             message: "appearance count exceeds addressable memory".to_string(),
@@ -462,6 +614,9 @@ fn decode_posit(payload: &[u8]) -> Result<ReplayedPosit> {
     for _ in 0..count {
         let role = take_u64(payload, &mut cursor, "appearance Role")?;
         let thing = take_u64(payload, &mut cursor, "appearing Thing")?;
+        if role == 0 || thing == 0 {
+            return corruption("appearance identities cannot use genesis identity 0");
+        }
         appearances.push((role, thing));
     }
     if appearances.is_empty()
@@ -554,6 +709,12 @@ fn record_corruption<T>(record: &StoredRecord, message: impl Into<String>) -> Re
 
 impl StoreBackend for LogStore {
     fn append_batch(&mut self, records: &[PendingRecord]) -> Result<Vec<StoredRecord>> {
+        if self.poisoned {
+            return Err(DatabaseError::Persistence(
+                "store writer is fail-closed after an earlier uncertain write; reopen the store"
+                    .to_string(),
+            ));
+        }
         validate_pending_records(records)?;
         let old_length = self.manifest.committed_length;
         let mut sequence = self.next_sequence;
@@ -590,11 +751,15 @@ impl StoreBackend for LogStore {
         };
         framed.extend_from_slice(&encode_frame(&commit)?);
 
-        self.log
+        if let Err(error) = self
+            .log
             .seek(SeekFrom::Start(old_length))
             .and_then(|_| self.log.write_all(&framed))
             .and_then(|_| self.log.sync_all())
-            .map_err(DatabaseError::from_io)?;
+        {
+            self.poisoned = true;
+            return Err(DatabaseError::from_io(error));
+        }
         let new_length = old_length
             .checked_add(framed.len() as u64)
             .ok_or_else(|| DatabaseError::Invariant("log length exhausted".to_string()))?;
@@ -602,7 +767,10 @@ impl StoreBackend for LogStore {
             store_uuid: self.manifest.store_uuid,
             committed_length: new_length,
         };
-        write_manifest(&self.directory, &new_manifest)?;
+        if let Err(error) = write_manifest(&self.directory, &new_manifest) {
+            self.poisoned = true;
+            return Err(error);
+        }
 
         self.manifest = new_manifest;
         self.next_sequence = sequence
@@ -621,6 +789,12 @@ impl StoreBackend for LogStore {
     }
 
     fn flush(&mut self) -> Result<()> {
+        if self.poisoned {
+            return Err(DatabaseError::Persistence(
+                "store writer is fail-closed after an earlier uncertain write; reopen the store"
+                    .to_string(),
+            ));
+        }
         self.log.sync_all().map_err(DatabaseError::from_io)
     }
 }
@@ -669,6 +843,7 @@ fn initialize_store(directory: &Path) -> Result<Manifest> {
         committed_length: u64::from(LOG_HEADER_LEN),
     };
     write_manifest(directory, &manifest)?;
+    sync_parent_directory(directory)?;
     Ok(manifest)
 }
 
@@ -760,12 +935,22 @@ fn write_manifest(directory: &Path, manifest: &Manifest) -> Result<()> {
     Ok(())
 }
 
-fn sync_directory(directory: &Path) -> Result<()> {
+pub(crate) fn sync_directory(directory: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         File::open(directory)
             .and_then(|file| file.sync_all())
             .map_err(DatabaseError::from_io)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn sync_parent_directory(path: &Path) -> Result<()> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty());
+    if let Some(parent) = parent {
+        sync_directory(parent)?;
     }
     Ok(())
 }
@@ -1177,7 +1362,7 @@ fn frame_io_error(offset: u64, sequence: Option<u64>, error: std::io::Error) -> 
 }
 
 impl DatabaseError {
-    fn from_io(error: std::io::Error) -> Self {
+    pub(crate) fn from_io(error: std::io::Error) -> Self {
         Self::Persistence(error.to_string())
     }
 }
@@ -1307,6 +1492,34 @@ mod tests {
         assert!(
             error.to_string().contains("duplicate Posit proposition"),
             "{error}"
+        );
+
+        let mut duplicate_role = vec![
+            stored(role_record(&posit_role), 1),
+            stored(role_record(&posit_role), 2),
+        ];
+        duplicate_role.push(stored(role_record(&ascertains_role), 3));
+        duplicate_role.push(stored(raw_codec_record(), 4));
+        let error = replay_logical([8; 16], &[duplicate_role]).unwrap_err();
+        assert!(error.to_string().contains("duplicate or conflicting Role"));
+    }
+
+    #[test]
+    fn logical_replay_rejects_unknown_required_codecs() {
+        let posit_role = Role::new(1, "posit".to_string(), true);
+        let ascertains_role = Role::new(2, "ascertains".to_string(), true);
+        let mut codec = raw_codec_record();
+        codec.payload[2..4].copy_from_slice(&2u16.to_le_bytes());
+        let batch = vec![
+            stored(role_record(&posit_role), 1),
+            stored(role_record(&ascertains_role), 2),
+            stored(codec, 3),
+        ];
+        let error = replay_logical([9; 16], &[batch]).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("unknown or malformed required codec")
         );
     }
 
@@ -1442,5 +1655,108 @@ mod tests {
         assert!(message.contains("byte offset 64"));
         assert!(message.contains("record sequence 1"));
         assert!(message.contains("checksum mismatch"));
+    }
+
+    #[test]
+    fn unsupported_frame_versions_fail_without_rewriting_the_log() {
+        let directory = TemporaryStore::new("frame-version");
+        {
+            let mut store = LogStore::open(&directory.0).unwrap();
+            store
+                .append_batch(&[PendingRecord::new(RECORD_ROLE, b"role".to_vec())])
+                .unwrap();
+        }
+        let log_path = directory.0.join(LOG_NAME);
+        let mut bytes = std::fs::read(&log_path).unwrap();
+        bytes[LOG_HEADER_LEN as usize + 4] = 2;
+        std::fs::write(&log_path, &bytes).unwrap();
+
+        let error = match LogStore::open(&directory.0) {
+            Ok(_) => panic!("unsupported committed frame version must fail"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("unsupported frame version"));
+        assert_eq!(std::fs::read(&log_path).unwrap(), bytes);
+    }
+
+    #[test]
+    fn malformed_payload_lengths_are_bounded_before_allocation() {
+        let directory = TemporaryStore::new("frame-length");
+        {
+            let mut store = LogStore::open(&directory.0).unwrap();
+            store
+                .append_batch(&[PendingRecord::new(RECORD_ROLE, vec![0xff; 32])])
+                .unwrap();
+        }
+        let log_path = directory.0.join(LOG_NAME);
+        let mut bytes = std::fs::read(&log_path).unwrap();
+        bytes[LOG_HEADER_LEN as usize + 16] = 0xff;
+        std::fs::write(&log_path, &bytes).unwrap();
+        let error = match LogStore::open(&directory.0) {
+            Ok(_) => panic!("malformed committed length must fail"),
+            Err(error) => error,
+        };
+        let message = error.to_string();
+        assert!(message.contains("byte offset 64"), "{message}");
+        assert!(
+            message.contains("ULEB128") || message.contains("frame length"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn every_uncommitted_tail_prefix_is_discarded_but_the_commit_is_preserved() {
+        let source = TemporaryStore::new("tail-source");
+        let (base_length, base_manifest) = {
+            let mut store = LogStore::open(&source.0).unwrap();
+            store
+                .append_batch(&[PendingRecord::new(RECORD_ROLE, b"first".to_vec())])
+                .unwrap();
+            let length = store.committed_length();
+            let manifest = std::fs::read(source.0.join(MANIFEST_NAME)).unwrap();
+            store
+                .append_batch(&[PendingRecord::new(RECORD_ROLE, b"second".to_vec())])
+                .unwrap();
+            (length, manifest)
+        };
+        let complete_log = std::fs::read(source.0.join(LOG_NAME)).unwrap();
+        let committed_prefix = &complete_log[..base_length as usize];
+        let uncommitted_batch = &complete_log[base_length as usize..];
+
+        for tail_length in 0..=uncommitted_batch.len() {
+            let candidate = TemporaryStore::new(&format!("tail-cut-{tail_length}"));
+            std::fs::create_dir_all(&candidate.0).unwrap();
+            std::fs::write(candidate.0.join(LOCK_NAME), []).unwrap();
+            std::fs::write(candidate.0.join(MANIFEST_NAME), &base_manifest).unwrap();
+            let mut log = committed_prefix.to_vec();
+            log.extend_from_slice(&uncommitted_batch[..tail_length]);
+            std::fs::write(candidate.0.join(LOG_NAME), log).unwrap();
+
+            let reopened = LogStore::open(&candidate.0).unwrap();
+            assert_eq!(reopened.replay().len(), 1);
+            assert_eq!(
+                std::fs::metadata(candidate.0.join(LOG_NAME)).unwrap().len(),
+                base_length
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_committed_log_file_is_corruption_not_a_new_store() {
+        let directory = TemporaryStore::new("empty-log");
+        {
+            let _store = LogStore::open(&directory.0).unwrap();
+        }
+        let log_path = directory.0.join(LOG_NAME);
+        std::fs::write(&log_path, []).unwrap();
+        let error = match LogStore::open(&directory.0) {
+            Ok(_) => panic!("empty committed log must fail"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("committed length")
+                || error.to_string().contains("failed to fill whole buffer")
+        );
+        assert_eq!(std::fs::metadata(log_path).unwrap().len(), 0);
     }
 }

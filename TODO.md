@@ -112,7 +112,7 @@ The accepted decisions now define the required fixes.
             and symmetric collections require reified relation/membership identities.
         - Add canonical modeling examples for aliases, tags, memberships, and n-ary
             relations with repeated participant roles.
-- [ ] **Implement the WYSIWYG literal-value contract.**
+- [x] **Implement the WYSIWYG literal-value contract.**
         - Preserve the user-visible literal and its expressed precision, scale,
             spelling, or structure independently of its physical encoding.
         - Preserve the complete UTF-8 value token as identity-bearing, including
@@ -338,15 +338,16 @@ posit replay.
         - Do not require a rolling cryptographic chain in beta. Reserve a manifest
             feature flag for a future optional BLAKE3 chain over committed framed bytes
             in sequence order, without calling it tamper-proof absent a trusted anchor.
-- [ ] **Provide native transfer and inspection tools.**
+- [x] **Provide native transfer and inspection tools.**
         - Provide a stable logical export/dump format using `(store UUID, local u64)`
             for external identities. Import must remap every identity and internal
-            reference; foreign local identifiers are never retained verbatim (D003).
+            reference; foreign local identifiers are never retained verbatim except
+            for the fixed D006 built-in Role mappings (D003).
         - Remove the unpublished SQLite prototype path and `rusqlite` dependency;
             the first append-only beta format starts the compatibility window (D031).
         - Hold the store's read/backup lock while copying the manifest and logs through
             a recorded committed length; exclude uncommitted tail bytes (D023).
-- [ ] **Plan format evolution without premature compaction work.**
+- [x] **Plan format evolution without premature compaction work.**
         - Reserve a path for snapshots, indexes, and compaction without requiring
             them for the first beta.
         - Make every engine read its current format and at least the immediately
@@ -404,7 +405,7 @@ posit replay.
 - [ ] **Unify structured results.**
         - Use one lossless literal result model for Rust, HTTP, streaming, and WASM
             instead of mixing normalized values, datatype names, and tab-separated text.
-- [ ] **Stabilize physical codec identifiers.**
+- [x] **Stabilize physical codec identifiers.**
         - Record the closed hidden registry of immutable `(codec identifier, codec
             version)` pairs and add checks that prevent pair reuse (D026).
         - Require every codec to reconstruct the same logical literal regardless of

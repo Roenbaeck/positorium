@@ -87,6 +87,22 @@ atomic commit frames, and a manifest-recorded committed length. Startup rejects
 committed corruption and writable recovery truncates only an uncommitted tail.
 This detects corruption; it is not a tamper-proof audit mechanism.
 
+## Store inspection, backup, and logical transfer
+
+The native maintenance binary validates stores under a read lock and prints JSON
+reports:
+
+```bash
+cargo run --bin positorium-store -- inspect positorium.store
+cargo run --bin positorium-store -- backup positorium.store backup.store
+cargo run --bin positorium-store -- dump positorium.store export.jsonl
+cargo run --bin positorium-store -- import export.jsonl imported.store remap.json
+```
+
+Physical backup excludes uncommitted tail bytes without changing the source.
+Logical import creates a new store UUID and emits the complete identity remap.
+The versioned formats and failure rules are specified in [TRANSFER.md](TRANSFER.md).
+
 ## Client / Server Architecture
 
 Positorium can run as a library or an HTTP server. The server layer (Axum + Tokio) exposes a JSON endpoint:

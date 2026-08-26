@@ -300,6 +300,8 @@ Logical export represents every Thing as `(store UUID, local u64)`. Import into
 another store allocates a collision-free local identity for every foreign
 identity and rewrites every internal reference through one complete remap table.
 It never retains a foreign local number merely because it is currently unused.
+The fixed built-in Role mappings required by D006 are the only exception. The
+versioned wire contract is specified in `TRANSFER.md`.
 
 Each beta engine reads its current format and at least the immediately preceding
 beta format. A breaking migration writes a new store beside the source, replays

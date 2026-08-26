@@ -17,6 +17,7 @@
 //! * [`datatype`] – The [`datatype::DataType`] trait plus provided concrete types
 //!   (string, numeric, temporal, certainty, JSON, decimal, etc.).
 //! * `storage` – private append-only framing, replay, and durability machinery.
+//! * [`maintenance`] – versioned logical transfer, inspection, and physical backup.
 //! * [`traqula`] – A minimal DSL (parser + engine) for adding roles, posits and performing searches.
 //!
 //! ## Data Types
@@ -64,6 +65,8 @@ pub mod datatype;
 pub mod error;
 pub mod interface;
 pub mod literal;
+#[cfg(feature = "persistence")]
+pub mod maintenance;
 #[cfg(feature = "server")]
 pub mod server;
 #[cfg(feature = "persistence")]

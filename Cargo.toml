@@ -51,3 +51,8 @@ wasm-bindgen-test = "0.3"
 [[bench]]
 name = "benchmark"
 harness = false
+
+[[bin]]
+name = "positorium-store"
+path = "src/bin/positorium-store.rs"
+required-features = ["persistence"]

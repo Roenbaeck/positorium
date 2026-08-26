@@ -219,6 +219,9 @@ ids are never preserved verbatim.
 - Collision/remapping policy: Import always creates an explicit remap table and
   rewrites every internal reference. Foreign local identifiers are never retained
   verbatim.
+- D006 compatibility clarification: The fixed built-in Roles `posit` and
+  `ascertains` map to the same fixed destination identities 1 and 2. Every other
+  foreign local identity is remapped and receives a different local number.
 - Reasoning: Compact local identities suit the in-memory engine, while composite
   external identities prevent accidental cross-store collisions and make import
   semantics explicit.
