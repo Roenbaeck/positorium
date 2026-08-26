@@ -11,7 +11,7 @@ crate-type = ["cdylib", "rlib"]
 [features]
 default = ["server", "persistence", "cli"]
 server = ["tokio", "axum", "tokio-stream", "futures-util", "tower-http"]
-persistence = ["rusqlite"]
+persistence = ["rusqlite", "getrandom"]
 cli = ["config"]
 wasm = ["wasm-bindgen", "getrandom/js"]
 

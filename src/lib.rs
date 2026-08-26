@@ -68,6 +68,8 @@ pub mod interface;
 pub mod persist;
 #[cfg(feature = "server")]
 pub mod server;
+#[cfg(feature = "persistence")]
+mod storage;
 pub mod traqula;
 #[cfg(feature = "wasm")]
 pub mod wasm;
