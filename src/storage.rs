@@ -6,7 +6,12 @@
 
 #![allow(dead_code)] // Removed when Database switches from the SQLite importer to this backend.
 
+use crate::construct::{Posit, Role, Thing};
+use crate::datatype::{Time, TimeType};
 use crate::error::{DatabaseError, Result};
+use crate::literal::{LiteralFamily, LiteralValue};
+use chrono::{Datelike, NaiveDate, Timelike};
+use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -28,6 +33,31 @@ pub(crate) const RECORD_ROLE: u8 = 1;
 pub(crate) const RECORD_CODEC: u8 = 2;
 pub(crate) const RECORD_POSIT: u8 = 3;
 const RECORD_COMMIT: u8 = 255;
+const RAW_CODEC_IDENTIFIER: u16 = 0;
+const RAW_CODEC_VERSION: u16 = 1;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReplayedRole {
+    pub identity: Thing,
+    pub name: String,
+    pub reserved: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReplayedPosit {
+    pub identity: Thing,
+    pub appearances: Vec<(Thing, Thing)>,
+    pub value: LiteralValue,
+    pub time: Time,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReplayedStore {
+    pub store_uuid: [u8; 16],
+    pub roles: Vec<ReplayedRole>,
+    pub posits: Vec<ReplayedPosit>,
+    pub has_raw_codec: bool,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PendingRecord {
@@ -192,6 +222,321 @@ impl LogStore {
     pub(crate) fn committed_length(&self) -> u64 {
         self.manifest.committed_length
     }
+
+    pub(crate) fn replay_logical(&self) -> Result<ReplayedStore> {
+        replay_logical(self.manifest.store_uuid, &self.batches)
+    }
+}
+
+pub(crate) fn role_record(role: &Role) -> PendingRecord {
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&role.role().to_le_bytes());
+    payload.push(u8::from(role.reserved()));
+    encode_text(role.name(), &mut payload);
+    PendingRecord::new(RECORD_ROLE, payload)
+}
+
+pub(crate) fn raw_codec_record() -> PendingRecord {
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&RAW_CODEC_IDENTIFIER.to_le_bytes());
+    payload.extend_from_slice(&RAW_CODEC_VERSION.to_le_bytes());
+    payload.push(0); // family 0 declares the mandatory raw codec for every family.
+    payload.extend_from_slice(&0u16.to_le_bytes());
+    encode_text("raw-utf8-token", &mut payload);
+    PendingRecord::new(RECORD_CODEC, payload)
+}
+
+pub(crate) fn posit_record(posit: &Posit<LiteralValue>) -> Result<PendingRecord> {
+    let mut appearances: Vec<(Thing, Thing)> = posit
+        .appearance_set()
+        .appearances()
+        .iter()
+        .map(|appearance| (appearance.role().role(), appearance.thing()))
+        .collect();
+    appearances.sort_unstable();
+    if appearances.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+        return Err(DatabaseError::InvalidAppearanceSet(
+            "a persisted appearance set cannot repeat a role".to_string(),
+        ));
+    }
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&posit.posit().to_le_bytes());
+    encode_uleb128(appearances.len() as u64, &mut payload);
+    for (role, thing) in appearances {
+        payload.extend_from_slice(&role.to_le_bytes());
+        payload.extend_from_slice(&thing.to_le_bytes());
+    }
+    payload.push(posit.value().family().identifier());
+    payload.extend_from_slice(&RAW_CODEC_IDENTIFIER.to_le_bytes());
+    payload.extend_from_slice(&RAW_CODEC_VERSION.to_le_bytes());
+    encode_text(posit.value().token(), &mut payload);
+    encode_time(posit.time(), &mut payload);
+    Ok(PendingRecord::new(RECORD_POSIT, payload))
+}
+
+fn encode_time(time: &Time, target: &mut Vec<u8>) {
+    match time.time_type() {
+        TimeType::BeginningOfTime => target.push(0),
+        TimeType::EndOfTime => target.push(1),
+        TimeType::Year(year) => {
+            target.push(2);
+            target.extend_from_slice(&year.to_le_bytes());
+        }
+        TimeType::YearMonth(year, month) => {
+            target.push(3);
+            target.extend_from_slice(&year.to_le_bytes());
+            target.push(*month);
+        }
+        TimeType::Date(date) => {
+            target.push(4);
+            target.extend_from_slice(&date.year().to_le_bytes());
+            target.push(date.month() as u8);
+            target.push(date.day() as u8);
+        }
+        TimeType::DateTime(datetime) => {
+            target.push(5);
+            target.extend_from_slice(&datetime.year().to_le_bytes());
+            target.push(datetime.month() as u8);
+            target.push(datetime.day() as u8);
+            target.push(datetime.hour() as u8);
+            target.push(datetime.minute() as u8);
+            target.push(datetime.second() as u8);
+            target.extend_from_slice(&datetime.nanosecond().to_le_bytes());
+        }
+    }
+}
+
+fn replay_logical(store_uuid: [u8; 16], batches: &[Vec<StoredRecord>]) -> Result<ReplayedStore> {
+    let mut roles_by_identity: HashMap<Thing, ReplayedRole> = HashMap::new();
+    let mut identities_by_name: HashMap<String, Thing> = HashMap::new();
+    let mut posit_identities = HashSet::new();
+    let mut propositions = HashSet::new();
+    let mut roles = Vec::new();
+    let mut posits = Vec::new();
+    let mut has_raw_codec = false;
+    for batch in batches {
+        for record in batch {
+            match record.record_type {
+                RECORD_ROLE => {
+                    let role = decode_role(&record.payload)?;
+                    if roles_by_identity.contains_key(&role.identity)
+                        || identities_by_name.contains_key(&role.name)
+                    {
+                        return record_corruption(record, "duplicate or conflicting Role record");
+                    }
+                    identities_by_name.insert(role.name.clone(), role.identity);
+                    roles_by_identity.insert(role.identity, role.clone());
+                    roles.push(role);
+                }
+                RECORD_CODEC => {
+                    if has_raw_codec {
+                        return record_corruption(record, "duplicate Codec record");
+                    }
+                    decode_raw_codec(&record.payload)?;
+                    has_raw_codec = true;
+                }
+                RECORD_POSIT => {
+                    if !has_raw_codec {
+                        return record_corruption(record, "Posit precedes required raw codec");
+                    }
+                    let posit = decode_posit(&record.payload)?;
+                    if !posit_identities.insert(posit.identity) {
+                        return record_corruption(record, "duplicate Posit identity");
+                    }
+                    if posit
+                        .appearances
+                        .iter()
+                        .any(|(role, _)| !roles_by_identity.contains_key(role))
+                    {
+                        return record_corruption(record, "Posit references an unknown Role");
+                    }
+                    let proposition = (
+                        posit.appearances.clone(),
+                        posit.value.clone(),
+                        posit.time.clone(),
+                    );
+                    if !propositions.insert(proposition) {
+                        return record_corruption(record, "duplicate Posit proposition");
+                    }
+                    posits.push(posit);
+                }
+                other => {
+                    return record_corruption(
+                        record,
+                        format!("unsupported logical record type {other}"),
+                    );
+                }
+            }
+        }
+    }
+    validate_builtin_role(&roles_by_identity, &identities_by_name, 1, "posit")?;
+    validate_builtin_role(&roles_by_identity, &identities_by_name, 2, "ascertains")?;
+    Ok(ReplayedStore {
+        store_uuid,
+        roles,
+        posits,
+        has_raw_codec,
+    })
+}
+
+fn validate_builtin_role(
+    roles: &HashMap<Thing, ReplayedRole>,
+    names: &HashMap<String, Thing>,
+    identity: Thing,
+    name: &str,
+) -> Result<()> {
+    match (roles.get(&identity), names.get(name)) {
+        (None, None) => Ok(()),
+        (Some(role), Some(named_identity))
+            if role.name == name && role.reserved && *named_identity == identity =>
+        {
+            Ok(())
+        }
+        _ => corruption(format!(
+            "built-in Role '{name}' must be reserved identity {identity}"
+        )),
+    }
+}
+
+fn decode_role(payload: &[u8]) -> Result<ReplayedRole> {
+    use unicode_normalization::UnicodeNormalization;
+    let mut cursor = 0;
+    let identity = take_u64(payload, &mut cursor, "Role identity")?;
+    let reserved = match take_byte(payload, &mut cursor, "Role reserved flag")? {
+        0 => false,
+        1 => true,
+        value => return corruption(format!("invalid Role reserved flag {value}")),
+    };
+    let name = decode_text(payload, &mut cursor)?;
+    if name.is_empty() || name.nfc().collect::<String>() != name || cursor != payload.len() {
+        return corruption("invalid canonical Role payload");
+    }
+    Ok(ReplayedRole {
+        identity,
+        name,
+        reserved,
+    })
+}
+
+fn decode_raw_codec(payload: &[u8]) -> Result<()> {
+    let mut cursor = 0;
+    let identifier = take_u16(payload, &mut cursor, "codec identifier")?;
+    let version = take_u16(payload, &mut cursor, "codec version")?;
+    let family = take_byte(payload, &mut cursor, "codec family")?;
+    let flags = take_u16(payload, &mut cursor, "codec flags")?;
+    let name = decode_text(payload, &mut cursor)?;
+    if identifier != RAW_CODEC_IDENTIFIER
+        || version != RAW_CODEC_VERSION
+        || family != 0
+        || flags != 0
+        || name != "raw-utf8-token"
+        || cursor != payload.len()
+    {
+        return corruption("unknown or malformed required codec");
+    }
+    Ok(())
+}
+
+fn decode_posit(payload: &[u8]) -> Result<ReplayedPosit> {
+    let mut cursor = 0;
+    let identity = take_u64(payload, &mut cursor, "Posit identity")?;
+    let count = usize::try_from(decode_uleb128(payload, &mut cursor)?).map_err(|_| {
+        DatabaseError::DataCorruption {
+            message: "appearance count exceeds addressable memory".to_string(),
+        }
+    })?;
+    let mut appearances = Vec::with_capacity(count);
+    for _ in 0..count {
+        let role = take_u64(payload, &mut cursor, "appearance Role")?;
+        let thing = take_u64(payload, &mut cursor, "appearing Thing")?;
+        appearances.push((role, thing));
+    }
+    if appearances.is_empty()
+        || appearances.windows(2).any(|pair| pair[0] >= pair[1])
+        || appearances.windows(2).any(|pair| pair[0].0 == pair[1].0)
+    {
+        return corruption("Posit appearances are not canonical");
+    }
+    let family = LiteralFamily::from_identifier(take_byte(payload, &mut cursor, "literal family")?)
+        .ok_or_else(|| DatabaseError::DataCorruption {
+            message: "unknown literal family".to_string(),
+        })?;
+    let codec = take_u16(payload, &mut cursor, "codec identifier")?;
+    let codec_version = take_u16(payload, &mut cursor, "codec version")?;
+    if codec != RAW_CODEC_IDENTIFIER || codec_version != RAW_CODEC_VERSION {
+        return corruption("unknown required Posit codec");
+    }
+    let token = decode_text(payload, &mut cursor)?;
+    let value =
+        LiteralValue::new(token, family).map_err(|error| DatabaseError::DataCorruption {
+            message: format!("invalid persisted literal: {error}"),
+        })?;
+    let time = decode_time(payload, &mut cursor)?;
+    if cursor != payload.len() {
+        return corruption("Posit payload has trailing fields");
+    }
+    Ok(ReplayedPosit {
+        identity,
+        appearances,
+        value,
+        time,
+    })
+}
+
+fn decode_time(payload: &[u8], cursor: &mut usize) -> Result<Time> {
+    let moment = match take_byte(payload, cursor, "time tag")? {
+        0 => TimeType::BeginningOfTime,
+        1 => TimeType::EndOfTime,
+        2 => TimeType::Year(take_i32(payload, cursor, "time year")?),
+        3 => {
+            let year = take_i32(payload, cursor, "time year")?;
+            let month = take_byte(payload, cursor, "time month")?;
+            if !(1..=12).contains(&month) {
+                return corruption("invalid time month");
+            }
+            TimeType::YearMonth(year, month)
+        }
+        4 | 5 => {
+            let tag = payload[*cursor - 1];
+            let year = take_i32(payload, cursor, "time year")?;
+            let month = take_byte(payload, cursor, "time month")?;
+            let day = take_byte(payload, cursor, "time day")?;
+            let date = NaiveDate::from_ymd_opt(year, u32::from(month), u32::from(day)).ok_or_else(
+                || DatabaseError::DataCorruption {
+                    message: "invalid persisted calendar date".to_string(),
+                },
+            )?;
+            if tag == 4 {
+                TimeType::Date(date)
+            } else {
+                let hour = take_byte(payload, cursor, "time hour")?;
+                let minute = take_byte(payload, cursor, "time minute")?;
+                let second = take_byte(payload, cursor, "time second")?;
+                let nanosecond = take_u32(payload, cursor, "time nanosecond")?;
+                let datetime = date
+                    .and_hms_nano_opt(
+                        u32::from(hour),
+                        u32::from(minute),
+                        u32::from(second),
+                        nanosecond,
+                    )
+                    .ok_or_else(|| DatabaseError::DataCorruption {
+                        message: "invalid persisted UTC datetime".to_string(),
+                    })?;
+                TimeType::DateTime(datetime)
+            }
+        }
+        tag => return corruption(format!("unknown time tag {tag}")),
+    };
+    Ok(Time::from_time_type(moment))
+}
+
+fn record_corruption<T>(record: &StoredRecord, message: impl Into<String>) -> Result<T> {
+    corruption(format!(
+        "record sequence {}: {}",
+        record.sequence,
+        message.into()
+    ))
 }
 
 impl StoreBackend for LogStore {
@@ -755,6 +1100,18 @@ fn take_byte(bytes: &[u8], cursor: &mut usize, field: &str) -> Result<u8> {
     Ok(take_array::<1>(bytes, cursor, field)?[0])
 }
 
+fn take_u16(bytes: &[u8], cursor: &mut usize, field: &str) -> Result<u16> {
+    Ok(u16::from_le_bytes(take_array::<2>(bytes, cursor, field)?))
+}
+
+fn take_u32(bytes: &[u8], cursor: &mut usize, field: &str) -> Result<u32> {
+    Ok(u32::from_le_bytes(take_array::<4>(bytes, cursor, field)?))
+}
+
+fn take_i32(bytes: &[u8], cursor: &mut usize, field: &str) -> Result<i32> {
+    Ok(i32::from_le_bytes(take_array::<4>(bytes, cursor, field)?))
+}
+
 fn take_u64(bytes: &[u8], cursor: &mut usize, field: &str) -> Result<u64> {
     Ok(u64::from_le_bytes(take_array::<8>(bytes, cursor, field)?))
 }
@@ -815,6 +1172,8 @@ impl DatabaseError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::construct::{Appearance, AppearanceSet};
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(1);
@@ -836,6 +1195,106 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    fn stored(record: PendingRecord, sequence: u64) -> StoredRecord {
+        StoredRecord {
+            record_type: record.record_type,
+            version: record.version,
+            flags: record.flags,
+            sequence,
+            payload: record.payload,
+        }
+    }
+
+    #[test]
+    fn logical_records_round_trip_every_literal_family_and_time_precision() {
+        let posit_role = Role::new(1, "posit".to_string(), true);
+        let ascertains_role = Role::new(2, "ascertains".to_string(), true);
+        let value_role = Arc::new(Role::new(3, "value".to_string(), false));
+        let appearance = Arc::new(Appearance::new(42, Arc::clone(&value_role)));
+        let appearance_set = Arc::new(AppearanceSet::new(vec![appearance]).unwrap());
+        let values = [
+            LiteralValue::new(r#""\u0041""#, LiteralFamily::String).unwrap(),
+            LiteralValue::new("+001", LiteralFamily::Integer).unwrap(),
+            LiteralValue::new("01.00", LiteralFamily::Decimal).unwrap(),
+            LiteralValue::new("075%", LiteralFamily::Certainty).unwrap(),
+            LiteralValue::new(r#"{ "a": 1.00 }"#, LiteralFamily::Json).unwrap(),
+            LiteralValue::new("@BOT", LiteralFamily::Time).unwrap(),
+        ];
+        let times = [
+            Time::new_beginning_of_time(),
+            Time::new_end_of_time(),
+            Time::new_year_from("2024"),
+            Time::new_year_month_from("2024-05"),
+            Time::new_date_from("2024-05-06"),
+            Time::new_datetime_from("2024-05-06T07:08:09.123456789"),
+        ];
+        let mut batch = vec![
+            stored(role_record(&posit_role), 1),
+            stored(role_record(&ascertains_role), 2),
+            stored(role_record(&value_role), 3),
+            stored(raw_codec_record(), 4),
+        ];
+        for (index, (value, time)) in values.iter().zip(times.iter()).enumerate() {
+            let posit = Posit::new(
+                100 + index as u64,
+                Arc::clone(&appearance_set),
+                value.clone(),
+                time.clone(),
+            );
+            batch.push(stored(posit_record(&posit).unwrap(), 5 + index as u64));
+        }
+
+        let replayed = replay_logical([7; 16], &[batch]).unwrap();
+        assert_eq!(replayed.store_uuid, [7; 16]);
+        assert!(replayed.has_raw_codec);
+        assert_eq!(replayed.roles.len(), 3);
+        assert_eq!(replayed.posits.len(), values.len());
+        for (index, posit) in replayed.posits.iter().enumerate() {
+            assert_eq!(posit.identity, 100 + index as u64);
+            assert_eq!(posit.appearances, vec![(3, 42)]);
+            assert_eq!(posit.value, values[index]);
+            assert_eq!(posit.time, times[index]);
+        }
+    }
+
+    #[test]
+    fn logical_replay_rejects_dangling_roles_and_duplicate_propositions() {
+        let posit_role = Role::new(1, "posit".to_string(), true);
+        let ascertains_role = Role::new(2, "ascertains".to_string(), true);
+        let missing_role = Arc::new(Role::new(9, "missing".to_string(), false));
+        let appearance = Arc::new(Appearance::new(42, missing_role));
+        let appearance_set = Arc::new(AppearanceSet::new(vec![appearance]).unwrap());
+        let value = LiteralValue::new("10", LiteralFamily::Integer).unwrap();
+        let posit = Posit::new(
+            100,
+            appearance_set,
+            value,
+            Time::new_date_from("2024-05-06"),
+        );
+        let base = vec![
+            stored(role_record(&posit_role), 1),
+            stored(role_record(&ascertains_role), 2),
+            stored(raw_codec_record(), 3),
+        ];
+        let mut dangling = base.clone();
+        dangling.push(stored(posit_record(&posit).unwrap(), 4));
+        let error = replay_logical([8; 16], &[dangling]).unwrap_err();
+        assert!(error.to_string().contains("unknown Role"), "{error}");
+
+        let missing_role_record = Role::new(9, "missing".to_string(), false);
+        let mut duplicate = base;
+        duplicate.push(stored(role_record(&missing_role_record), 4));
+        duplicate.push(stored(posit_record(&posit).unwrap(), 5));
+        let mut second = posit_record(&posit).unwrap();
+        second.payload[0..8].copy_from_slice(&101u64.to_le_bytes());
+        duplicate.push(stored(second, 6));
+        let error = replay_logical([8; 16], &[duplicate]).unwrap_err();
+        assert!(
+            error.to_string().contains("duplicate Posit proposition"),
+            "{error}"
+        );
     }
 
     #[test]

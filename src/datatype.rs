@@ -555,6 +555,16 @@ impl TemporalInstant {
 }
 
 impl Time {
+    #[cfg(feature = "persistence")]
+    pub(crate) fn from_time_type(moment: TimeType) -> Self {
+        Self { moment }
+    }
+
+    #[cfg(feature = "persistence")]
+    pub(crate) fn time_type(&self) -> &TimeType {
+        &self.moment
+    }
+
     /// Now (UTC) time point.
     pub fn new() -> Time {
         Time {

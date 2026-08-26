@@ -165,6 +165,10 @@ required pairs fail replay.
 Literal-family identifiers are private storage metadata and are never returned
 as user-facing types:
 
+Codec metadata uses family identifier `0` only for a codec, such as the
+mandatory raw fallback, whose immutable definition applies to every family.
+Posit records always carry one of the concrete family identifiers below.
+
 | Family | Meaning |
 | ---: | --- |
 | `1` | string token |
