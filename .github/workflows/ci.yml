@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  native:
+    name: Native (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install stable Rust
+        run: rustup show active-toolchain
+      - name: Test default feature set
+        run: cargo test --all-targets --all-features --no-fail-fast
+      - name: Test in-memory feature set
+        run: cargo test --all-targets --no-default-features --no-fail-fast
+
+  quality:
+    name: Formatting and lints
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install stable Rust components
+        run: rustup component add rustfmt clippy
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Lint all features
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Lint in-memory feature set
+        run: cargo clippy --all-targets --no-default-features -- -D warnings
+
+  wasm:
+    name: WASM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install stable WASM target
+        run: rustup target add wasm32-unknown-unknown
+      - name: Check in-memory WASM build
+        run: cargo check --target wasm32-unknown-unknown --no-default-features --features wasm

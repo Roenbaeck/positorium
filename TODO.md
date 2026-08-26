@@ -469,7 +469,7 @@ posit replay.
         - Document that even an explicitly configured non-loopback bind remains a
             trusted interface with no authentication or safe-Internet-exposure claim.
             Return structured errors or a `limited` completion when limits are exceeded.
-- [ ] **Add multi-platform CI.**
+- [x] **Add multi-platform CI.**
         - Build and test the default, no-persistence/in-memory, and WASM feature sets
             on Linux, macOS, and Windows.
         - Run formatting, linting, unit, integration, doctest, and storage recovery
