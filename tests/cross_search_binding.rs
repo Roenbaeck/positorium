@@ -30,5 +30,13 @@ return n2, t2, mt;
     assert_eq!(results.len(), 2, "two searches");
     assert_eq!(results[0].row_count, 5, "historical divorced names");
     assert_eq!(results[1].row_count, 5, "current married snapshot names");
-    assert!(results[1].rows.iter().all(|r| r.last().unwrap().contains("2024") || r.last().unwrap().contains("2025") || r.last().unwrap().contains("202")), "snapshot time present");
+    assert!(
+        results[1]
+            .rows
+            .iter()
+            .all(|r| r.last().unwrap().contains("2024")
+                || r.last().unwrap().contains("2025")
+                || r.last().unwrap().contains("202")),
+        "snapshot time present"
+    );
 }

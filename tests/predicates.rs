@@ -15,7 +15,10 @@ fn setup() -> Engine<'static> {
 fn certainty_literal_equivalents() {
     let engine = setup();
     // Only percent-suffixed literals are valid certainty values now.
-    let positive_match = ["75%", "075%" /* leading zero still percent? -> treated as 75% */, "75%" ];
+    let positive_match = [
+        "75%", "075%", /* leading zero still percent? -> treated as 75% */
+        "75%",
+    ];
     for f in &positive_match {
         let script = format!("search [{{(*, confidence)}}, +c, *] where c = {f} return c;");
         let res = engine.execute_collect(&script).expect("query ok");
@@ -25,9 +28,23 @@ fn certainty_literal_equivalents() {
     for f in &negative_match {
         let script = format!("search [{{(*, confidence)}}, +c, *] where c = {f} return c;");
         // Forms without % are treated as decimal/int -> should not match certainty posit
-        let res = engine.execute_collect(&script).unwrap_or_else(|e| panic!("unexpected error for form {f}: {e}"));
+        let res = engine
+            .execute_collect(&script)
+            .unwrap_or_else(|e| panic!("unexpected error for form {f}: {e}"));
         assert_eq!(res.rows.len(), 0, "form {f} should NOT match certainty 75%");
     }
+}
+
+#[test]
+fn one_percent_is_not_parsed_as_one_hundred_percent() {
+    let db = Database::new(PersistenceMode::InMemory).unwrap();
+    let engine = Engine::new(Box::leak(Box::new(db)));
+    engine.execute("add role confidence; add posit [{(+c1, confidence)}, 1%, @NOW];");
+
+    let result = engine
+        .execute_collect("search [{(*, confidence)}, +c, *] return c;")
+        .expect("query ok");
+    assert_eq!(result.rows, vec![vec!["0.01".to_string()]]);
 }
 
 #[test]
@@ -42,7 +59,9 @@ fn certainty_ordering() {
     let res = engine.execute_collect(script).expect("query ok");
     assert_eq!(res.rows.len(), 0);
     // Missing percent should trigger an error
-    let err = engine.execute_collect("search [{(*, confidence)}, +c, *] where c > 80 return c;").unwrap_err();
+    let err = engine
+        .execute_collect("search [{(*, confidence)}, +c, *] where c > 80 return c;")
+        .unwrap_err();
     assert!(format!("{}", err).contains("percent sign"));
 }
 

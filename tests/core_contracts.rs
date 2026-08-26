@@ -1,0 +1,129 @@
+use positorium::construct::{Appearance, AppearanceSet, Posit, Role, ThingGenerator};
+use positorium::construct::{Database, PersistenceMode};
+use positorium::datatype::{Certainty, Time};
+use positorium::traqula::{Engine, posits_involving_thing};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
+fn hash<T: Hash>(value: &T) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
+}
+
+#[test]
+fn role_identity_controls_equality_hashing_and_ordering() {
+    let first = Role::new(42, "first name".to_string(), false);
+    let renamed_metadata = Role::new(42, "other name".to_string(), true);
+    let other_identity = Role::new(43, "first name".to_string(), false);
+
+    assert_eq!(first, renamed_metadata);
+    assert_eq!(first.cmp(&renamed_metadata), std::cmp::Ordering::Equal);
+    assert_eq!(hash(&first), hash(&renamed_metadata));
+    assert_ne!(first, other_identity);
+}
+
+#[test]
+fn posit_identity_is_not_part_of_proposition_equality_or_ordering() {
+    let role = Arc::new(Role::new(7, "name".to_string(), false));
+    let appearance = Arc::new(Appearance::new(11, role));
+    let appearance_set = Arc::new(AppearanceSet::new(vec![appearance]).unwrap());
+    let time = Time::new_date_from("2024-05-06");
+    let first = Posit::new(
+        100,
+        Arc::clone(&appearance_set),
+        "Alice".to_string(),
+        time.clone(),
+    );
+    let duplicate = Posit::new(101, appearance_set, "Alice".to_string(), time);
+
+    assert_eq!(first, duplicate);
+    assert_eq!(first.cmp(&duplicate), std::cmp::Ordering::Equal);
+    assert_eq!(hash(&first), hash(&duplicate));
+}
+
+#[test]
+fn mixed_precision_time_ordering_obeys_eq_ord_laws() {
+    let year = Time::new_year_from("2024");
+    let date = Time::new_date_from("2024-05-06");
+
+    assert_ne!(year, date);
+    assert_ne!(year.cmp(&date), std::cmp::Ordering::Equal);
+    assert_eq!(year.partial_cmp(&date), Some(year.cmp(&date)));
+}
+
+#[test]
+fn role_catalog_normalizes_nfc_and_keeps_names_case_sensitive() {
+    let db = Database::new(PersistenceMode::InMemory).unwrap();
+    let (decomposed, existed) = db.create_role("cafe\u{301}".to_string(), false);
+    assert!(!existed);
+    let (composed, existed) = db.create_role("caf\u{e9}".to_string(), false);
+    assert!(existed);
+    assert_eq!(decomposed.role(), composed.role());
+
+    let (upper, existed) = db.create_role("CAF\u{c9}".to_string(), false);
+    assert!(!existed);
+    assert_ne!(decomposed.role(), upper.role());
+}
+
+#[test]
+fn thing_identities_are_never_recycled() {
+    let mut generator = ThingGenerator::new();
+    let abandoned = generator.generate();
+    generator.release(abandoned);
+    assert!(generator.generate() > abandoned);
+}
+
+#[test]
+fn accepted_literal_display_forms_are_canonical() {
+    assert_eq!(Certainty::new(0.05).to_string(), "0.05");
+    assert_eq!(Certainty::new(-0.05).to_string(), "-0.05");
+    assert_eq!(Time::new_year_month_from("2024-05").to_string(), "2024-05");
+}
+
+#[test]
+fn only_assertion_roles_are_reserved_by_default() {
+    let db = Database::new(PersistenceMode::InMemory).unwrap();
+    assert_eq!(db.role_keeper().lock().unwrap().len(), 2);
+    assert!(
+        db.role_keeper()
+            .lock()
+            .unwrap()
+            .get("posit")
+            .unwrap()
+            .reserved()
+    );
+    assert!(
+        db.role_keeper()
+            .lock()
+            .unwrap()
+            .get("ascertains")
+            .unwrap()
+            .reserved()
+    );
+    let (thing, existed) = db.create_role("thing".to_string(), false);
+    assert!(!existed);
+    assert!(!thing.reserved());
+}
+
+#[test]
+fn invalid_appearance_sets_and_unknown_roles_return_errors() {
+    let db = Database::new(PersistenceMode::InMemory).unwrap();
+    let (role, _) = db.create_role("member".to_string(), false);
+    let (first, _) = db.create_appearance(10, Arc::clone(&role));
+    let (second, _) = db.create_appearance(11, role);
+    assert!(db.create_appearance_set(vec![first, second]).is_err());
+
+    let engine = Engine::new(&db);
+    let error = engine
+        .execute_collect("add posit [{(+x, missing)}, \"value\", @NOW];")
+        .unwrap_err();
+    assert!(error.to_string().contains("Unknown role: missing"));
+}
+
+#[test]
+fn missing_lookup_keys_produce_empty_results() {
+    let db = Database::new(PersistenceMode::InMemory).unwrap();
+    assert!(posits_involving_thing(&db, 999_999).is_empty());
+}

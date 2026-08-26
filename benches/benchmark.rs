@@ -1,5 +1,5 @@
-use positorium::traqula::ResultSet;
 use criterion::{Criterion, criterion_group, criterion_main};
+use positorium::traqula::ResultSet;
 use std::time::Instant;
 
 pub fn criterion_benchmark(c: &mut Criterion) {

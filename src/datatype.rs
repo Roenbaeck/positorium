@@ -16,7 +16,7 @@
 //! # }
 //! use std::fmt;
 //! use positorium::datatype::DataType;
-//! #[derive(Eq, PartialEq, Hash)]
+//! #[derive(Eq, PartialEq, PartialOrd, Ord, Hash)]
 //! struct MyCount(i64);
 //! impl fmt::Display for MyCount { fn fmt(&self, f:&mut fmt::Formatter)->fmt::Result { write!(f, "{}", self.0) } }
 //! #[cfg(feature = "persistence")]
@@ -48,7 +48,7 @@
 use rusqlite::types::{FromSql, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
 
 // used for timestamps in the database
-use chrono::{Datelike, NaiveDate, NaiveDateTime, Utc};
+use chrono::{NaiveDate, NaiveDateTime, Utc};
 // used for decimal numbers
 use bigdecimal::BigDecimal;
 // used for JSON
@@ -62,9 +62,8 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 // used to overload common operations for datatypes
 use std::ops;
-// used when implementing PartialOrd for Time
-use std::cmp::Ordering;
 
+#[cfg(feature = "persistence")]
 use crate::traqula::parse_time;
 
 /// Trait implemented by all logical value/time types that may appear in a posit.
@@ -73,7 +72,7 @@ use crate::traqula::parse_time;
 /// `DATA_TYPE`. These are persisted so changing them breaks backward
 /// compatibility.
 #[cfg(feature = "persistence")]
-pub trait DataType: fmt::Display + Eq + Hash + Send + Sync + ToSql {
+pub trait DataType: fmt::Display + Eq + Ord + Hash + Send + Sync + ToSql {
     /// Stable numeric identifier for catalog persistence.
     const UID: u8;
     /// Stable human readable name stored in persistence.
@@ -91,7 +90,7 @@ pub trait DataType: fmt::Display + Eq + Hash + Send + Sync + ToSql {
 }
 
 #[cfg(not(feature = "persistence"))]
-pub trait DataType: fmt::Display + Eq + Hash + Send + Sync {
+pub trait DataType: fmt::Display + Eq + Ord + Hash + Send + Sync {
     /// Stable numeric identifier for catalog persistence.
     const UID: u8;
     /// Stable human readable name stored in persistence.
@@ -150,9 +149,9 @@ impl DataType for NaiveDate {
     const DATA_TYPE: &'static str = "NaiveDate";
     #[cfg(feature = "persistence")]
     fn convert(value: &ValueRef) -> NaiveDate {
-        let raw = value
-            .as_str()
-            .unwrap_or_else(|e| panic!("[positorium][restore] NaiveDate not stored as text: {e:?}"));
+        let raw = value.as_str().unwrap_or_else(|e| {
+            panic!("[positorium][restore] NaiveDate not stored as text: {e:?}")
+        });
         NaiveDate::from_str(raw).unwrap_or_else(|e| {
             panic!("[positorium][restore] Failed to parse NaiveDate from '{raw}': {e:?}")
         })
@@ -376,9 +375,9 @@ impl fmt::Display for Certainty {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.alpha {
             -100 => write!(f, "-1"),
-            -99..=-1 => write!(f, "-0.{}", -self.alpha),
+            -99..=-1 => write!(f, "-0.{:02}", -self.alpha),
             0 => write!(f, "0"),
-            1..=99 => write!(f, "0.{}", self.alpha),
+            1..=99 => write!(f, "0.{:02}", self.alpha),
             100 => write!(f, "1"),
             _ => write!(f, "?"),
         }
@@ -468,58 +467,8 @@ pub enum TimeType {
 }
 
 impl PartialOrd for TimeType {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match (self, other) {
-            // abstact type combinations
-            (TimeType::BeginningOfTime, TimeType::BeginningOfTime)
-            | (TimeType::EndOfTime, TimeType::EndOfTime) => Some(Ordering::Equal),
-            (TimeType::BeginningOfTime, _) | (_, TimeType::EndOfTime) => Some(Ordering::Less),
-            (_, TimeType::BeginningOfTime) | (TimeType::EndOfTime, _) => Some(Ordering::Greater),
-            // concrete type combinations
-            (TimeType::Year(y_self), type_other) => match type_other {
-                TimeType::Year(y) => y_self.partial_cmp(y),
-                TimeType::YearMonth(y, _) => y_self.partial_cmp(y),
-                TimeType::Date(d) => y_self.partial_cmp(&d.year()),
-                TimeType::DateTime(d) => y_self.partial_cmp(&d.year()),
-                _ => None,
-            },
-            (TimeType::YearMonth(y_self, m_self), type_other) => match type_other {
-                TimeType::Year(y) => y_self.partial_cmp(y),
-                TimeType::YearMonth(y, m) => match y_self.partial_cmp(y) {
-                    Some(Ordering::Equal) => m_self.partial_cmp(m),
-                    _ => y_self.partial_cmp(y),
-                },
-                TimeType::Date(d) => match y_self.partial_cmp(&d.year()) {
-                    Some(Ordering::Equal) => m_self.partial_cmp(&(d.month() as u8)),
-                    _ => y_self.partial_cmp(&d.year()),
-                },
-                TimeType::DateTime(d) => match y_self.partial_cmp(&d.year()) {
-                    Some(Ordering::Equal) => m_self.partial_cmp(&(d.month() as u8)),
-                    _ => y_self.partial_cmp(&d.year()),
-                },
-                _ => None,
-            },
-            (TimeType::Date(d_self), type_other) => match type_other {
-                TimeType::Year(y) => d_self.year().partial_cmp(y),
-                TimeType::YearMonth(y, m) => match d_self.year().partial_cmp(y) {
-                    Some(Ordering::Equal) => (d_self.month() as u8).partial_cmp(m),
-                    _ => d_self.year().partial_cmp(y),
-                },
-                TimeType::Date(d) => d_self.partial_cmp(d),
-                TimeType::DateTime(d) => d_self.partial_cmp(&d.date()),
-                _ => None,
-            },
-            (TimeType::DateTime(d_self), type_other) => match type_other {
-                TimeType::Year(y) => d_self.year().partial_cmp(y),
-                TimeType::YearMonth(y, m) => match d_self.year().partial_cmp(y) {
-                    Some(Ordering::Equal) => (d_self.month() as u8).partial_cmp(m),
-                    _ => d_self.year().partial_cmp(y),
-                },
-                TimeType::Date(d) => d_self.date().partial_cmp(d),
-                TimeType::DateTime(d) => d_self.partial_cmp(d),
-                _ => None,
-            },
-        }
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -595,6 +544,7 @@ impl Time {
     /// Parse a persisted canonical textual form of Time (no quotes, produced by Display).
     /// Accepted forms:
     /// BOT | EOT | YYYY | YYYY-MM | YYYY-MM-DD | YYYY-MM-DD HH:MM:SS[.fraction] | YYYY-MM-DDTHH:MM:SS[.fraction]
+    #[cfg(feature = "persistence")]
     fn parse_persisted(raw: &str) -> Option<Time> {
         let s = raw.trim();
         match s {
@@ -648,7 +598,7 @@ impl fmt::Display for Time {
                 write!(f, "{}", y)
             }
             TimeType::YearMonth(y, m) => {
-                write!(f, "{}-{}", y, m)
+                write!(f, "{}-{:02}", y, m)
             }
             TimeType::Date(d) => {
                 write!(f, "{}", d)

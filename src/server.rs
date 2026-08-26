@@ -1,13 +1,13 @@
-use std::sync::Arc;
-use axum::{routing::post, Router, Json};
-use futures_util::StreamExt;
-use axum::http::header;
-use tower_http::cors::{CorsLayer, Any};
-use serde::{Deserialize, Serialize};
-use axum::http::StatusCode;
-use tracing::{info, warn};
 use crate::interface::QueryInterface;
-use crate::traqula::{Engine, CollectedResultSet, RowSink, SinkFlow, MultiStreamCallbacks};
+use crate::traqula::{CollectedResultSet, Engine, MultiStreamCallbacks, RowSink, SinkFlow};
+use axum::http::StatusCode;
+use axum::http::header;
+use axum::{Json, Router, routing::post};
+use futures_util::StreamExt;
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use tower_http::cors::{Any, CorsLayer};
+use tracing::{info, warn};
 
 #[derive(Deserialize)]
 pub struct QueryRequest {
@@ -31,9 +31,9 @@ pub struct QueryResponse {
     pub row_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limited: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")] 
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub rows: Option<Vec<Vec<String>>>,
-    #[serde(skip_serializing_if = "Option::is_none")] 
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result_sets: Option<Vec<MultiResultSet>>,

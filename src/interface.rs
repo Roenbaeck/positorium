@@ -46,7 +46,9 @@ impl CancelToken {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct QueryId(u64);
 impl QueryId {
-    pub fn value(&self) -> u64 { self.0 }
+    pub fn value(&self) -> u64 {
+        self.0
+    }
 }
 
 /// Handle to a running or completed query.
@@ -104,7 +106,9 @@ impl QueryInterface {
         }
     }
 
-    pub fn database(&self) -> &Arc<Database> { &self.db }
+    pub fn database(&self) -> &Arc<Database> {
+        &self.db
+    }
 
     fn allocate_id(&self) -> QueryId {
         let mut g = self.next_id.lock().unwrap();

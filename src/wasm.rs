@@ -1,7 +1,7 @@
-use wasm_bindgen::prelude::*;
 use crate::construct::{Database, PersistenceMode};
 use crate::traqula::Engine;
 use std::sync::Arc;
+use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 pub struct WasmEngine {
@@ -14,9 +14,7 @@ impl WasmEngine {
     pub fn new() -> Result<WasmEngine, JsValue> {
         let db = Database::new(PersistenceMode::InMemory)
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
-        Ok(WasmEngine {
-            db: Arc::new(db),
-        })
+        Ok(WasmEngine { db: Arc::new(db) })
     }
 
     pub fn execute(&self, script: &str) -> Result<String, JsValue> {
@@ -63,9 +61,10 @@ mod tests {
     fn test_wasm_execution() {
         let engine = WasmEngine::new().expect("Failed to create engine");
         // Simple script to test integration
-        let script = "add role person; add posit [{(+a, person)}, \"Alice\", @NOW]; search person -> *;";
+        let script =
+            "add role person; add posit [{(+a, person)}, \"Alice\", @NOW]; search person -> *;";
         let output = engine.execute(script).expect("Execution failed");
-        
+
         // Check if output contains our expected value
         assert!(output.contains("Alice"));
         assert!(output.contains("person"));

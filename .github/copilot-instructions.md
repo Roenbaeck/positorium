@@ -19,7 +19,7 @@ All constructs follow a keeper pattern for canonical storage and deduplication u
 - `traqula.rs`: Pest-based parser and execution engine for the Traqula DSL.
 - `traqula.pest`: Grammar definition for the query language.
 - `interface.rs`: Minimal thread-per-query interface with cooperative cancellation and optional streaming of results.
-- `error.rs`: Domain-specific error types (`PositoriumError`) and conversions.
+- `error.rs`: Domain-specific error types (`DatabaseError`) and conversions.
 - `server.rs`: HTTP server implementation using Axum for REST API and web console.
 - `benches/benchmark.rs`: Criterion-based performance benchmarks.
 - `traqula-vscode/`: Syntax highlighting extension for Traqula (keep grammar in sync with `traqula.pest`).
@@ -87,7 +87,7 @@ When adding a new `DataType` implementation:
 	- Engine cancellation is coarse (between commands); long-running commands may not be interruptible yet.
 
 ## Error Handling
-Domain-specific error types (`PositoriumError`) are defined in `error.rs` with variants for config, persistence, data corruption, parse, execution, invariant, and lock errors. Conversions from `rusqlite::Error` and others are provided. Use `anyhow` for custom error handling in new code where appropriate.
+Domain-specific errors (`DatabaseError`) are defined in `error.rs` with variants for config, persistence, data corruption, parse, execution, invariant, and lock errors. Propagate or extend this type for new boundary failures.
 
 ## Testing and Benchmarks
 - Doctests exist in several modules (run with `cargo test`).

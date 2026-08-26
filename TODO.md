@@ -33,7 +33,7 @@ contract.
 Concrete issues observed in the current code while annotating `DECISIONS.md`.
 The accepted decisions now define the required fixes.
 
-- [ ] **Equality/ordering law violations in core constructs.**
+- [x] **Equality/ordering law violations in core constructs.**
         - `Role::Hash` hashes `name.to_uppercase()` and includes `reserved`, while
             `PartialEq` compares `name` case-sensitively only (src/construct.rs). Equal
             roles that differ in `reserved` hash differently, breaking `Eq`/`Hash`.
@@ -44,7 +44,7 @@ The accepted decisions now define the required fixes.
             `<` give different answers. `partial_cmp` also returns `Equal` for values
             `PartialEq` considers unequal, e.g. `Year(2024)` versus any date in 2024
             (src/datatype.rs). Relevant to D007/D008.
-- [ ] **Value parsing/formatting bugs.**
+- [x] **Value parsing/formatting bugs.**
         - `Certainty` `Display` omits zero padding: alpha 5 renders as `0.5` instead
             of `0.05` (and `-0.5` for `-0.05`) (src/datatype.rs).
         - `parse_certainty("1%")` yields 100%: after stripping `%`, values with
@@ -61,7 +61,7 @@ The accepted decisions now define the required fixes.
             (src/construct.rs).
         - `verify_integrity` rewrites `LedgerHead` as a side effect of verification;
             `current_superhash` unwraps connection/query errors (src/persist.rs).
-- [ ] **Panic paths reachable from scripts.**
+- [x] **Panic paths reachable from scripts.**
         - `RoleKeeper::get` unwraps an unknown role name; `add posit` with an unadded
             role panics (src/construct.rs, src/traqula.rs).
         - `Database::create_appearance_set` unwraps `AppearanceSet::new`, panicking on
@@ -82,7 +82,7 @@ The accepted decisions now define the required fixes.
             (src/interface.rs).
         - CORS default is `allow_origin(Any)` (src/server.rs); tighten for the
             trusted/local beta posture (D029).
-- [ ] **Repository hygiene.**
+- [x] **Repository hygiene.**
         - Stray `Cargo 2.toml` at the repository root is a stale copy of an older
             manifest; delete it.
         - `.github/copilot-instructions.md` refers to `PositoriumError`, but the

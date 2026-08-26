@@ -9,9 +9,9 @@ use std::collections::HashMap;
 use std::fs::{read_to_string, remove_file};
 
 use positorium::construct::{Database, PersistenceMode};
+use positorium::error::{DatabaseError, Result};
 use positorium::interface::QueryInterface;
 use positorium::traqula::Engine;
-use positorium::error::{DatabaseError, Result};
 use std::sync::Arc;
 
 #[cfg(feature = "cli")]
@@ -90,7 +90,7 @@ async fn real_main() -> Result<()> {
     {
         let engine = Engine::new(db.as_ref());
         match engine.execute_collect(&traqula_content) {
-            Ok(_) => {},
+            Ok(_) => {}
             Err(e) => {
                 tracing::warn!(error=%e, "Startup script execution error");
             }
@@ -116,7 +116,11 @@ async fn real_main() -> Result<()> {
         .unwrap_or(8080);
     let addr: std::net::SocketAddr = format!("{}:{}", listen_interface, listen_port)
         .parse()
-        .map_err(|e| DatabaseError::Config(format!("Invalid listen address {listen_interface}:{listen_port} – {e}")))?;
+        .map_err(|e| {
+            DatabaseError::Config(format!(
+                "Invalid listen address {listen_interface}:{listen_port} – {e}"
+            ))
+        })?;
     // Start HTTP server (simple /v1/query endpoint)
     let app = positorium::server::router(Arc::clone(&interface));
     tracing::info!(?addr, "HTTP server listening");

@@ -24,17 +24,16 @@
 //! let db = Database::new(PersistenceMode::InMemory).unwrap();
 //! let (role, _) = db.create_role("person".to_string(), false);
 //! let thing = db.create_thing();
-//! let (appearance, _) = db.create_apperance(*thing, role);
-//! let (appearance_set, _) = db.create_appearance_set(vec![appearance]);
+//! let (appearance, _) = db.create_appearance(*thing, role);
+//! let (appearance_set, _) = db.create_appearance_set(vec![appearance]).unwrap();
 //! let time = Time::new();
 //! let posit = db.create_posit(appearance_set, String::from("Alice"), time.clone());
 //! assert_eq!(posit.value(), &"Alice".to_string());
 //! ```
 use crate::datatype::{DataType, Time};
+use crate::error::DatabaseError;
 #[cfg(feature = "persistence")]
 use crate::persist::Persistor;
-use tracing::{warn};
-use crate::error::DatabaseError;
 use bimap::BiMap;
 use core::hash::{BuildHasher, BuildHasherDefault, Hasher};
 use roaring::RoaringTreemap;
@@ -47,6 +46,9 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::hash::Hash;
 use std::sync::{Arc, Mutex};
+#[cfg(feature = "persistence")]
+use tracing::warn;
+use unicode_normalization::UnicodeNormalization;
 
 /// Internal heterogeneous map keyed by `TypeId` used for storing per-value
 /// type bimap indices for posits.
@@ -88,7 +90,6 @@ pub type OtherHasher = BuildHasherDefault<SeaHasher>;
 pub struct ThingGenerator {
     lower_bound: Thing,
     retained: HashSet<Thing, ThingHasher>,
-    released: Vec<Thing>,
 }
 
 impl ThingGenerator {
@@ -97,7 +98,6 @@ impl ThingGenerator {
         Self {
             lower_bound: GENESIS,
             retained: HashSet::<Thing, ThingHasher>::default(),
-            released: Vec::new(),
         }
     }
     /// Things may be explicitly referenced (e.g. restored) but only implicitly
@@ -113,19 +113,18 @@ impl ThingGenerator {
     pub fn check(&self, t: Thing) -> Option<Thing> {
         self.retained.get(&t).cloned()
     }
-    /// Releases an identity making it available for reuse.
+    /// Releases an abandoned identity without making it available for reuse.
+    ///
+    /// Thing identities are monotonic and never recycled. Failed or duplicate
+    /// commands may therefore leave gaps, as required by D020.
     pub fn release(&mut self, t: Thing) {
-        if self.retained.remove(&t) {
-            self.released.push(t);
-        }
+        self.retained.remove(&t);
     }
-    /// Generates a new (or recycled) identity.
+    /// Generates a new identity.
     pub fn generate(&mut self) -> Thing {
-        self.released.pop().unwrap_or_else(|| {
-            self.lower_bound += 1;
-            self.retained.insert(self.lower_bound);
-            self.lower_bound
-        })
+        self.lower_bound += 1;
+        self.retained.insert(self.lower_bound);
+        self.lower_bound
     }
     /// Iterates over currently retained identities (unordered).
     pub fn iter(&self) -> Iter<'_, Thing> {
@@ -145,7 +144,7 @@ impl Role {
     pub fn new(role: Thing, name: String, reserved: bool) -> Self {
         Self {
             role,
-            name,
+            name: name.nfc().collect(),
             reserved,
         }
     }
@@ -164,7 +163,7 @@ impl Role {
 }
 impl Ord for Role {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.name.cmp(&other.name)
+        self.role.cmp(&other.role)
     }
 }
 impl PartialOrd for Role {
@@ -174,13 +173,12 @@ impl PartialOrd for Role {
 }
 impl PartialEq for Role {
     fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
+        self.role == other.role
     }
 }
 impl Hash for Role {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.name.to_uppercase().hash(state);
-        self.reserved.hash(state);
+        self.role.hash(state);
     }
 }
 
@@ -213,11 +211,12 @@ impl RoleKeeper {
         }
         (Arc::clone(kept_role), previously_kept)
     }
-    pub fn get(&self, name: &str) -> Arc<Role> {
-        Arc::clone(self.kept.get(name).unwrap())
+    pub fn get(&self, name: &str) -> Option<Arc<Role>> {
+        let canonical_name: String = name.nfc().collect();
+        self.kept.get(&canonical_name).map(Arc::clone)
     }
-    pub fn lookup(&self, role: &Thing) -> Arc<Role> {
-        Arc::clone(self.lookup.get(role).unwrap())
+    pub fn lookup(&self, role: &Thing) -> Option<Arc<Role>> {
+        self.lookup.get(role).map(Arc::clone)
     }
     pub fn len(&self) -> usize {
         self.kept.len()
@@ -303,6 +302,7 @@ impl AppearanceSet {
         for appearance in self.appearances.iter() {
             roles.push(String::from(appearance.role.name()));
         }
+        roles.sort();
         roles
     }
 }
@@ -341,7 +341,7 @@ impl AppearanceSetKeeper {
 }
 
 // --------------- Posit ----------------
-#[derive(Eq, PartialOrd, Ord, Debug)]
+#[derive(Eq, Debug)]
 pub struct Posit<V: DataType> {
     posit: Thing, // a posit is also a thing we can "talk" about
     appearance_set: Arc<AppearanceSet>,
@@ -375,6 +375,20 @@ impl<V: DataType> PartialEq for Posit<V> {
         self.appearance_set == other.appearance_set
             && self.value == other.value
             && self.time == other.time
+    }
+}
+impl<V: DataType> Ord for Posit<V> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        (&self.appearance_set, &self.value, &self.time).cmp(&(
+            &other.appearance_set,
+            &other.value,
+            &other.time,
+        ))
+    }
+}
+impl<V: DataType> PartialOrd for Posit<V> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 impl<V: DataType> Hash for Posit<V> {
@@ -480,8 +494,8 @@ impl<K: Eq + Hash, V: Eq + Hash, H: BuildHasher + Default> Lookup<K, V, H> {
         let map = self.index.entry(key).or_insert(HashSet::<V>::new());
         map.insert(value);
     }
-    pub fn lookup(&self, key: &K) -> &HashSet<V> {
-        self.index.get(key).unwrap()
+    pub fn lookup(&self, key: &K) -> Option<&HashSet<V>> {
+        self.index.get(key)
     }
 }
 
@@ -505,8 +519,8 @@ impl<K: Eq + Hash, H: BuildHasher + Default> ThingLookup<K, H> {
             set.remove(thing);
         }
     }
-    pub fn lookup(&self, key: &K) -> &RoaringTreemap {
-        self.index.get(key).unwrap()
+    pub fn lookup(&self, key: &K) -> Option<&RoaringTreemap> {
+        self.index.get(key)
     }
 }
 
@@ -530,6 +544,8 @@ impl PersistenceMode {
         if enable {
             return PersistenceMode::File(_path.into());
         }
+        #[cfg(not(feature = "persistence"))]
+        let _ = enable;
         PersistenceMode::InMemory
     }
 }
@@ -568,6 +584,8 @@ impl Database {
             PersistenceMode::InMemory => Persistor::new_no_persistence(),
             PersistenceMode::File(path) => Persistor::new_from_file(&path)?,
         };
+        #[cfg(not(feature = "persistence"))]
+        let _ = mode;
         // Create all the stuff that goes into a database engine
         let thing_generator = ThingGenerator::new();
         let role_keeper = RoleKeeper::new();
@@ -611,21 +629,23 @@ impl Database {
             persistor: Arc::new(Mutex::new(persistor)),
         };
 
-        // Restore the existing database
-    #[cfg(feature = "persistence")]
-    {
-        if let Err(e) = database.persistor.lock().unwrap().restore_things(&database) { warn!(?e, "restore_things failed"); }
-        if let Err(e) = database.persistor.lock().unwrap().restore_roles(&database) { warn!(?e, "restore_roles failed"); }
-        if let Err(e) = database.persistor.lock().unwrap().restore_posits(&database) { warn!(?e, "restore_posits failed"); }
-        if let Err(e) = database.persistor.lock().unwrap().verify_integrity() { warn!(?e, "verify_integrity reported issue"); }
-    }
+        // Restore is all-or-error: never return a partially hydrated database.
+        #[cfg(feature = "persistence")]
+        {
+            let mut persistor = database
+                .persistor
+                .lock()
+                .map_err(|e| DatabaseError::Lock(e.to_string()))?;
+            persistor.restore_things(&database)?;
+            persistor.restore_roles(&database)?;
+            persistor.restore_posits(&database)?;
+            persistor.verify_integrity()?;
+        }
 
         // Reserve some roles that will be necessary for implementing features
         // commonly found in many other (including non-tradtional) databases.
         database.create_role(String::from("posit"), true);
         database.create_role(String::from("ascertains"), true);
-        database.create_role(String::from("thing"), true);
-        database.create_role(String::from("classification"), true);
 
         Ok(database)
     }
@@ -684,7 +704,9 @@ impl Database {
     pub fn create_thing(&self) -> Arc<Thing> {
         let thing = self.thing_generator.lock().unwrap().generate();
         #[cfg(feature = "persistence")]
-        if let Err(e) = self.persistor.lock().unwrap().persist_thing(&thing) { warn!(?e, "persist_thing failed"); }
+        if let Err(e) = self.persistor.lock().unwrap().persist_thing(&thing) {
+            warn!(?e, "persist_thing failed");
+        }
         Arc::new(thing)
     }
     // functions to create constructs for the keepers to keep that also populate the lookups
@@ -699,8 +721,17 @@ impl Database {
         if !previously_kept {
             #[cfg(feature = "persistence")]
             {
-                if let Err(e) = self.persistor.lock().unwrap().persist_thing(&kept_role.role()) { warn!(?e, "persist_thing(role) failed"); }
-                if let Err(e) = self.persistor.lock().unwrap().persist_role(&kept_role) { warn!(?e, "persist_role failed"); }
+                if let Err(e) = self
+                    .persistor
+                    .lock()
+                    .unwrap()
+                    .persist_thing(&kept_role.role())
+                {
+                    warn!(?e, "persist_thing(role) failed");
+                }
+                if let Err(e) = self.persistor.lock().unwrap().persist_role(&kept_role) {
+                    warn!(?e, "persist_role failed");
+                }
             }
         } else {
             self.thing_generator.lock().unwrap().release(role_thing);
@@ -724,7 +755,11 @@ impl Database {
         }
         (kept_appearance, previously_kept)
     }
+    #[deprecated(since = "0.1.5", note = "use Database::create_appearance")]
     pub fn create_apperance(&self, thing: Thing, role: Arc<Role>) -> (Arc<Appearance>, bool) {
+        self.create_appearance(thing, role)
+    }
+    pub fn create_appearance(&self, thing: Thing, role: Arc<Role>) -> (Arc<Appearance>, bool) {
         self.keep_appearance(Appearance::new(thing, role))
     }
     pub fn keep_appearance_set(&self, appearance_set: AppearanceSet) -> (Arc<AppearanceSet>, bool) {
@@ -746,8 +781,13 @@ impl Database {
     pub fn create_appearance_set(
         &self,
         appearance_set: Vec<Arc<Appearance>>,
-    ) -> (Arc<AppearanceSet>, bool) {
-        self.keep_appearance_set(AppearanceSet::new(appearance_set).unwrap())
+    ) -> Result<(Arc<AppearanceSet>, bool), DatabaseError> {
+        let appearance_set = AppearanceSet::new(appearance_set).ok_or_else(|| {
+            DatabaseError::InvalidAppearanceSet(
+                "an appearance set may contain at most one Thing for each Role".into(),
+            )
+        })?;
+        Ok(self.keep_appearance_set(appearance_set))
     }
     pub fn keep_posit<V: 'static + DataType>(&self, posit: Posit<V>) -> (Arc<Posit<V>>, bool) {
         let (kept_posit, previously_kept) = self.posit_keeper.lock().unwrap().keep(posit);
@@ -792,8 +832,17 @@ impl Database {
         if !previously_kept {
             #[cfg(feature = "persistence")]
             {
-                if let Err(e) = self.persistor.lock().unwrap().persist_thing(&kept_posit.posit()) { warn!(?e, "persist_thing(posit) failed"); }
-                if let Err(e) = self.persistor.lock().unwrap().persist_posit(&kept_posit) { warn!(?e, "persist_posit failed"); }
+                if let Err(e) = self
+                    .persistor
+                    .lock()
+                    .unwrap()
+                    .persist_thing(&kept_posit.posit())
+                {
+                    warn!(?e, "persist_thing(posit) failed");
+                }
+                if let Err(e) = self.persistor.lock().unwrap().persist_posit(&kept_posit) {
+                    warn!(?e, "persist_posit failed");
+                }
             }
         } else {
             self.thing_generator.lock().unwrap().release(posit_thing);
