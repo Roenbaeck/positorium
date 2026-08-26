@@ -119,6 +119,36 @@ fn accepted_literal_display_forms_are_canonical() {
 }
 
 #[test]
+fn certainty_boundaries_and_consistency_follow_the_signed_scale() {
+    assert_eq!(Certainty::from_percent(-128).percent(), -100);
+    assert_eq!(Certainty::from_percent(127).percent(), 100);
+    assert_eq!(Certainty::new(-2.0).percent(), -100);
+    assert_eq!(Certainty::new(2.0).percent(), 100);
+
+    assert!(Certainty::consistent(&[]));
+    assert!(Certainty::consistent(&[
+        Certainty::from_percent(60),
+        Certainty::from_percent(40),
+    ]));
+    assert!(!Certainty::consistent(&[
+        Certainty::from_percent(60),
+        Certainty::from_percent(41),
+    ]));
+    assert!(Certainty::consistent(&[
+        Certainty::from_percent(25),
+        Certainty::from_percent(-75),
+    ]));
+    assert!(Certainty::consistent(&vec![
+        Certainty::from_percent(-95);
+        20
+    ]));
+    assert!(!Certainty::consistent(&vec![
+        Certainty::from_percent(-95);
+        21
+    ]));
+}
+
+#[test]
 fn only_assertion_roles_are_reserved_by_default() {
     let db = Database::new(PersistenceMode::InMemory).unwrap();
     assert_eq!(db.role_keeper().lock().unwrap().len(), 2);

@@ -302,7 +302,9 @@ impl Certainty {
 
     /// Creates a certainty from its exact integer percentage representation.
     pub fn from_percent(alpha: i8) -> Self {
-        Self { alpha }
+        Self {
+            alpha: alpha.clamp(-100, 100),
+        }
     }
 
     /// Returns this certainty's exact integer percentage representation.

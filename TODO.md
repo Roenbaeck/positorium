@@ -175,7 +175,7 @@ The accepted decisions now define the required fixes.
             add storage-layer aliases or new built-in roles (D004).
         - Define Things as store-local identities and require import/export to carry a
             store UUID and perform explicit collision-free identity remapping.
-- [ ] **Validate core certainty behavior.**
+- [x] **Validate core certainty behavior.**
         - Add boundary and contradiction tests for the signed `[-1, 1]` scale and
             `Certainty::consistent`.
 
