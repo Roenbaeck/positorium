@@ -68,7 +68,7 @@ The accepted decisions now define the required fixes.
             a duplicate role in one appearance set (src/construct.rs).
         - `Lookup::lookup` and `ThingLookup::lookup` unwrap missing keys
             (src/construct.rs).
-- [ ] **Where-clause numerics go through binary floating point.**
+- [x] **Where-clause numerics go through binary floating point.**
         - `cmp_numeric` compares via `f64` with a `1e-9` epsilon equality
             (src/traqula.rs), contradicting the intended exact typed comparison (D017).
 - [ ] **`@NOW` is evaluated per occurrence.**

@@ -318,6 +318,16 @@ impl Certainty {
             alpha: (100f64 * a) as i8,
         }
     }
+
+    /// Creates a certainty from its exact integer percentage representation.
+    pub fn from_percent(alpha: i8) -> Self {
+        Self { alpha }
+    }
+
+    /// Returns this certainty's exact integer percentage representation.
+    pub fn percent(&self) -> i8 {
+        self.alpha
+    }
     /// Returns true if a set of reliabilities is non-contradictory per
     /// the inequality from Transitional Modeling:
     ///

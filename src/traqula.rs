@@ -429,15 +429,11 @@ fn parse_i64_constant(_value: &str) -> Option<i64> {
 fn parse_certainty(value: &str) -> Option<Certainty> {
     let token = value.trim();
     let raw = token.strip_suffix('%')?;
-    if let Ok(v) = raw.parse::<f64>() {
-        if (-100.0..=100.0).contains(&v) {
-            Some(Certainty::new(v / 100.0))
-        } else {
-            None
-        }
-    } else {
-        None
-    }
+    let percent = raw.parse::<i16>().ok()?;
+    i8::try_from(percent)
+        .ok()
+        .filter(|value| (-100..=100).contains(value))
+        .map(Certainty::from_percent)
 }
 fn parse_certainty_constant(_value: &str) -> Option<Certainty> {
     None
@@ -1038,31 +1034,36 @@ impl<'en> Engine<'en> {
         return_columns: &mut Option<Vec<String>>,
         exec_error: &mut Option<crate::error::DatabaseError>,
     ) {
-        // Helper numeric comparison
-        fn cmp_numeric(lhs: f64, rhs: f64, op: &str) -> bool {
-            match op {
-                "<" => lhs < rhs,
-                "<=" => lhs <= rhs,
-                ">" => lhs > rhs,
-                ">=" => lhs >= rhs,
-                "=" | "==" => (lhs - rhs).abs() < 1e-9,
-                _ => false,
-            }
+        fn cmp_ordering(ordering: std::cmp::Ordering, op: &str) -> bool {
+            use std::cmp::Ordering::{Equal, Greater, Less};
+            matches!(
+                (ordering, op),
+                (Less, "<" | "<=") | (Equal, "<=" | ">=" | "=" | "==") | (Greater, ">" | ">=")
+            )
         }
         fn cmp_bigdecimal(
             lhs: &bigdecimal::BigDecimal,
             rhs: &bigdecimal::BigDecimal,
             op: &str,
         ) -> bool {
-            use std::cmp::Ordering::*;
-            match (lhs.cmp(rhs), op) {
-                (Less, "<") | (Less, "<=") => true,
-                (Equal, "<=" | "=" | "==") => true,
-                (Greater, ">" | ">=") => true,
-                (Less, ">=") | (Greater, "<=") => false,
-                (Less, ">") | (Greater, "<") => false,
-                (Equal, _) => op == "=" || op == "==",
-                _ => false,
+            cmp_ordering(lhs.cmp(rhs), op)
+        }
+        fn certainty_percent(display: &str) -> Option<i8> {
+            match display {
+                "-1" => Some(-100),
+                "0" => Some(0),
+                "1" => Some(100),
+                _ => {
+                    let (negative, digits) = display
+                        .strip_prefix("-0.")
+                        .map(|digits| (true, digits))
+                        .or_else(|| display.strip_prefix("0.").map(|digits| (false, digits)))?;
+                    if digits.len() != 2 || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+                        return None;
+                    }
+                    let percent = digits.parse::<i8>().ok()?;
+                    Some(if negative { -percent } else { percent })
+                }
             }
         }
         // Track variables referenced in this search command to guide projection
@@ -2385,15 +2386,17 @@ impl<'en> Engine<'en> {
                                     let pass = if ordering {
                                         if (l_type=="Certainty") ^ (r_type=="Certainty") { if exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Ordering comparison requires both sides to be certainties or percent sign (%) certainty mismatch: {} {} {}", l, op, r))); } false }
                                         else if l_type=="Certainty" && r_type=="Certainty" {
-                                            let to_pct = |s:&str| if s=="1" {100} else if s=="-1" {-100} else if s=="0" {0} else if s.starts_with("0.") || s.starts_with("-0.") { (s.parse::<f64>().unwrap_or(0.0)*100.0) as i32 } else {0};
-                                            cmp_numeric(to_pct(&l_text) as f64, to_pct(&r_text) as f64, op)
+                                            match (certainty_percent(&l_text), certainty_percent(&r_text)) {
+                                                (Some(lhs), Some(rhs)) => cmp_ordering(lhs.cmp(&rhs), op),
+                                                _ => false,
+                                            }
                                         } else if (l_type=="i64" || l_type=="Decimal") && (r_type=="i64" || r_type=="Decimal") {
                                             use bigdecimal::BigDecimal; use std::str::FromStr; let lbd=BigDecimal::from_str(&l_text).unwrap_or_else(|_| BigDecimal::from(0)); let rbd=BigDecimal::from_str(&r_text).unwrap_or_else(|_| BigDecimal::from(0)); cmp_bigdecimal(&lbd,&rbd,op)
                                         } else { if exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Ordering comparison not allowed for value variables: {}({}) {} {}({})", l, l_type, op, r, r_type))); } false }
                                     } else { // equality
                                         if op != "=" && op != "==" { if exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Unsupported comparison operator '{}' for value variables", op))); } false }
                                         else if l_type=="Certainty" && r_type=="Certainty" { l_text==r_text }
-                                        else if (l_type=="i64"||l_type=="Decimal") && (r_type=="i64"||r_type=="Decimal") { let lf=l_text.parse::<f64>().unwrap_or(0.0); let rf=r_text.parse::<f64>().unwrap_or(0.0); (lf-rf).abs()<1e-9 }
+                                        else if (l_type=="i64"||l_type=="Decimal") && (r_type=="i64"||r_type=="Decimal") { use bigdecimal::BigDecimal; use std::str::FromStr; match (BigDecimal::from_str(&l_text), BigDecimal::from_str(&r_text)) { (Ok(lhs), Ok(rhs)) => cmp_bigdecimal(&lhs, &rhs, op), _ => false } }
                                         else if l_type=="String" && r_type=="String" { l_text==r_text }
                                         else { l_text==r_text }
                                     };
@@ -2466,12 +2469,11 @@ impl<'en> Engine<'en> {
                                     // Comparison dispatch
                                     let pass = match rhs {
                                         RhsValueKind::Int(r) => {
-                                            if let Ok(l) = lhs_val.parse::<i64>() { cmp_numeric(l as f64, *r as f64, op) } else { if ["<","<=",">",">="].contains(&op.as_str()) && exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Type mismatch for ordering: value '{}' not comparable to int literal {}", lhs_val, r))); } false }
+                                            if let Ok(l) = lhs_val.parse::<i64>() { cmp_ordering(l.cmp(r), op) } else { if ["<","<=",">",">="].contains(&op.as_str()) && exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Type mismatch for ordering: value '{}' not comparable to int literal {}", lhs_val, r))); } false }
                                         }
                                         RhsValueKind::Cert(rpct) => {
                                             // lhs_val is display (e.g., 0.75, -0.25, 1, -1, 0)
-                                            let l_pct_opt = if lhs_val == "1" { Some(100) } else if lhs_val == "-1" { Some(-100) } else if lhs_val == "0" { Some(0) } else if lhs_val.starts_with("0.") || lhs_val.starts_with("-0.") { lhs_val.parse::<f64>().ok().map(|f| (f*100.0) as i32) } else { None };
-                                            if let Some(lpct) = l_pct_opt { cmp_numeric(lpct as f64, *rpct as f64, op) } else { if ["<","<=",">",">="].contains(&op.as_str()) && exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Type mismatch for ordering: value '{}' not comparable to certainty literal {}%", lhs_val, rpct))); } false }
+                                            if let Some(lpct) = certainty_percent(&lhs_val) { cmp_ordering(lpct.cmp(rpct), op) } else { if ["<","<=",">",">="].contains(&op.as_str()) && exec_error.is_none() { *exec_error = Some(DatabaseError::Execution(format!("Type mismatch for ordering: value '{}' not comparable to certainty literal {}%", lhs_val, rpct))); } false }
                                         }
                                         RhsValueKind::Decimal(rraw) => {
                                             // compare as BigDecimal via string parse fallback to f64

@@ -76,6 +76,18 @@ fn numeric_pruning() {
 }
 
 #[test]
+fn adjacent_large_integers_compare_exactly() {
+    let db = Database::new(PersistenceMode::InMemory).unwrap();
+    let engine = Engine::new(Box::leak(Box::new(db)));
+    engine.execute("add role number; add posit [{(+n1, number)}, 9007199254740992, @NOW]; add posit [{(+n2, number)}, 9007199254740993, @NOW];");
+
+    let result = engine
+        .execute_collect("search [{(*, number)}, +n, *] where n = 9007199254740993 return n;")
+        .expect("query ok");
+    assert_eq!(result.rows, vec![vec!["9007199254740993".to_string()]]);
+}
+
+#[test]
 fn error_unknown_variable() {
     let engine = setup();
     let script = "search [{(*, number)}, +n, *] where x = 5 return n;"; // x never bound
