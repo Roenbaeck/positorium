@@ -875,6 +875,33 @@ function positionTerrainGeometry(layout) {
     labelPositions.push([point.x, point.y]);
   });
 
+  const contourPaths = [...els.terrainMap.querySelectorAll('.terrain-isopleth > path')];
+  const contourCellSize = 24;
+  const contourGrid = new Map();
+  contourPaths.forEach(path => {
+    const length = path.getTotalLength();
+    for (let index = 0; index < 120; index++) {
+      const point = path.getPointAtLength(length * index / 120);
+      const cell = `${Math.floor(point.x / contourCellSize)}:${Math.floor(point.y / contourCellSize)}`;
+      if (!contourGrid.has(cell)) contourGrid.set(cell, []);
+      contourGrid.get(cell).push({ path, x: point.x, y: point.y });
+    }
+  });
+  const crossingClearanceAt = (point, target) => {
+    let clearance = 90;
+    const cellX = Math.floor(point.x / contourCellSize);
+    const cellY = Math.floor(point.y / contourCellSize);
+    for (let offsetX = -2; offsetX <= 2; offsetX++) {
+      for (let offsetY = -2; offsetY <= 2; offsetY++) {
+        const samples = contourGrid.get(`${cellX + offsetX}:${cellY + offsetY}`) || [];
+        samples.forEach(sample => {
+          if (sample.path === target) return;
+          clearance = Math.min(clearance, Math.hypot(point.x - sample.x, point.y - sample.y));
+        });
+      }
+    }
+    return clearance;
+  };
   const allocationAnchors = [];
   els.terrainMap.querySelectorAll('.terrain-allocation').forEach(allocation => {
     const targetId = allocation.querySelector('[data-target-isopleth]')?.dataset.targetIsopleth;
@@ -892,10 +919,12 @@ function positionTerrainGeometry(layout) {
       const anchorClearance = allocationAnchors.length
         ? Math.min(...allocationAnchors.map(position => Math.hypot(point.x - position[0], point.y - position[1])))
         : 90;
+      const crossingClearance = crossingClearanceAt(point, target);
       return {
         point,
         score: point.y * 3 - Math.abs(point.x - itemLayout.port[0]) * 0.7 -
-          Math.max(0, 58 - labelClearance) * 4 - Math.max(0, 52 - anchorClearance) * 2
+          Math.max(0, 58 - labelClearance) * 4 - Math.max(0, 52 - anchorClearance) * 2 -
+          Math.max(0, 34 - crossingClearance) * 12
       };
     });
     const point = candidates.sort((left, right) => right.score - left.score)[0].point;
