@@ -41,7 +41,7 @@
   white-space: nowrap;
 }
 
-.mock-badge,
+.terrain-data-badge,
 .detail-kind {
   color: #8a5518;
   font-size: 0.55rem;
@@ -50,11 +50,17 @@
   text-transform: uppercase;
 }
 
-.mock-badge {
+.terrain-data-badge {
   padding: 0.23rem 0.36rem;
   border: 1px solid #dfc28e;
   border-radius: 4px;
   background: #fff7e8;
+}
+
+.terrain-data-badge.live {
+  border-color: #9ec9b9;
+  background: #edf8f3;
+  color: #2f7768;
 }
 
 .terrain-controls {
@@ -96,6 +102,12 @@
 .terrain-toggle input,
 .support-control input {
   accent-color: #2f7768;
+}
+
+.terrain-toggle input:disabled,
+.support-control input:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .terrain-stats {
@@ -228,6 +240,20 @@
 .terrain-axis-note {
   fill: #76837e;
   font: 10px var(--sans);
+}
+
+.terrain-empty {
+  text-anchor: middle;
+}
+
+.terrain-empty-title {
+  fill: #34433e;
+  font: 650 22px var(--serif);
+}
+
+.terrain-empty-copy {
+  fill: #74807b;
+  font: 12px var(--sans);
 }
 
 .terrain-isopleth,
@@ -519,6 +545,27 @@
 }
 
 .terrain-query-button:hover {
+  border-color: #78a99d;
+  background: #e3f0eb;
+}
+
+.terrain-fixture-link {
+  width: 100%;
+  min-height: 32px;
+  margin-top: 0.85rem;
+  border: 1px solid #bfd2cb;
+  border-radius: 6px;
+  background: #edf5f1;
+  color: #2d685b;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.61rem;
+  font-weight: 750;
+  text-decoration: none;
+}
+
+.terrain-fixture-link:hover {
   border-color: #78a99d;
   background: #e3f0eb;
 }

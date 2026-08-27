@@ -1,0 +1,50 @@
+/*
+  Positorium Terrain fixture
+
+  Run this complete script in a fresh Local WASM session. The final two searches
+  return history and as-of-now incidence rows; Query Studio recognizes that pair
+  and builds the Terrain workspace from the actual result cells.
+*/
+
+add role name, `hair color`, height, `social security number`, `beard color`, RFID, owner, pet;
+
+add posit [{(+mira, name)}, "Mira", '2024-01-01'],
+          [{(mira, `hair color`)}, "black", '2024-01-01'],
+
+          [{(+ada, name)}, "Ada Lovelace", '2024-01-01'],
+          [{(ada, name)}, "Ada Byron", '2025-01-01'],
+          [{(ada, `hair color`)}, "brown", '2024-01-01'],
+          [{(ada, height)}, 165, '2024-01-01'],
+          [{(ada, `social security number`)}, "100-10-1000", '2024-01-01'],
+
+          [{(+ben, name)}, "Ben", '2024-01-01'],
+          [{(ben, `hair color`)}, "blond", '2024-01-01'],
+          [{(ben, height)}, 181, '2024-01-01'],
+          [{(ben, `social security number`)}, "200-20-2000", '2024-01-01'],
+
+          [{(+cass, name)}, "Cass", '2024-01-01'],
+          [{(cass, `hair color`)}, "auburn", '2024-01-01'],
+          [{(cass, height)}, 174, '2024-01-01'],
+          [{(cass, `social security number`)}, "300-30-3000", '2024-01-01'],
+          [{(cass, `beard color`)}, "auburn", '2024-01-01'],
+
+          [{(+mochi, name)}, "Mochi", '2024-01-01'],
+          [{(mochi, `hair color`)}, "white", '2024-01-01'],
+          [{(mochi, RFID)}, "PET-001", '2024-01-01'],
+
+          [{(+pixel, name)}, "Pixel", '2024-01-01'],
+          [{(pixel, `hair color`)}, "grey", '2024-01-01'],
+          [{(pixel, RFID)}, "PET-002", '2024-01-01'];
+
+add posit [{(cass, owner), (mochi, pet)}, "fostered", '2024-02-01'],
+          [{(cass, owner), (mochi, pet)}, "adopted", '2024-03-01'],
+          [{(cass, owner), (pixel, pet)}, "adopted", '2024-03-01'],
+          [{(ada, owner), (mochi, pet)}, "weekend care", '2024-04-01'];
+
+search ?posit_id = [?appearance_set = {(?thing, ?role_name), ...}, ?value, ?time]
+return ?posit_id, ?appearance_set, ?thing, ?role_name, ?value, ?time
+order by ?posit_id, ?role_name;
+
+search ?posit_id = [?appearance_set = {(?thing, ?role_name), ...}, ?value, ?time] as of @NOW
+return ?posit_id, ?appearance_set, ?thing, ?role_name, ?value, ?time
+order by ?posit_id, ?role_name;

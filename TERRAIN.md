@@ -1,17 +1,80 @@
-# Role Terrain prototype
+# Role Terrain
 
-Role Terrain is an isopleth-inspired structural view of a Positorium database.
-The first prototype lives in the Terrain tab of `positorium.html` and uses
-clearly labelled mock data. It does not inspect the live database yet.
+Role Terrain is an isopleth-inspired structural view of actual Positorium query
+results. The Terrain tab in `positorium.html` does not contain a seeded dataset:
+it recognizes a history/current pair of incidence result sets and derives the
+map, statistics, profiles, support contours, and relationship allocations from
+their typed cells.
+
+## Try the supplied terrain
+
+1. Open Query Studio with **Local WASM** enabled and start with a fresh page load.
+2. Paste the complete contents of [`traqula/terrain.traqula`](traqula/terrain.traqula)
+   into the Query editor.
+3. Run the script, including both searches at the end.
+4. Open **Terrain**.
+
+The source badge should read **Query data**. The fixture is intentionally small
+enough to audit by eye, but includes repeated values and relationship history.
+The expected measurements are:
+
+| Measurement | History | As of now |
+| --- | ---: | ---: |
+| Result rows | 30 | 27 |
+| Things | 6 | 6 |
+| Roles | 8 | 8 |
+| Appearance sets | 24 | 24 |
+| Posits | 26 | 24 |
+
+The four projected attribute profiles produce support labels of `6`, `3`, `2`,
+and `1`:
+
+- all six Things have `name` and `hair color`;
+- Ada, Ben, and Cass also have `height` and `social security number`;
+- Mochi and Pixel instead have `RFID`;
+- Cass alone also has `beard color`.
+
+The `{owner, pet}` relationship has three appearance sets. It has four recorded
+posits in History because Cass and Mochi change from `fostered` to `adopted`, and
+three posits As of now. Its endpoint allocations are:
+
+- Cass as `owner`: 1 distinct Thing, 2 relationship participations;
+- Ada as `owner`: 1 distinct Thing, 1 participation;
+- Mochi and Pixel as `pet`: 2 distinct Things, 3 participations.
+
+## Result-set contract
+
+Terrain requires two compatible result sets from the same complete script
+execution. One is the recorded-history search and one contains an `as of` clause.
+Each result set must project these six logical fields:
+
+```text
+posit, appearance set, member Thing, member Role, value, time
+```
+
+The fixture uses the non-keyword variable names below:
+
+```traqula
+search ?posit_id = [?appearance_set = {(?thing, ?role_name), ...}, ?value, ?time]
+return ?posit_id, ?appearance_set, ?thing, ?role_name, ?value, ?time;
+```
+
+The client also accepts the compact aliases `p`, `aset`, `r`, `v`, and `t`.
+Column order is irrelevant. Typed cell text is used losslessly; display-table
+formatting is not scraped.
+
+The history and current searches must both be returned together. This gives the
+browser two coherent frames produced under the engine's normal script-execution
+boundary. Running an unrelated search does not silently replace an already
+loaded Terrain because its column contract does not match.
 
 ## Role-space semantics
 
-The map places Roles as points. An isopleth encloses a combination of Role
-points and is labelled with the number of distinct Things that appear in every
-enclosed Role. Its area does not encode population size.
+The map places attribute Roles as points. A Role is treated as an attribute Role
+when it occurs in a single-appearance set. Multi-appearance sets are treated as
+relationship candidates.
 
-For a selected scope and displayed Role universe `U`, let the projected profile
-of Thing `t` be:
+For displayed Role universe `U`, the projected profile of Thing `t` is:
 
 ```text
 profile_U(t) = { r in U | t appears in Role r }
@@ -24,151 +87,42 @@ extent_U(C)  = { t | C is a subset of profile_U(t) }
 support_U(C) = |extent_U(C)|
 ```
 
-Adding an enclosed Role cannot increase support. Geometry therefore grows as
-the Role combination grows while the labelled support stays equal or decreases.
-The mock example renders these deductions:
+Each distinct exact profile supplies one isopleth. Its support includes every
+profile that is a superset, so adding an enclosed Role cannot increase support.
+The map area does not encode population size; the numeric label does.
 
-```text
-support({name, hair color}) = 5800
-support({name, hair color, height, SSN}) = 5000
-support({name, hair color, height, SSN, beard color}) = 1450
-support({name, hair color, RFID}) = 750
-```
-
-Equal individual Role counts are insufficient to share an isopleth: the Things
-must be the same population. The backend supplies semantic Role combinations
-and support; the browser owns Role positions, paths, label placement, and color.
-
-Client geometry must preserve the set order. If enclosed Role set `C` is a
-strict subset of `D`, the complete line for `C` must lie inside the line for `D`
-and the two lines must not cross. Lines may cross only for incomparable Role
-sets, such as `{name, hair color, RFID}` and
-`{name, hair color, height, social security number}`. Layout validation samples
-the complete paths, not only the Role points they contain.
-
-Role text must maintain a visible clearance from every isopleth. Support labels
-are mounted at fractions of their own SVG paths, using a small canvas-colored
-knockout so the number visibly belongs to the interrupted line. Relationship
-allocation anchors are also derived from fractions of their target isopleth
-paths, giving zero geometric distance between edge and line. Disjoint
-non-crossing lines maintain a minimum client-layout gap. The prototype uses a
-plain canvas without a grid or Role-label background shapes.
-
-## Exact projected profiles
-
-An isopleth reports an intersection and does not ordinarily prove the absence of
-Roles outside it. Absence is deducible in the mock because `projection.complete`
-is true and the response supplies mutually exclusive profiles relative to `U`.
-
-Each profile supplies:
-
-- `id`: stable key used by the client layout.
-- `present_roles`: Roles present in the projected profile.
-- `absent_roles`: Roles proven absent within the projection.
-- `things`: distinct Things having that exact projected profile.
-
-For example, the four profiles under the 5800 isopleth partition its support:
-
-```text
-50 + 3550 + 1450 + 750 = 5800
-```
-
-If the projection is incomplete, or if profiles or isopleths are omitted by a
-support threshold, missing geometry means “not shown”, never zero.
+Terrain currently projects at most eight attribute Roles, ordered by distinct
+Thing support and then Role name. The footer states whether this projection is
+complete. A missing line means “not shown”, never zero, including when the
+minimum-support control hides it.
 
 ## Relationship semantics
 
-A relationship overlay represents an exact multi-role appearance-set signature,
-not an overlap between identity populations. Aggregate `role_totals` report:
+Terrain groups multi-appearance sets by their exact sorted Role signature and
+displays the signature with the most appearance sets. For that signature:
 
-- `distinct_things`: distinct Things appearing in that Role in matching sets.
-- `participations`: appearances in that Role across matching sets.
+- `appearance_sets` counts matching sets;
+- `posits` counts their distinct posit identities in the selected time frame;
+- `distinct_things` counts unique endpoint Things for each Role;
+- `participations` counts endpoint appearances across matching sets.
 
-Each line in the diagram is an `allocation` from one relationship Role to one
-exact projected profile and its anchoring `isopleth_id`. Allocations are
-disjoint, so their counts may be added. Hiding an isopleth by support threshold
-also hides allocations anchored to it.
+Allocations group each relationship endpoint by its exact projected attribute
+profile. Their lines therefore connect real endpoint cohorts to the support
+isopleth representing that profile. Repeated historical posits for one unchanged
+appearance set increase the posit count but do not invent extra participations.
 
-Relationship signatures render in a reserved side rail rather than inside the
-isopleth field. Each allocation is a separate row and edge: the edge begins at a
-path-derived anchor on its target isopleth and ends at its own rail port. The
-rail has an explicit visual gap from every isopleth and remains horizontally
-pannable with the map on narrow screens.
-The mock `{owner, pet}` relationship states:
+## Client layout and interactions
 
-```text
-owner -> beard profile:       100 unique, 170 participations
-owner -> four-Role profile:   400 unique, 430 participations
-pet   -> RFID profile:        600 unique, 600 participations
-```
+Semantic counts come from query results; the browser owns deterministic Role
+positions, contour paths, labels, and colors. Query/Results and Terrain remain
+alternate workspaces.
 
-Consequently there are `500` unique owners but `600` owner participations, while
-all `600` pets participate once. The signature reports `600` distinct appearance
-sets. Recorded posits remain a separate history measure.
-
-## Mock contract
-
-`TERRAIN_MOCK_DATA` in `positorium-terrain.js` is the proposed semantic response
-shape:
-
-```json
-{
-  "schema_version": 2,
-  "source": "mock",
-  "database": {
-    "things": 12480,
-    "roles": 10,
-    "appearance_sets": 9730,
-    "posits": 38205
-  },
-  "frames": {
-    "history": {
-      "label": "All recorded history",
-      "projection": {"complete": true, "roles": []},
-      "profiles": [],
-      "isopleths": [],
-      "relationship": {}
-    },
-    "snapshot": {
-      "label": "Maximal values as of now",
-      "projection": {"complete": true, "roles": []},
-      "profiles": [],
-      "isopleths": [],
-      "relationship": {}
-    }
-  }
-}
-```
-
-The production response should use stable Role identities alongside display
-names, allow multiple relationship signatures, and paginate or threshold large
-result sets. It must be captured under the database execution owner so counts
-come from one coherent state.
-
-## Prototype interactions
-
-- Query/Results and Terrain are alternate workspaces; Terrain uses the complete
-  content area rather than a result tab.
-- `As of now` is the default frame; History remains available as an explicit
-  switch for recorded-history structure.
-- Minimum support hides low-support isopleths without implying zero.
+- **As of now** is the default frame; **History** shows recorded-history structure.
+- Minimum support hides low-support isopleths.
 - Relationships can be hidden independently.
 - Selecting a Role, isopleth, relationship, or allocation opens its measurements.
-- Prepare query generates Traqula from semantic Roles rather than stored source.
-  It switches back to the Query workspace with the editor focused.
+- **Prepare query** generates Traqula from the selected, query-derived Roles and
+  returns to the Query workspace.
 
-## Backend handoff
-
-A future Rust implementation should provide:
-
-1. Database totals and per-execution mutation effects.
-2. Distinct Thing incidence by Role for an explicit temporal/assertion scope.
-3. A declared Role universe, exact projected profiles, and support isopleths,
-  computed with bounded arity and minimum support.
-4. Exact multi-role appearance-set signatures with aggregate Role totals and
-  disjoint allocations to projected profiles.
-5. A versioned HTTP, SSE, and WASM representation of the same semantic payload.
-
-The frontend should then replace `TERRAIN_MOCK_DATA` with that response. Layout
-remains a client concern and may initially use deterministic templates before a
-stable automatic contour layout is introduced.
+The Rust fixture test validates the result counts and typed cells. The Node test
+validates the client aggregation independently of SVG layout.

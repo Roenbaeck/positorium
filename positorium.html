@@ -33,7 +33,7 @@
   </nav>
   <div class="workspace-meta" aria-label="Workspace details">
     <span class="workspace-status"><span class="status-dot" aria-hidden="true"></span>Local workspace</span>
-    <span id="studioVersion" class="version-chip" data-version="0.3.3">Studio v0.3.3</span>
+    <span id="studioVersion" class="version-chip" data-version="0.4.0">Studio v0.4.0</span>
     <span class="version-chip traqula-version">Traqula v1</span>
     <button id="settingsBtn" class="icon-button settings-button" type="button" aria-label="Studio settings" aria-controls="settingsPanel" aria-expanded="false" title="Studio settings"></button>
   </div>
@@ -159,8 +159,8 @@
   <section id="terrainView" class="terrain-workspace" aria-label="Terrain workspace" hidden>
     <div class="terrain-header">
       <div class="terrain-source">
-        <span class="mock-badge">Mock data</span>
-        <span>Backend contract preview</span>
+        <span id="terrainSourceBadge" class="terrain-data-badge">Awaiting query</span>
+        <span id="terrainSourceText">Run a Terrain incidence script to populate this workspace</span>
       </div>
       <div class="terrain-controls" aria-label="Terrain controls">
         <div class="segmented-control" role="group" aria-label="Data scope">
@@ -173,7 +173,7 @@
         </label>
       </div>
     </div>
-    <div id="terrainStats" class="terrain-stats" aria-label="Mock database statistics"></div>
+    <div id="terrainStats" class="terrain-stats" aria-label="Query-derived terrain statistics"></div>
     <div class="terrain-body">
       <div class="terrain-map-panel">
         <div class="terrain-map-heading">
@@ -183,12 +183,12 @@
           </div>
           <label class="support-control" for="terrainSupport">
             <span>Minimum support <output id="terrainSupportValue">0</output></span>
-            <input id="terrainSupport" type="range" min="0" max="6000" step="250" value="0">
+            <input id="terrainSupport" type="range" min="0" max="1" step="1" value="0" disabled>
           </label>
         </div>
         <div class="terrain-canvas">
           <svg id="terrainMap" viewBox="0 0 940 500" role="img" aria-labelledby="terrainMapTitle terrainMapDescription">
-            <title id="terrainMapTitle">Mock role-isopleth visualization</title>
+            <title id="terrainMapTitle">Query-derived role-isopleth visualization</title>
             <desc id="terrainMapDescription">Role labels are enclosed by support isopleths. Relationship allocation lines connect an exact appearance-set signature to projected identity profiles.</desc>
           </svg>
         </div>
@@ -240,7 +240,9 @@ const els = {
   terrainDetail: document.getElementById('terrainDetail'),
   terrainSupport: document.getElementById('terrainSupport'),
   terrainSupportValue: document.getElementById('terrainSupportValue'),
-  terrainRelationships: document.getElementById('terrainRelationships')
+  terrainRelationships: document.getElementById('terrainRelationships'),
+  terrainSourceBadge: document.getElementById('terrainSourceBadge'),
+  terrainSourceText: document.getElementById('terrainSourceText')
 };
 let lastResponse = null;
 const STUDIO_VERSION = els.studioVersion.dataset.version;
@@ -310,6 +312,7 @@ function clearResults() {
   els.resultSetSelect.onchange = null;
   els.emptyState.style.display = 'flex';
   lastResponse = null;
+  if (typeof clearTerrainData === 'function') clearTerrainData();
   activateTab('table');
   setStatus('Results cleared');
 }
@@ -748,6 +751,7 @@ async function runWasm(script, started) {
     }
     els.progress.value = 80;
     const resultSets = output.result_sets || [];
+    captureTerrainResultSets(resultSets);
     populateResultSetSelect(resultSets);
     const first = resultSets[0] || { columns: [], rows: [] };
     const columns = first.columns;
@@ -898,6 +902,7 @@ async function runQuery() {
       lastResponse = json;
       els.progress.value=85;
       if (json.status === 'ok') {
+        captureTerrainResultSets(json.result_sets || (json.columns ? [json] : []));
         if (json.result_sets) {
           populateResultSetSelect(json.result_sets);
           const first = json.result_sets[0];
@@ -1017,6 +1022,7 @@ async function runStream(endpoint, payload, started, controller) {
               setStatus('OK');
               // Ensure dropdown exists even if earlier start events had an exception
               rebuildStreamingDropdown(multiSets, currentSetIndex);
+              captureTerrainResultSets(multiSets);
               els.jsonOut.textContent = JSON.stringify({ status:'ok', result_sets: multiSets.map((s,i)=>({ index:i, columns:s.columns, rows:s.rows, row_count: s.row_count||s.rows.length, limited: !!s.limited, search: s.search })) }, null, 2);
             } else {
               showCompletionSummary(

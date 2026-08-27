@@ -12,6 +12,9 @@ on:
       - "positorium.css"
       - "positorium-terrain.js"
       - "positorium-terrain.css"
+      - "traqula/terrain.traqula"
+      - "tests/terrain_client.test.js"
+      - "tests/terrain_fixture.rs"
       - "og.png"
       - ".github/workflows/pages.yml"
 
@@ -29,6 +32,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - name: Terrain client aggregation test
+        run: node tests/terrain_client.test.js
+      - name: Terrain Traqula fixture test
+        run: cargo test --test terrain_fixture
       - run: rustup target add wasm32-unknown-unknown
       - name: Install wasm-pack
         run: cargo install wasm-pack --locked --version 0.14.0
@@ -40,8 +47,10 @@ jobs:
         shell: bash
         run: |
           mkdir site
+          mkdir -p site/traqula
           cp positorium.html site/index.html
           cp positorium.css positorium-terrain.css positorium-terrain.js og.png site/
+          cp traqula/terrain.traqula site/traqula/
           cp -R pkg site/pkg
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5

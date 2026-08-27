@@ -215,10 +215,11 @@ Query Studio has an independent beta SemVer in the `studioVersion` element in
 change. The version is visible in the header; the browser remembers the last-seen
 version for that origin and reports upgrades in the Activity view.
 
-The Terrain tab currently uses explicitly labelled mock data to prototype Role
-support isopleths and exact relationship-profile allocations without requiring the
-future Rust statistics API. Its semantics, payload boundary, and backend handoff
-are specified in [TERRAIN.md](TERRAIN.md).
+The Terrain tab derives Role support isopleths and exact relationship-profile
+allocations from a compatible history/current pair of typed query result sets.
+[`traqula/terrain.traqula`](traqula/terrain.traqula) is a paste-ready fixture for
+the web UI; the result contract, expected counts, and semantics are specified in
+[TERRAIN.md](TERRAIN.md).
 
 ## Updated Status and Roadmap
 
