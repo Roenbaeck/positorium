@@ -1,16 +1,23 @@
-use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+#[cfg(feature = "persistence")]
+use criterion::BatchSize;
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use positorium::construct::{Database, PersistenceMode};
 use positorium::traqula::{Engine, ResultSet};
 use std::cell::{Cell, OnceCell};
 use std::hint::black_box;
+#[cfg(feature = "persistence")]
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+#[cfg(feature = "persistence")]
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[cfg(feature = "persistence")]
 static NEXT_STORE: AtomicU64 = AtomicU64::new(1);
 
+#[cfg(feature = "persistence")]
 struct TemporaryStore(PathBuf);
 
+#[cfg(feature = "persistence")]
 impl TemporaryStore {
     fn new(label: &str) -> Self {
         let ordinal = NEXT_STORE.fetch_add(1, Ordering::Relaxed);
@@ -25,6 +32,7 @@ impl TemporaryStore {
     }
 }
 
+#[cfg(feature = "persistence")]
 impl Drop for TemporaryStore {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
@@ -85,6 +93,7 @@ fn historical_batch(entities: usize, versions: usize) -> String {
     script
 }
 
+#[cfg(feature = "persistence")]
 fn populated_file_store(count: usize) -> (TemporaryStore, u64) {
     let store = TemporaryStore::new("populated");
     let database = Database::new(store.mode()).unwrap();
@@ -122,6 +131,7 @@ fn historical_database(entities: usize, versions: usize) -> Database {
     database
 }
 
+#[cfg(feature = "persistence")]
 fn directory_bytes(path: &Path) -> u64 {
     std::fs::read_dir(path)
         .unwrap()
@@ -129,6 +139,7 @@ fn directory_bytes(path: &Path) -> u64 {
         .sum()
 }
 
+#[cfg(feature = "persistence")]
 fn append_and_storage_benchmarks(c: &mut Criterion) {
     let mut group = c.benchmark_group("append/durable_atomic_batch");
     for posits in [1_usize, 10, 100, 1_000] {
@@ -156,6 +167,7 @@ fn append_and_storage_benchmarks(c: &mut Criterion) {
     group.finish();
 }
 
+#[cfg(feature = "persistence")]
 fn replay_benchmarks(c: &mut Criterion) {
     let mut group = c.benchmark_group("replay/warm_startup");
     for posits in [10_000_usize, 100_000] {
@@ -362,6 +374,7 @@ fn report_result_set(layout: &str, size: u64, measured: &ResultSet) {
     );
 }
 
+#[cfg(feature = "persistence")]
 criterion_group!(
     benches,
     append_and_storage_benchmarks,
@@ -369,4 +382,6 @@ criterion_group!(
     query_benchmarks,
     result_set_benchmarks
 );
+#[cfg(not(feature = "persistence"))]
+criterion_group!(benches, query_benchmarks, result_set_benchmarks);
 criterion_main!(benches);
