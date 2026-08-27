@@ -43,3 +43,5 @@ Cargo.lock
 *.out
 *.pid
 *.tex
+TRAQULA 2.md
+benches/benchmark 2.rs

@@ -9,6 +9,8 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "positorium.html"
+      - "positorium.css"
+      - "og.png"
       - ".github/workflows/pages.yml"
 
 permissions:
@@ -37,6 +39,7 @@ jobs:
         run: |
           mkdir site
           cp positorium.html site/index.html
+          cp positorium.css og.png site/
           cp -R pkg site/pkg
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

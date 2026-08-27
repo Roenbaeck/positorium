@@ -199,9 +199,7 @@ Logging uses `tracing` with `RUST_LOG` filtering.
 
 ### Web UI (positorium.html)
 
-A minimal static HTML client (`positorium.html`) demonstrates submitting scripts to the server endpoint and rendering results. Open it in a browser (or host it) and point the form to your server's `/v1/query` URL.
-
-<img src="./positorium_web_app.png">
+A focused static query studio (`positorium.html`) supports composing Traqula scripts, submitting them to the server or local WASM engine, and inspecting table, JSON, and activity views. Open it in a browser (or host it) and point the endpoint field to your server's `/v1/query` URL.
 
 ## Updated Status and Roadmap
 

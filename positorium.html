@@ -2,66 +2,150 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Positorium Query Console</title>
+<title>Positorium — Traqula Query Studio</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="description" content="Compose Traqula scripts and inspect Positorium results in a focused local workspace." />
+<meta property="og:title" content="Positorium — Traqula Query Studio" />
+<meta property="og:description" content="Compose Traqula scripts and inspect Positorium results in a focused local workspace." />
+<meta property="og:type" content="website" />
+<meta property="og:url" content="https://roenbaeck.github.io/positorium/" />
+<meta property="og:image" content="https://roenbaeck.github.io/positorium/og.png" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Positorium — Traqula Query Studio" />
+<meta name="twitter:description" content="Compose Traqula scripts and inspect Positorium results in a focused local workspace." />
+<meta name="twitter:image" content="https://roenbaeck.github.io/positorium/og.png" />
 <link rel="stylesheet" href="positorium.css" />
 </head>
 <body>
 <!-- Inline regex-based syntax highlighting (no external deps) -->
-<header>
-  <img class="svg" src="Traqula.svg"/>
-  Positorium Query Console
+<header class="app-header">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true">P</span>
+    <div class="brand-copy">
+      <span class="brand-name">Positorium</span>
+      <span class="brand-product">Traqula Query Studio</span>
+    </div>
+  </div>
+  <div class="workspace-meta" aria-label="Workspace details">
+    <span class="workspace-status"><span class="status-dot" aria-hidden="true"></span>Local workspace</span>
+    <span class="version-chip">Traqula v1</span>
+  </div>
 </header>
-<main>
+<main class="app-main">
+  <section class="connection-bar" aria-label="Connection settings">
+    <div class="connection-label">
+      <span class="connection-icon" aria-hidden="true"></span>
+      <div>
+        <label for="endpoint">Query endpoint</label>
+        <span>Trusted local interface</span>
+      </div>
+    </div>
+    <div class="endpoint-field">
+      <span class="protocol-chip" aria-hidden="true">POST</span>
+      <input id="endpoint" type="url" value="http://127.0.0.1:8080/v1/query" aria-describedby="endpointHint" />
+    </div>
+    <span id="endpointHint" class="connection-hint">Loopback connections only</span>
+  </section>
+
   <div id="splitContainer">
-    <div id="editorPane">
-      <section>
-        <label for="endpoint">Endpoint</label>
-        <input id="endpoint" type="text" value="http://127.0.0.1:8080/v1/query" />
-        <label for="script">Traqula Script (Ctrl+Enter to run)</label>
-        <div id="script-container">
-          <div id="script" contenteditable="true" spellcheck="false"></div>
+    <div id="editorPane" class="workspace-pane">
+      <section class="query-panel">
+        <div class="panel-heading">
+          <div>
+            <span class="eyebrow">Compose</span>
+            <h1>Query</h1>
+          </div>
+          <div class="primary-actions">
+            <button id="clearBtn" class="button-secondary" type="button" title="Clear results">Clear</button>
+            <button id="runBtn" class="button-primary" type="button" title="Run query (Ctrl or Command + Enter)">
+              <span class="run-icon" aria-hidden="true"></span>
+              <span>Run query</span>
+              <kbd>⌘↵</kbd>
+            </button>
+          </div>
         </div>
-        <div class="controls">
-          <button id="runBtn">Run</button>
-          <button id="clearBtn" title="Clear results">Clear</button>
-          <label>Timeout <input type="number" id="timeout" min="0" step="100" placeholder="ms"></label>
-          <label><input type="checkbox" id="autoScroll" checked> Auto-scroll to latest</label>
-          <label><input type="checkbox" id="streamMode"> Stream results</label>
-          <label><input type="checkbox" id="wasmMode"> Local WASM</label>
+
+        <div class="editor-frame">
+          <div class="editor-toolbar">
+            <span class="file-name"><span class="file-dot" aria-hidden="true"></span>workspace.traqula</span>
+            <span class="save-state">Autosaved locally</span>
+          </div>
+          <div id="script-container">
+            <div id="script" contenteditable="true" spellcheck="false" role="textbox" aria-multiline="true" aria-label="Traqula script" data-placeholder="Write a Traqula script…"></div>
+          </div>
         </div>
-        <div id="statusBar"></div>
-        <progress id="progress" max="100" value="0"></progress>
+
+        <div class="controls" aria-label="Query options">
+          <label class="timeout-control" for="timeout">
+            <span>Timeout</span>
+            <span class="number-field"><input type="number" id="timeout" min="0" step="100" placeholder="5000" inputmode="numeric"><span>ms</span></span>
+          </label>
+          <label class="switch-label">
+            <input type="checkbox" id="autoScroll" checked>
+            <span class="switch" aria-hidden="true"></span>
+            <span>Auto-scroll</span>
+          </label>
+          <label class="switch-label">
+            <input type="checkbox" id="streamMode">
+            <span class="switch" aria-hidden="true"></span>
+            <span>Stream</span>
+          </label>
+          <label class="switch-label">
+            <input type="checkbox" id="wasmMode">
+            <span class="switch" aria-hidden="true"></span>
+            <span>Local WASM</span>
+          </label>
+        </div>
+        <div class="run-feedback">
+          <div id="statusBar" role="status" aria-live="polite">Ready</div>
+          <progress id="progress" max="100" value="0" aria-label="Query progress"></progress>
+        </div>
       </section>
     </div>
-    <div id="splitter" title="Drag to resize"></div>
-    <div id="resultsPane">
-      <div id="resultsTabs">
-        <button class="tabBtn active" data-tab="table">Table</button>
-        <button class="tabBtn" data-tab="json">JSON</button>
-        <button class="tabBtn" data-tab="status">Status</button>
-        <select id="resultSetSelect" style="display:none;" title="Select result set"></select>
-        <div></div>
-        <span id="perf"></span>
+
+    <div id="splitter" role="separator" aria-label="Resize query and results panels" aria-orientation="vertical" aria-valuemin="25" aria-valuemax="75" aria-valuenow="46" tabindex="0" title="Drag to resize"></div>
+
+    <div id="resultsPane" class="workspace-pane">
+      <div class="panel-heading results-heading">
+        <div>
+          <span class="eyebrow">Inspect</span>
+          <h2>Results</h2>
+        </div>
+        <span id="perf" aria-live="polite"></span>
       </div>
-      <div id="tableView">
-        <table id="resultsTable">
-          <thead></thead>
-          <tbody></tbody>
-        </table>
+      <div id="resultsTabs" role="tablist" aria-label="Result views">
+        <button class="tabBtn active" data-tab="table" type="button" role="tab" aria-selected="true">Table</button>
+        <button class="tabBtn" data-tab="json" type="button" role="tab" aria-selected="false">JSON</button>
+        <button class="tabBtn" data-tab="status" type="button" role="tab" aria-selected="false">Activity</button>
+        <select id="resultSetSelect" title="Select result set" aria-label="Result set"></select>
       </div>
-      <div id="jsonView">
-        <pre id="jsonOut"></pre>
-      </div>
-      <div id="statusView">
-        <pre id="statusOut"></pre>
+      <div class="results-stage">
+        <div id="tableView" role="tabpanel">
+          <div id="emptyState" class="empty-state">
+            <div class="empty-illustration" aria-hidden="true">
+              <span></span><span></span><span></span><span></span><span></span><span></span>
+            </div>
+            <strong>Results will land here</strong>
+            <p>Run a Traqula script to inspect structured values, exact types, and execution details.</p>
+          </div>
+          <table id="resultsTable" aria-label="Query results">
+            <thead></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div id="jsonView" role="tabpanel">
+          <pre id="jsonOut"></pre>
+        </div>
+        <div id="statusView" role="tabpanel">
+          <pre id="statusOut"></pre>
+        </div>
       </div>
     </div>
   </div>
 </main>
 <footer>
-  <span>Positorium local console (dev)</span>
-  <span>Drag splitter to resize editor/results • Tabs to switch view • Status tab shows logs</span>
+  <span><span class="footer-dot" aria-hidden="true"></span>Positorium local console</span>
+  <span class="footer-help"><kbd>Ctrl / ⌘</kbd><kbd>Enter</kbd> Run query <span aria-hidden="true">·</span> Drag divider to resize</span>
 </footer>
 <script>
 const els = {
@@ -87,11 +171,38 @@ const els = {
   jsonView: document.getElementById('jsonView'),
   statusView: document.getElementById('statusView'),
   statusOut: document.getElementById('statusOut'),
-  resultSetSelect: document.getElementById('resultSetSelect')
+  resultSetSelect: document.getElementById('resultSetSelect'),
+  emptyState: document.getElementById('emptyState')
 };
-// Hover highlight feature removed; stubs and related logic eliminated.
+let lastResponse = null;
 
-// Event listeners for hover highlighting on dropdown
+function activateTab(tab) {
+  els.tabs.forEach(btn => {
+    const selected = btn.getAttribute('data-tab') === tab;
+    btn.classList.toggle('active', selected);
+    btn.setAttribute('aria-selected', String(selected));
+    btn.tabIndex = selected ? 0 : -1;
+  });
+  els.tableView.style.display = tab === 'table' ? 'block' : 'none';
+  els.jsonView.style.display = tab === 'json' ? 'block' : 'none';
+  els.statusView.style.display = tab === 'status' ? 'block' : 'none';
+}
+
+function clearResults() {
+  els.tableHead.innerHTML = '';
+  els.tableBody.innerHTML = '';
+  els.jsonOut.textContent = '';
+  els.statusOut.textContent = '';
+  els.perf.textContent = '';
+  els.resultSetSelect.style.display = 'none';
+  els.resultSetSelect.innerHTML = '';
+  els.resultSetSelect.onchange = null;
+  els.emptyState.style.display = 'flex';
+  lastResponse = null;
+  activateTab('table');
+  setStatus('Results cleared');
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   // Load saved query from localStorage
   const savedQuery = localStorage.getItem('positorium-query');
@@ -102,7 +213,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Initialize highlighting
   setTimeout(() => {
     updateHighlight();
-    setStatus('Editor loaded with syntax highlighting');
+    setStatus('Ready');
     
     // Initialize status view with welcome message
     const initTime = new Date().toLocaleTimeString();
@@ -111,63 +222,79 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Button event listeners
   els.runBtn.addEventListener('click', runQuery);
-  els.clearBtn.addEventListener('click', () => { 
-    els.tableHead.innerHTML=''; 
-    els.tableBody.innerHTML=''; 
-    els.jsonOut.textContent=''; 
-    els.statusOut.textContent=''; 
-    els.perf.textContent=''; 
-    // Hide and reset result set selector so old streaming sets cannot be resurrected
-    els.resultSetSelect.style.display='none';
-    els.resultSetSelect.innerHTML='';
-    els.resultSetSelect.onchange = null;
-    lastResponse = null;
-    setStatus('Cleared'); 
-  });
+  els.clearBtn.addEventListener('click', clearResults);
 
   // Tabs switching
   els.tabs.forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      els.tabs.forEach(b=>b.classList.remove('active'));
-      btn.classList.add('active');
-      const tab = btn.getAttribute('data-tab');
-      if (tab==='table') { 
-        els.tableView.style.display='block'; 
-        els.jsonView.style.display='none'; 
-        els.statusView.style.display='none'; 
-      }
-      else if (tab==='json') { 
-        els.tableView.style.display='none'; 
-        els.jsonView.style.display='block'; 
-        els.statusView.style.display='none'; 
-      }
-      else if (tab==='status') { 
-        els.tableView.style.display='none'; 
-        els.jsonView.style.display='none'; 
-        els.statusView.style.display='block'; 
-      }
+    btn.addEventListener('click', () => activateTab(btn.getAttribute('data-tab')));
+    btn.addEventListener('keydown', e => {
+      if (!['ArrowLeft', 'ArrowRight'].includes(e.key)) return;
+      const tabs = Array.from(els.tabs);
+      const direction = e.key === 'ArrowRight' ? 1 : -1;
+      const next = tabs[(tabs.indexOf(btn) + direction + tabs.length) % tabs.length];
+      activateTab(next.getAttribute('data-tab'));
+      next.focus();
+      e.preventDefault();
     });
   });
 
-  // Vertical splitter drag logic
-  let dragging = false; let startY = 0; let startHeight = 0;
-  function setEditorHeight(px){
-    const min = 100; const max = window.innerHeight * 0.85;
-    const clamped = Math.min(Math.max(px,min), max);
-    els.editorPane.style.flex = '0 0 '+clamped+'px';
+  // The divider follows the responsive layout: columns on wide screens, rows on narrow ones.
+  const wideLayout = window.matchMedia('(min-width: 980px)');
+  let dragging = false;
+  let startPosition = 0;
+  let startSize = 0;
+  function setEditorSize(px) {
+    const containerRect = document.getElementById('splitContainer').getBoundingClientRect();
+    const wide = wideLayout.matches;
+    const total = wide ? containerRect.width : containerRect.height;
+    const min = wide ? 320 : 220;
+    const max = total * 0.75;
+    const clamped = Math.min(Math.max(px, min), max);
+    els.editorPane.style.flex = `0 0 ${clamped}px`;
+    els.splitter.setAttribute('aria-valuenow', String(Math.round((clamped / total) * 100)));
   }
-  els.splitter.addEventListener('mousedown', e=>{
-    dragging = true; startY = e.clientY; startHeight = els.editorPane.getBoundingClientRect().height;
-    document.body.style.cursor='row-resize';
+  els.splitter.addEventListener('pointerdown', e => {
+    dragging = true;
+    startPosition = wideLayout.matches ? e.clientX : e.clientY;
+    const rect = els.editorPane.getBoundingClientRect();
+    startSize = wideLayout.matches ? rect.width : rect.height;
+    els.splitter.setPointerCapture(e.pointerId);
+    document.body.style.cursor = wideLayout.matches ? 'col-resize' : 'row-resize';
     e.preventDefault();
   });
-  window.addEventListener('mousemove', e=>{
+  els.splitter.addEventListener('pointermove', e => {
     if (!dragging) return;
-    const dy = e.clientY - startY;
-    setEditorHeight(startHeight + dy);
+    const position = wideLayout.matches ? e.clientX : e.clientY;
+    setEditorSize(startSize + position - startPosition);
   });
-  window.addEventListener('mouseup', ()=>{ if (dragging) { dragging=false; document.body.style.cursor=''; }});
-  window.addEventListener('resize', ()=>{ /* keep within bounds */ setEditorHeight(els.editorPane.getBoundingClientRect().height); });
+  els.splitter.addEventListener('pointerup', e => {
+    dragging = false;
+    if (els.splitter.hasPointerCapture(e.pointerId)) els.splitter.releasePointerCapture(e.pointerId);
+    document.body.style.cursor = '';
+  });
+  els.splitter.addEventListener('keydown', e => {
+    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
+    const rect = els.editorPane.getBoundingClientRect();
+    const current = wideLayout.matches ? rect.width : rect.height;
+    const growing = e.key === 'ArrowRight' || e.key === 'ArrowDown';
+    setEditorSize(current + (growing ? 24 : -24));
+    e.preventDefault();
+  });
+  wideLayout.addEventListener('change', () => {
+    els.editorPane.style.flex = '';
+    els.splitter.setAttribute('aria-orientation', wideLayout.matches ? 'vertical' : 'horizontal');
+  });
+
+  const protocolChip = document.querySelector('.protocol-chip');
+  const connectionHint = document.getElementById('endpointHint');
+  function syncExecutionMode() {
+    const local = els.wasmMode.checked;
+    els.endpoint.disabled = local;
+    protocolChip.textContent = local ? 'WASM' : 'POST';
+    connectionHint.textContent = local ? 'Runs entirely in this browser' : 'Loopback connections only';
+  }
+  els.wasmMode.addEventListener('change', syncExecutionMode);
+  syncExecutionMode();
 });
 
 // Lightweight Traqula tokenizer/highlighter
@@ -374,7 +501,7 @@ function setStatus(msg, cls='') {
     els.status.className = cls;
   } else {
     // For non-errors, show the full message
-    els.status.textContent = msg;
+    els.status.textContent = msg === 'OK' ? 'Query complete' : msg;
     els.status.className = cls;
   }
 
@@ -391,25 +518,11 @@ function setStatus(msg, cls='') {
 
   // Switch to status tab if there's an error
   if (cls === 'err') {
-    els.tabs.forEach(btn => btn.classList.remove('active'));
-    const statusTab = document.querySelector('[data-tab="status"]');
-    if (statusTab) {
-      statusTab.classList.add('active');
-      els.tableView.style.display = 'none';
-      els.jsonView.style.display = 'none';
-      els.statusView.style.display = 'block';
-    }
+    activateTab('status');
   }
   // Switch back to table tab for successful query completion
   else if (msg === 'OK') {
-    els.tabs.forEach(btn => btn.classList.remove('active'));
-    const tableTab = document.querySelector('[data-tab="table"]');
-    if (tableTab) {
-      tableTab.classList.add('active');
-      els.tableView.style.display = 'block';
-      els.jsonView.style.display = 'none';
-      els.statusView.style.display = 'none';
-    }
+    activateTab('table');
   }
 }
 let wasmEngine = null;
@@ -441,7 +554,10 @@ function escapeHtml(s) { return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&l
 function buildTable(columns, rows) {
   els.tableHead.innerHTML = '';
   els.tableBody.innerHTML = '';
-  if (!columns || columns.length===0) return;
+  const hasColumns = columns && columns.length > 0;
+  els.emptyState.style.display = hasColumns ? 'none' : 'flex';
+  document.getElementById('resultsTable').style.display = hasColumns ? 'table' : 'none';
+  if (!hasColumns) return;
   // Collect unique data types for each column
   const columnTypes = columns.map((_, colIndex) => {
     const types = new Set();
@@ -530,9 +646,12 @@ async function runQuery() {
   console.log('script:', script);
   const doStream = els.streamMode.checked;
   const doWasm = els.wasmMode.checked;
-  const payload = { traqula_version: 1, script: script, stream: doStream, parameters: {} };
   const timeoutMs = parseInt(els.timeout.value || '0',10);
-  els.runBtn.disabled = true; setStatus('Running...'); els.progress.style.visibility='visible'; els.progress.value=15;
+  const payload = { traqula_version: 1, script: script, stream: doStream, parameters: {}, ...(timeoutMs > 0 ? { timeout_ms: timeoutMs } : {}) };
+  els.runBtn.disabled = true;
+  els.runBtn.setAttribute('aria-busy', 'true');
+  setStatus('Running query…');
+  els.progress.style.visibility='visible'; els.progress.value=15;
   const controller = timeoutMs>0 ? new AbortController() : null;
   if (controller) setTimeout(()=>controller.abort(), timeoutMs);
   const started = performance.now();
@@ -578,7 +697,10 @@ async function runQuery() {
   } catch (e) {
     setStatus('Request failed: '+ e.message, 'err');
   } finally {
-    els.runBtn.disabled=false; els.progress.value=100; setTimeout(()=>{els.progress.style.visibility='hidden';},400);
+    els.runBtn.disabled=false;
+    els.runBtn.removeAttribute('aria-busy');
+    els.progress.value=100;
+    setTimeout(()=>{els.progress.style.visibility='hidden';},400);
   }
 }
 async function runStream(endpoint, payload, started, controller) {
@@ -696,81 +818,6 @@ async function runStream(endpoint, payload, started, controller) {
     }
   }
   flushEvents(buffer); // flush remainder
-}
-els.runBtn.addEventListener('click', runQuery);
-els.clearBtn.addEventListener('click', ()=>{ 
-  els.tableHead.innerHTML=''; 
-  els.tableBody.innerHTML=''; 
-  els.jsonOut.textContent=''; 
-  els.statusOut.textContent=''; 
-  els.perf.textContent=''; 
-  // Hide and reset result set selector so old streaming sets cannot be resurrected
-  els.resultSetSelect.style.display='none';
-  els.resultSetSelect.innerHTML='';
-  els.resultSetSelect.onchange = null;
-  lastResponse = null;
-  setStatus('Cleared'); 
-});
-
-// Tabs switching
-els.tabs.forEach(btn=>{
-  btn.addEventListener('click', ()=>{
-    els.tabs.forEach(b=>b.classList.remove('active'));
-    btn.classList.add('active');
-    const tab = btn.getAttribute('data-tab');
-    if (tab==='table') { 
-      els.tableView.style.display='block'; 
-      els.jsonView.style.display='none'; 
-      els.statusView.style.display='none'; 
-    }
-    else if (tab==='json') { 
-      els.tableView.style.display='none'; 
-      els.jsonView.style.display='block'; 
-      els.statusView.style.display='none'; 
-    }
-    else if (tab==='status') { 
-      els.tableView.style.display='none'; 
-      els.jsonView.style.display='none'; 
-      els.statusView.style.display='block'; 
-    }
-  });
-});
-
-// Vertical splitter drag logic
-let dragging = false; let startY = 0; let startHeight = 0;
-function setEditorHeight(px){
-  const min = 100; const max = window.innerHeight * 0.85;
-  const clamped = Math.min(Math.max(px,min), max);
-  els.editorPane.style.flex = '0 0 '+clamped+'px';
-}
-els.splitter.addEventListener('mousedown', e=>{
-  dragging = true; startY = e.clientY; startHeight = els.editorPane.getBoundingClientRect().height;
-  document.body.style.cursor='row-resize';
-  e.preventDefault();
-});
-window.addEventListener('mousemove', e=>{
-  if (!dragging) return;
-  const dy = e.clientY - startY;
-  setEditorHeight(startHeight + dy);
-});
-window.addEventListener('mouseup', ()=>{ if (dragging) { dragging=false; document.body.style.cursor=''; }});
-window.addEventListener('resize', ()=>{ /* keep within bounds */ setEditorHeight(els.editorPane.getBoundingClientRect().height); });
-
-function formatCertaintyDisplay(raw) {
-  if (raw === undefined || raw === null) return raw;
-  if (raw === '?') return raw;
-  // Expect forms: -1, -0.xx, 0, 0.xx, 1
-  if (raw === '1' || raw === '-1') return (raw.startsWith('-')?'-':'') + '100%';
-  if (raw === '0') return '0%';
-  const m = raw.match(/^(-?)0\.(\d{1,2})$/);
-  if (m) {
-    const sign = m[1];
-    const digits = m[2];
-    // strip potential leading zero in percent, keep as integer ("05" -> 5) but preserve up to 2 digits
-    const pct = parseInt(digits,10); // safe
-    return sign + pct + '%';
-  }
-  return raw; // fallback
 }
 </script>
 </body>
