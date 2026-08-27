@@ -487,7 +487,7 @@ function terrainPlaceRoleGroup(roleIds, anchor, direction, roles) {
     return;
   }
   if (ordered.length === 2) {
-    const gap = 54;
+    const gap = 68;
     const normal = [Math.sin(direction), -Math.cos(direction)];
     ordered.forEach((roleId, index) => {
       const offset = (index - 0.5) * gap;
@@ -575,8 +575,8 @@ function terrainRoleExtent(role) {
 function terrainContour(node, roles) {
   const siblings = node.parent ? node.parent.children : [];
   const siblingIndex = Math.max(0, siblings.indexOf(node));
-  const siblingBias = siblings.length > 1 ? (siblingIndex - (siblings.length - 1) / 2) * 8 : 0;
-  const padding = 27 + node.depth * 12 + siblingBias;
+  const siblingBias = siblings.length > 1 ? (siblingIndex - (siblings.length - 1) / 2) * 12 : 0;
+  const padding = 34 + node.depth * 18 + siblingBias;
   const perimeter = [];
   node.isopleth.included_roles.forEach(roleId => {
     const role = roles[roleId];
@@ -640,7 +640,7 @@ function terrainLayout(frame, visibleIsopleths, visibleAllocations) {
     node.children.forEach((child, index) => {
       child.direction = childAngles[index];
       const introducedCount = child.isopleth.included_roles.filter(roleId => roleOwners.get(roleId) === child).length;
-      const distance = 142 + Math.max(0, introducedCount - 1) * 16;
+      const distance = 172 + Math.max(0, introducedCount - 1) * 18;
       child.anchor = [
         node.anchor[0] + Math.cos(child.direction) * distance,
         node.anchor[1] + Math.sin(child.direction) * distance * 0.62
@@ -670,7 +670,7 @@ function terrainLayout(frame, visibleIsopleths, visibleAllocations) {
     const rightX = isopleths[right.isopleth_id]?.center[0] ?? TERRAIN_VIEWBOX.width / 2;
     return leftX - rightX || left.id.localeCompare(right.id);
   });
-  const portGap = Math.min(124, 330 / Math.max(1, allocationOrder.length - 1));
+  const portGap = Math.min(146, 400 / Math.max(1, allocationOrder.length - 1));
   const allocations = {};
   allocationOrder.forEach((allocation, index) => {
     const portX = TERRAIN_VIEWBOX.width / 2 + (index - (allocationOrder.length - 1) / 2) * portGap;
@@ -678,7 +678,7 @@ function terrainLayout(frame, visibleIsopleths, visibleAllocations) {
       anchor_fraction: 0.5,
       port: [portX, 392],
       label: [portX, 407],
-      branch_end: [TERRAIN_VIEWBOX.width / 2 + (index - (allocationOrder.length - 1) / 2) * 34, 440]
+      branch_end: [TERRAIN_VIEWBOX.width / 2 + (index - (allocationOrder.length - 1) / 2) * 44, 440]
     };
   });
   return {
@@ -875,6 +875,7 @@ function positionTerrainGeometry(layout) {
     labelPositions.push([point.x, point.y]);
   });
 
+  const allocationAnchors = [];
   els.terrainMap.querySelectorAll('.terrain-allocation').forEach(allocation => {
     const targetId = allocation.querySelector('[data-target-isopleth]')?.dataset.targetIsopleth;
     const target = els.terrainMap.querySelector(
@@ -885,12 +886,20 @@ function positionTerrainGeometry(layout) {
     const length = target.getTotalLength();
     const candidates = Array.from({ length: 72 }, (_, index) => {
       const point = target.getPointAtLength(length * index / 72);
+      const labelClearance = labelPositions.length
+        ? Math.min(...labelPositions.map(position => Math.hypot(point.x - position[0], point.y - position[1])))
+        : 90;
+      const anchorClearance = allocationAnchors.length
+        ? Math.min(...allocationAnchors.map(position => Math.hypot(point.x - position[0], point.y - position[1])))
+        : 90;
       return {
         point,
-        score: point.y * 3 - Math.abs(point.x - itemLayout.port[0]) * 0.7
+        score: point.y * 3 - Math.abs(point.x - itemLayout.port[0]) * 0.7 -
+          Math.max(0, 58 - labelClearance) * 4 - Math.max(0, 52 - anchorClearance) * 2
       };
     });
     const point = candidates.sort((left, right) => right.score - left.score)[0].point;
+    allocationAnchors.push([point.x, point.y]);
     allocation.querySelector('.allocation-anchor').setAttribute('cx', point.x);
     allocation.querySelector('.allocation-anchor').setAttribute('cy', point.y);
     const controlY = Math.max(point.y + 24, (point.y + itemLayout.port[1]) / 2);
