@@ -516,7 +516,7 @@ pub fn parse_time(value: &str) -> Option<Time> {
     parse_time_with_now(value, &Time::new())
 }
 
-fn parse_time_with_now(value: &str, resolved_now: &Time) -> Option<Time> {
+pub(crate) fn parse_time_with_now(value: &str, resolved_now: &Time) -> Option<Time> {
     // 1. Fast path for constants (@NOW etc.)
     if let Some(t) = parse_time_constant_with_now(value, resolved_now) {
         return Some(t);

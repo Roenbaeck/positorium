@@ -1,9 +1,7 @@
 /*
   Positorium Terrain fixture
 
-  Run this complete script in a fresh Local WASM session. The final two searches
-  return history and as-of-now incidence rows; Query Studio recognizes that pair
-  and builds the Terrain workspace from the actual result cells.
+  Golden data fixture for the authoritative Rust Terrain backend.
 */
 
 add role name, `hair color`, height, `social security number`, `beard color`, RFID, owner, pet;
@@ -40,11 +38,3 @@ add posit [{(cass, owner), (mochi, pet)}, "fostered", '2024-02-01'],
           [{(cass, owner), (mochi, pet)}, "adopted", '2024-03-01'],
           [{(cass, owner), (pixel, pet)}, "adopted", '2024-03-01'],
           [{(ada, owner), (mochi, pet)}, "weekend care", '2024-04-01'];
-
-search ?posit_id = [?appearance_set = {(?thing, ?role_name), ...}, ?value, ?time]
-return ?posit_id, ?appearance_set, ?thing, ?role_name, ?value, ?time
-order by ?posit_id, ?role_name;
-
-search ?posit_id = [?appearance_set = {(?thing, ?role_name), ...}, ?value, ?time] as of @NOW
-return ?posit_id, ?appearance_set, ?thing, ?role_name, ?value, ?time
-order by ?posit_id, ?role_name;

@@ -515,6 +515,12 @@ impl Time {
     }
 }
 
+/// Shared partial-order dominance predicate used by ordinary `as of` queries
+/// and by Terrain's current frame. Equal and incomparable times never dominate.
+pub(crate) fn time_is_strictly_dominated(candidate: &Time, other: &Time) -> bool {
+    candidate.definitely_before(other)
+}
+
 impl Default for Time {
     fn default() -> Self {
         Self::new()

@@ -1,6 +1,7 @@
 #[test]
 fn external_contract_versions_are_explicit() {
     assert_eq!(positorium::TRAQULA_VERSION, 1);
+    assert_eq!(positorium::TERRAIN_VERSION, 1);
 
     #[cfg(feature = "server")]
     {

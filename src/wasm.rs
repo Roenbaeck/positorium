@@ -1,4 +1,8 @@
 use crate::construct::{Database, PersistenceMode};
+use crate::terrain::{
+    DEFAULT_MAX_RELATIONSHIP_SIGNATURES, DEFAULT_PROJECTED_ROLE_LIMIT, TERRAIN_VERSION,
+    TerrainOptions, TerrainReport,
+};
 use crate::traqula::{Engine, ExecutionOptions, ExecutionParameter};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -11,6 +15,43 @@ struct WasmQueryResponse {
     interface_version: &'static str,
     traqula_version: u16,
     result_sets: Vec<crate::traqula::CollectedResultSet>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct WasmTerrainOptions {
+    #[serde(default = "terrain_version")]
+    terrain_version: u16,
+    #[serde(default)]
+    as_of: Option<String>,
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+    #[serde(default)]
+    projected_role_limit: Option<usize>,
+    #[serde(default)]
+    max_relationship_signatures: Option<usize>,
+}
+
+impl Default for WasmTerrainOptions {
+    fn default() -> Self {
+        Self {
+            terrain_version: TERRAIN_VERSION,
+            as_of: None,
+            timeout_ms: None,
+            projected_role_limit: None,
+            max_relationship_signatures: None,
+        }
+    }
+}
+
+fn terrain_version() -> u16 {
+    TERRAIN_VERSION
+}
+
+#[derive(serde::Serialize)]
+struct WasmTerrainResponse {
+    interface_version: &'static str,
+    terrain_version: u16,
+    report: TerrainReport,
 }
 
 #[wasm_bindgen]
@@ -46,6 +87,55 @@ impl WasmEngine {
                 ..ExecutionOptions::default()
             },
         )
+    }
+
+    /// Build an authoritative Terrain report. Browser execution is synchronous,
+    /// so deadlines and hard limits are enforced cooperatively but JavaScript
+    /// cannot deliver a same-thread cancellation call while this method runs.
+    pub fn terrain(&self, options: JsValue) -> Result<JsValue, JsValue> {
+        let request = if options.is_undefined() || options.is_null() {
+            WasmTerrainOptions::default()
+        } else {
+            serde_wasm_bindgen::from_value(options)
+                .map_err(|error| JsValue::from_str(&error.to_string()))?
+        };
+        if request.terrain_version != TERRAIN_VERSION {
+            return Err(JsValue::from_str(&format!(
+                "unsupported Terrain version {}; supported version is {TERRAIN_VERSION}",
+                request.terrain_version
+            )));
+        }
+        let resolved_now = crate::datatype::Time::new();
+        let as_of_token = request.as_of.as_deref().unwrap_or("@NOW");
+        let as_of =
+            crate::traqula::parse_time_with_now(as_of_token, &resolved_now).ok_or_else(|| {
+                JsValue::from_str(&format!("invalid Terrain as_of token '{as_of_token}'"))
+            })?;
+        let timeout =
+            std::time::Duration::from_millis(request.timeout_ms.unwrap_or(5_000).min(30_000));
+        if timeout.is_zero() {
+            return Err(JsValue::from_str("timeout_ms must be positive"));
+        }
+        let report = self
+            .db
+            .terrain_with_options(TerrainOptions {
+                as_of: Some(as_of),
+                timeout: Some(timeout),
+                projected_role_limit: request
+                    .projected_role_limit
+                    .unwrap_or(DEFAULT_PROJECTED_ROLE_LIMIT),
+                max_relationship_signatures: request
+                    .max_relationship_signatures
+                    .unwrap_or(DEFAULT_MAX_RELATIONSHIP_SIGNATURES),
+                ..TerrainOptions::default()
+            })
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        serde_wasm_bindgen::to_value(&WasmTerrainResponse {
+            interface_version: WASM_INTERFACE_VERSION,
+            terrain_version: TERRAIN_VERSION,
+            report,
+        })
+        .map_err(|error| JsValue::from_str(&error.to_string()))
     }
 }
 
@@ -122,5 +212,37 @@ mod tests {
             .unwrap();
         let output: serde_json::Value = serde_wasm_bindgen::from_value(output).unwrap();
         assert_eq!(output["result_sets"][0]["rows"][0][0]["text"], "+0010.00");
+    }
+
+    #[wasm_bindgen_test]
+    fn test_wasm_terrain_matches_the_rust_report() {
+        let engine = WasmEngine::new().expect("Failed to create engine");
+        engine
+            .execute(
+                "add role name; \
+                 add posit [{(+person, name)}, \"Ada\", '2024-01-01'];",
+            )
+            .unwrap();
+        let options = serde_json::json!({
+            "terrain_version": TERRAIN_VERSION,
+            "as_of": "'2025-01-01'",
+            "projected_role_limit": 8,
+            "max_relationship_signatures": 16
+        });
+        let output = engine
+            .terrain(serde_wasm_bindgen::to_value(&options).unwrap())
+            .unwrap();
+        let output: serde_json::Value = serde_wasm_bindgen::from_value(output).unwrap();
+        let rust_report = engine
+            .db
+            .terrain_with_options(TerrainOptions {
+                as_of: Some(crate::datatype::Time::new_date_from("2025-01-01").unwrap()),
+                timeout: Some(std::time::Duration::from_secs(5)),
+                ..TerrainOptions::default()
+            })
+            .unwrap();
+        assert_eq!(output["interface_version"], WASM_INTERFACE_VERSION);
+        assert_eq!(output["terrain_version"], TERRAIN_VERSION);
+        assert_eq!(output["report"], serde_json::to_value(rust_report).unwrap());
     }
 }

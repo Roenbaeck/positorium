@@ -12,15 +12,18 @@ SQLite prototype is deliberately excluded by D031.
 | HTTP | `v1` | `/v1/query` and every buffered response |
 | SSE | `1` | `version` in every stream event |
 | WASM | `1` | `interface_version` in every returned JavaScript object |
+| Terrain | `1` | Rust report, `/v1/terrain`, and WASM Terrain response |
 | Logical export | `1` | JSONL header; specified by `TRANSFER.md` |
 | Identity remap | `1` | JSON remap artifact; specified by `TRANSFER.md` |
 
-Storage, Traqula, HTTP, SSE, WASM, logical export, and identity remapping evolve
-independently. A change to one does not silently change another. Patch releases
-remain compatible. A beta minor may make a documented break; where practical,
-published syntax and APIs receive one minor release of warnings and mechanical
-rewrite guidance. Security, corruption, and never-published behavior may be
-corrected immediately with release notes.
+Storage, Traqula, HTTP, SSE, WASM, Terrain, logical export, and identity remapping
+evolve independently. A change to one does not silently change another. Adding
+Terrain 1 is additive to HTTP v1 and WASM interface 1 and does not change
+Traqula 1 or SSE 1. Terrain rejects an unsupported `terrain_version`
+independently. Patch releases remain compatible. A beta minor may make a
+documented break; where practical, published syntax and APIs receive one minor
+release of warnings and mechanical rewrite guidance. Security, corruption, and
+never-published behavior may be corrected immediately with release notes.
 
 Every published store-format break must preserve logical data through a direct
 or stepwise offline migration that writes and validates a new store beside the

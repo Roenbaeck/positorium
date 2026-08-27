@@ -33,7 +33,7 @@
   </nav>
   <div class="workspace-meta" aria-label="Workspace details">
     <span class="workspace-status"><span class="status-dot" aria-hidden="true"></span>Local workspace</span>
-    <span id="studioVersion" class="version-chip" data-version="0.4.0">Studio v0.4.0</span>
+    <span id="studioVersion" class="version-chip" data-version="0.5.0">Studio v0.5.0</span>
     <span class="version-chip traqula-version">Traqula v1</span>
     <button id="settingsBtn" class="icon-button settings-button" type="button" aria-label="Studio settings" aria-controls="settingsPanel" aria-expanded="false" title="Studio settings"></button>
   </div>
@@ -159,21 +159,26 @@
   <section id="terrainView" class="terrain-workspace" aria-label="Terrain workspace" hidden>
     <div class="terrain-header">
       <div class="terrain-source">
-        <span id="terrainSourceBadge" class="terrain-data-badge">Awaiting query</span>
-        <span id="terrainSourceText">Run a Terrain incidence script to populate this workspace</span>
+        <span id="terrainSourceBadge" class="terrain-data-badge">Not loaded</span>
+        <span id="terrainSourceText">Open or refresh Terrain to capture the database</span>
       </div>
       <div class="terrain-controls" aria-label="Terrain controls">
         <div class="segmented-control" role="group" aria-label="Data scope">
           <button type="button" class="terrain-scope" data-scope="history" aria-pressed="false">History</button>
-          <button type="button" class="terrain-scope active" data-scope="snapshot" aria-pressed="true">As of now</button>
+          <button type="button" class="terrain-scope active" data-scope="current" aria-pressed="true">Current</button>
         </div>
+        <label class="terrain-signature-control" for="terrainSignature">
+          <span>Relationship</span>
+          <select id="terrainSignature" aria-label="Relationship signature" disabled></select>
+        </label>
         <label class="terrain-toggle">
           <input id="terrainRelationships" type="checkbox" checked>
           <span>Relationships</span>
         </label>
+        <button id="terrainRefresh" class="terrain-refresh" type="button">Refresh</button>
       </div>
     </div>
-    <div id="terrainStats" class="terrain-stats" aria-label="Query-derived terrain statistics"></div>
+    <div id="terrainStats" class="terrain-stats" aria-label="Authoritative terrain statistics"></div>
     <div class="terrain-body">
       <div class="terrain-map-panel">
         <div class="terrain-map-heading">
@@ -188,7 +193,7 @@
         </div>
         <div class="terrain-canvas">
           <svg id="terrainMap" viewBox="0 0 940 500" role="img" aria-labelledby="terrainMapTitle terrainMapDescription">
-            <title id="terrainMapTitle">Query-derived role-isopleth visualization</title>
+            <title id="terrainMapTitle">Authoritative role-isopleth visualization</title>
             <desc id="terrainMapDescription">Role labels are enclosed by support isopleths. Relationship allocation lines connect an exact appearance-set signature to projected identity profiles.</desc>
           </svg>
         </div>
@@ -241,6 +246,8 @@ const els = {
   terrainSupport: document.getElementById('terrainSupport'),
   terrainSupportValue: document.getElementById('terrainSupportValue'),
   terrainRelationships: document.getElementById('terrainRelationships'),
+  terrainSignature: document.getElementById('terrainSignature'),
+  terrainRefresh: document.getElementById('terrainRefresh'),
   terrainSourceBadge: document.getElementById('terrainSourceBadge'),
   terrainSourceText: document.getElementById('terrainSourceText')
 };
@@ -293,6 +300,7 @@ function setWorkspaceMode(mode) {
     button.classList.toggle('active', active);
     button.setAttribute('aria-pressed', String(active));
   });
+  if (terrain && typeof refreshTerrain === 'function') refreshTerrain();
 }
 
 function setSettingsOpen(open) {
@@ -312,7 +320,6 @@ function clearResults() {
   els.resultSetSelect.onchange = null;
   els.emptyState.style.display = 'flex';
   lastResponse = null;
-  if (typeof clearTerrainData === 'function') clearTerrainData();
   activateTab('table');
   setStatus('Results cleared');
 }
@@ -751,7 +758,6 @@ async function runWasm(script, started) {
     }
     els.progress.value = 80;
     const resultSets = output.result_sets || [];
-    captureTerrainResultSets(resultSets);
     populateResultSetSelect(resultSets);
     const first = resultSets[0] || { columns: [], rows: [] };
     const columns = first.columns;
@@ -875,6 +881,7 @@ async function runQuery() {
   const doWasm = els.wasmMode.checked;
   const timeoutMs = parseInt(els.timeout.value || '0',10);
   const payload = { traqula_version: 1, script: script, stream: doStream, parameters: {}, ...(timeoutMs > 0 ? { timeout_ms: timeoutMs } : {}) };
+  if (typeof markTerrainStale === 'function') markTerrainStale();
   els.runBtn.disabled = true;
   els.runBtn.setAttribute('aria-busy', 'true');
   els.perf.classList.remove('completion-flash');
@@ -902,7 +909,6 @@ async function runQuery() {
       lastResponse = json;
       els.progress.value=85;
       if (json.status === 'ok') {
-        captureTerrainResultSets(json.result_sets || (json.columns ? [json] : []));
         if (json.result_sets) {
           populateResultSetSelect(json.result_sets);
           const first = json.result_sets[0];
@@ -1022,7 +1028,6 @@ async function runStream(endpoint, payload, started, controller) {
               setStatus('OK');
               // Ensure dropdown exists even if earlier start events had an exception
               rebuildStreamingDropdown(multiSets, currentSetIndex);
-              captureTerrainResultSets(multiSets);
               els.jsonOut.textContent = JSON.stringify({ status:'ok', result_sets: multiSets.map((s,i)=>({ index:i, columns:s.columns, rows:s.rows, row_count: s.row_count||s.rows.length, limited: !!s.limited, search: s.search })) }, null, 2);
             } else {
               showCompletionSummary(

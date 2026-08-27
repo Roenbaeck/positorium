@@ -199,7 +199,7 @@ Logging uses `tracing` with `RUST_LOG` filtering.
 
 ### Web UI (positorium.html)
 
-A focused static query studio (`positorium.html`) supports composing Traqula scripts, submitting them to the server or local WASM engine, and inspecting table, JSON, and activity views. Query/Results and Terrain are alternate workspaces, while the endpoint and Local WASM execution mode live under the header settings button. Both settings persist in browser `localStorage`. Open the studio in a browser or host it, then point the endpoint setting to your server's `/v1/query` URL.
+A focused static query studio (`positorium.html`) supports composing Traqula scripts, submitting them to the server or local WASM engine, and inspecting table, JSON, and activity views. Query/Results and Terrain are alternate workspaces, while the endpoint and Local WASM execution mode live under the header settings button. Both settings persist in browser `localStorage`. Open the studio in a browser or host it, then point the endpoint setting to your server's `/v1/query` URL; Terrain derives the sibling `/v1/terrain` endpoint automatically.
 
 The repository does not contain generated `pkg/` artifacts. On a loopback development
 server such as VS Code Live Preview, Local WASM prefers a workspace `pkg/` build and
@@ -215,10 +215,14 @@ Query Studio has an independent beta SemVer in the `studioVersion` element in
 change. The version is visible in the header; the browser remembers the last-seen
 version for that origin and reports upgrades in the Activity view.
 
-The Terrain tab derives Role support isopleths and exact relationship-profile
-allocations from a compatible history/current pair of typed query result sets.
-[`traqula/terrain.traqula`](traqula/terrain.traqula) is a paste-ready fixture for
-the web UI; the result contract, expected counts, and semantics are specified in
+The Terrain tab automatically requests an authoritative structural report from
+Rust—through `POST /v1/terrain` or `WasmEngine.terrain(...)`—so it requires no
+preparatory Traqula query and is not affected by query row limits or streaming.
+History and Current share one Role projection and relationship catalog; the
+browser retains ownership of SVG layout, filtering, selection, and prepared
+queries. Refresh, stale, and error states are explicit, and a failed refresh
+keeps the previous complete snapshot visible. The versioned report contract,
+semantics, limits, interfaces, and golden backend fixture are documented in
 [TERRAIN.md](TERRAIN.md).
 
 ## Updated Status and Roadmap

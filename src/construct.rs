@@ -140,6 +140,9 @@ impl ThingGenerator {
     pub fn iter(&self) -> Iter<'_, Thing> {
         self.retained.iter()
     }
+    pub(crate) fn len(&self) -> usize {
+        self.retained.len()
+    }
 }
 
 // ------------- Role -------------
@@ -239,6 +242,9 @@ impl RoleKeeper {
     }
     pub fn is_empty(&self) -> bool {
         self.kept.is_empty()
+    }
+    pub(crate) fn snapshot(&self) -> Vec<Arc<Role>> {
+        self.lookup.values().map(Arc::clone).collect()
     }
 }
 

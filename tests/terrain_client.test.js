@@ -1,64 +1,108 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const { buildTerrainData } = require('../positorium-terrain.js');
+const fs = require('node:fs');
+const path = require('node:path');
+const { TERRAIN_VERSION, adaptTerrainReport, assertTerrainReport, terrainEndpoint } = require('../positorium-terrain.js');
 
-const columns = ['posit_id', 'appearance_set', 'thing', 'role_name', 'value', 'time'];
-const cell = (kind, text) => ({ kind, text });
-const rows = [];
+const report = {
+  terrain_version: 1,
+  resolved_as_of: "'2026-01-01'",
+  database: { referenced_things: 9, roles: 5, appearances: 4, appearance_sets: 3, posits: 4 },
+  projection: {
+    complete: true,
+    total_attribute_roles: 2,
+    roles: [
+      { id: '3', name: 'name', bit: 0, history_support: 2, current_support: 2 },
+      { id: '4', name: 'RFID', bit: 1, history_support: 1, current_support: 1 }
+    ]
+  },
+  relationship_catalog: {
+    complete: true,
+    total_signatures: 1,
+    default_signature_id: 'terrain-v1-signature-5-6',
+    signatures: [{
+      id: 'terrain-v1-signature-5-6',
+      roles: [{ id: '5', name: 'owner' }, { id: '6', name: 'pet' }]
+    }]
+  },
+  frames: {
+    history: {
+      scope: 'history',
+      stats: { endpoint_things: 3, roles: 4, appearance_sets: 3, posits: 4, incidences: 6 },
+      role_supports: [{ role_id: '3', distinct_things: 2 }, { role_id: '4', distinct_things: 1 }],
+      profiles: [
+        { id: 'terrain-v1-profile-000', mask: 0, present_role_ids: [], absent_role_ids: ['3', '4'], things: 1, isopleth_id: null },
+        { id: 'terrain-v1-profile-001', mask: 1, present_role_ids: ['3'], absent_role_ids: ['4'], things: 2, isopleth_id: 'terrain-v1-isopleth-001' }
+      ],
+      isopleths: [{ id: 'terrain-v1-isopleth-001', mask: 1, included_role_ids: ['3'], support: 2 }],
+      relationships: [{
+        signature_id: 'terrain-v1-signature-5-6', appearance_sets: 1, posits: 2,
+        role_totals: [
+          { role_id: '5', distinct_things: 1, participations: 1 },
+          { role_id: '6', distinct_things: 1, participations: 1 }
+        ],
+        allocations: [
+          { id: 'a-zero', role_id: '5', profile_id: 'terrain-v1-profile-000', profile_mask: 0, isopleth_id: null, distinct_things: 1, participations: 1 },
+          { id: 'a-one', role_id: '6', profile_id: 'terrain-v1-profile-001', profile_mask: 1, isopleth_id: 'terrain-v1-isopleth-001', distinct_things: 1, participations: 1 }
+        ]
+      }]
+    },
+    current: {
+      scope: 'current',
+      stats: { endpoint_things: 3, roles: 4, appearance_sets: 3, posits: 3, incidences: 5 },
+      role_supports: [{ role_id: '3', distinct_things: 2 }, { role_id: '4', distinct_things: 1 }],
+      profiles: [
+        { id: 'terrain-v1-profile-000', mask: 0, present_role_ids: [], absent_role_ids: ['3', '4'], things: 1, isopleth_id: null },
+        { id: 'terrain-v1-profile-001', mask: 1, present_role_ids: ['3'], absent_role_ids: ['4'], things: 2, isopleth_id: 'terrain-v1-isopleth-001' }
+      ],
+      isopleths: [{ id: 'terrain-v1-isopleth-001', mask: 1, included_role_ids: ['3'], support: 2 }],
+      relationships: [{
+        signature_id: 'terrain-v1-signature-5-6', appearance_sets: 1, posits: 1,
+        role_totals: [
+          { role_id: '5', distinct_things: 1, participations: 1 },
+          { role_id: '6', distinct_things: 1, participations: 1 }
+        ],
+        allocations: [
+          { id: 'a-zero', role_id: '5', profile_id: 'terrain-v1-profile-000', profile_mask: 0, isopleth_id: null, distinct_things: 1, participations: 1 },
+          { id: 'a-one', role_id: '6', profile_id: 'terrain-v1-profile-001', profile_mask: 1, isopleth_id: 'terrain-v1-isopleth-001', distinct_things: 1, participations: 1 }
+        ]
+      }]
+    }
+  }
+};
 
-function addPosit(set, posit, appearances, value = 'value') {
-  appearances.forEach(([thing, role]) => {
-    rows.push([
-      cell('posit', posit),
-      cell('appearance_set', set),
-      cell('thing', thing),
-      cell('role', role),
-      cell('literal', value),
-      cell('time', '2024-01-01')
-    ]);
-  });
+assert.equal(TERRAIN_VERSION, 1);
+assert.equal(assertTerrainReport(report), report);
+assert.throws(() => assertTerrainReport({ terrain_version: 2 }), /Unsupported Terrain report version/);
+assert.equal(terrainEndpoint('http://127.0.0.1:3000/v1/query'), 'http://127.0.0.1:3000/v1/terrain');
+
+const httpData = adaptTerrainReport(structuredClone(report));
+const wasmData = adaptTerrainReport(structuredClone(report));
+assert.deepEqual(httpData, wasmData, 'HTTP and WASM reports render through the same adapter');
+assert.equal(httpData.frames.current.label, "Maximal values as of '2026-01-01'");
+assert.equal(httpData.frames.history.projection.roles[0].distinct_things, 2);
+assert.equal(httpData.frames.history.relationships[0].roles.join(','), 'owner,pet');
+assert.equal(httpData.frames.history.relationships[0].role_totals[0].role, 'owner');
+assert.equal(httpData.frames.history.relationships[0].allocations[1].role, 'pet');
+assert.equal(httpData.frames.history.relationships[0].allocations[0].profile_mask, 0);
+assert.equal(httpData.frames.history.relationships[0].allocations[0].isopleth_id, null);
+
+const clientSource = fs.readFileSync(path.join(__dirname, '..', 'positorium-terrain.js'), 'utf8');
+const studioSource = fs.readFileSync(path.join(__dirname, '..', 'positorium.html'), 'utf8');
+const serverSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'server.rs'), 'utf8');
+for (const removed of [
+  'buildTerrainData', 'captureTerrainResultSets', 'TERRAIN_REQUIRED_COLUMNS',
+  'normalizeTerrainRows', 'terrainHash', 'Query data'
+]) {
+  assert.equal(clientSource.includes(removed) || studioSource.includes(removed), false, `${removed} must be removed`);
 }
+assert.match(studioSource, /refreshTerrain/);
+assert.match(clientSource, /engine\.terrain/);
+assert.match(clientSource, /does not implement Terrain contract 1/);
+assert.match(clientSource, /Database snapshot is empty/);
+assert.doesNotMatch(clientSource, /streamMode/);
+assert.match(serverSource, /route\("\/v1\/terrain", post\(terrain\)\)/);
+assert.doesNotMatch(serverSource, /\/v1\/terrain\/(?:stream|events)/);
 
-addPosit('set-t1-name', 'p1', [['t1', 'name']]);
-addPosit('set-t1-hair', 'p2', [['t1', 'hair color']]);
-addPosit('set-t2-name', 'p3', [['t2', 'name']]);
-addPosit('set-t2-hair', 'p4', [['t2', 'hair color']]);
-addPosit('set-t2-rfid', 'p5', [['t2', 'RFID']]);
-addPosit('set-owner-pet', 'p6', [['t1', 'owner'], ['t2', 'pet']], 'fostered');
-addPosit('set-owner-pet', 'p7', [['t1', 'owner'], ['t2', 'pet']], 'adopted');
-
-const snapshotRows = rows.filter(row => row[0].text !== 'p6');
-const data = buildTerrainData([
-  { columns, rows, row_count: rows.length, search: 'search incidence' },
-  { columns, rows: snapshotRows, row_count: snapshotRows.length, search: 'search incidence as of @NOW' }
-]);
-
-assert.ok(data);
-assert.equal(data.source, 'query_results');
-assert.deepEqual(data.result_rows, { history: 9, snapshot: 7 });
-
-const history = data.frames.history;
-const snapshot = data.frames.snapshot;
-assert.deepEqual(history.stats, {
-  things: 2,
-  roles: 5,
-  appearance_sets: 6,
-  posits: 7,
-  rows: 9
-});
-assert.equal(snapshot.stats.posits, 6);
-assert.equal(history.projection.complete, true);
-assert.equal(history.projection.roles.length, 3);
-assert.deepEqual(history.isopleths.map(isopleth => isopleth.support).sort((a, b) => b - a), [2, 1]);
-assert.deepEqual(history.relationship.roles, ['owner', 'pet']);
-assert.equal(history.relationship.appearance_sets, 1);
-assert.equal(history.relationship.posits, 2);
-assert.equal(snapshot.relationship.posits, 1);
-assert.equal(history.relationship.allocations.length, 2);
-assert.deepEqual(
-  history.relationship.allocations.map(allocation => [allocation.role, allocation.distinct_things, allocation.participations]),
-  [['owner', 1, 1], ['pet', 1, 1]]
-);
-
-console.log('terrain client aggregation: ok');
+console.log('authoritative Terrain client adapter: ok');

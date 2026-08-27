@@ -65,6 +65,7 @@ pub mod maintenance;
 pub mod server;
 #[cfg(feature = "persistence")]
 mod storage;
+pub mod terrain;
 pub mod traqula;
 #[cfg(feature = "wasm")]
 pub mod wasm;
@@ -73,6 +74,13 @@ pub use construct::{Database, PersistenceMode};
 pub use error::{DatabaseError, Result};
 pub use interface::{CancelToken, QueryHandle, QueryId, QueryInterface, QueryOptions, Row};
 pub use literal::{LiteralFamily, LiteralValue};
+pub use terrain::{
+    DEFAULT_PROJECTED_ROLE_LIMIT, MAX_PROJECTED_ROLE_LIMIT, TERRAIN_VERSION, TerrainAllocation,
+    TerrainDatabaseTotals, TerrainFrame, TerrainFrameStats, TerrainFrames, TerrainIsopleth,
+    TerrainLimits, TerrainOptions, TerrainProfile, TerrainProjectedRole, TerrainProjection,
+    TerrainRelationship, TerrainRelationshipCatalog, TerrainRelationshipSignature, TerrainReport,
+    TerrainRoleRef, TerrainRoleSupport, TerrainRoleTotal, TerrainScope,
+};
 pub use traqula::{
     CancellationToken, CollectedResult, CollectedResultSet, Engine, ExecutionMetadata,
     ExecutionOptions, ExecutionParameter, ExecutionWarning, MultiStreamCallbacks, ResultCell,

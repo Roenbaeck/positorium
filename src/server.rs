@@ -1,8 +1,13 @@
 use crate::error::DatabaseError;
 use crate::interface::QueryInterface;
+use crate::terrain::{
+    DEFAULT_MAX_RELATIONSHIP_SIGNATURES, DEFAULT_PROJECTED_ROLE_LIMIT, TERRAIN_VERSION,
+    TerrainOptions, TerrainReport,
+};
 use crate::traqula::{
     CancellationToken, CollectedResultSet, ExecutionOptions, ExecutionParameter, ExecutionWarning,
-    MultiStreamCallbacks, ResultCell, RowSink, SinkFlow, TRAQULA_VERSION, script_counts,
+    MultiStreamCallbacks, ResultCell, RowSink, SinkFlow, TRAQULA_VERSION, parse_time_with_now,
+    script_counts,
 };
 use axum::extract::{DefaultBodyLimit, State, rejection::JsonRejection};
 use axum::http::{HeaderValue, Method, StatusCode, header};
@@ -134,6 +139,31 @@ pub struct QueryRequest {
     pub parameters: std::collections::HashMap<String, ExecutionParameter>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct TerrainRequest {
+    pub terrain_version: u16,
+    #[serde(default)]
+    pub as_of: Option<String>,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+    #[serde(default)]
+    pub projected_role_limit: Option<usize>,
+    #[serde(default)]
+    pub max_relationship_signatures: Option<usize>,
+}
+
+#[derive(Serialize)]
+pub struct TerrainResponse {
+    pub api_version: &'static str,
+    pub terrain_version: u16,
+    pub status: String,
+    pub elapsed_ms: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report: Option<TerrainReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 #[derive(Serialize)]
 pub struct QueryResponse {
     pub api_version: &'static str,
@@ -191,9 +221,99 @@ pub fn router_with_config(
     let body_limit = config.request_body_bytes;
     Ok(Router::new()
         .route("/v1/query", post(query))
+        .route("/v1/terrain", post(terrain))
         .with_state(ServerState { interface, config })
         .layer(DefaultBodyLimit::max(body_limit))
         .layer(cors))
+}
+
+async fn terrain(
+    State(state): State<ServerState>,
+    payload: Result<Json<TerrainRequest>, JsonRejection>,
+) -> Response {
+    let started = Instant::now();
+    let Json(request) = match payload {
+        Ok(request) => request,
+        Err(error) => {
+            return terrain_error_response(error.status(), started, error.body_text());
+        }
+    };
+    if request.terrain_version != TERRAIN_VERSION {
+        return terrain_error_response(
+            StatusCode::BAD_REQUEST,
+            started,
+            format!(
+                "unsupported Terrain version {}; supported version is {TERRAIN_VERSION}",
+                request.terrain_version
+            ),
+        );
+    }
+    let timeout = request
+        .timeout_ms
+        .map(Duration::from_millis)
+        .unwrap_or(state.config.default_timeout)
+        .min(MAX_TIMEOUT);
+    if timeout.is_zero() {
+        return terrain_error_response(
+            StatusCode::BAD_REQUEST,
+            started,
+            "timeout_ms must be positive",
+        );
+    }
+    let resolved_now = crate::datatype::Time::new();
+    let as_of_token = request.as_of.as_deref().unwrap_or("@NOW");
+    let Some(as_of) = parse_time_with_now(as_of_token, &resolved_now) else {
+        return terrain_error_response(
+            StatusCode::BAD_REQUEST,
+            started,
+            format!("invalid Terrain as_of token '{as_of_token}'"),
+        );
+    };
+    let cancellation = CancellationToken::new();
+    let _cancel_on_drop = CancelOnDrop(cancellation.clone());
+    let interface = state.interface;
+    let options = TerrainOptions {
+        as_of: Some(as_of),
+        timeout: Some(timeout),
+        cancellation: Some(cancellation),
+        projected_role_limit: request
+            .projected_role_limit
+            .unwrap_or(DEFAULT_PROJECTED_ROLE_LIMIT),
+        max_relationship_signatures: request
+            .max_relationship_signatures
+            .unwrap_or(DEFAULT_MAX_RELATIONSHIP_SIGNATURES),
+        ..TerrainOptions::default()
+    };
+    match tokio::task::spawn_blocking(move || interface.terrain_with_options(options)).await {
+        Ok(Ok(report)) => terrain_json_response(
+            StatusCode::OK,
+            TerrainResponse {
+                api_version: HTTP_API_VERSION,
+                terrain_version: TERRAIN_VERSION,
+                status: "ok".into(),
+                elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
+                report: Some(report),
+                error: None,
+            },
+        ),
+        Ok(Err(error)) => terrain_database_error_response(error, started),
+        Err(error) => {
+            warn!(%error, "Terrain worker failed");
+            terrain_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                started,
+                "Terrain worker failed",
+            )
+        }
+    }
+}
+
+struct CancelOnDrop(CancellationToken);
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
 }
 
 async fn query(
@@ -543,7 +663,12 @@ fn send_stream_error(tx: &tokio::sync::mpsc::Sender<String>, error: DatabaseErro
 }
 
 fn database_error_response(error: DatabaseError, started: Instant) -> Response {
-    let status = match error {
+    let status = database_error_status(&error);
+    error_response(status, started, error.to_string())
+}
+
+fn database_error_status(error: &DatabaseError) -> StatusCode {
+    match error {
         DatabaseError::Parse { .. }
         | DatabaseError::UnknownRole(_)
         | DatabaseError::InvalidAppearanceSet(_)
@@ -553,14 +678,44 @@ fn database_error_response(error: DatabaseError, started: Instant) -> Response {
         | DatabaseError::Comparison(_)
         | DatabaseError::Parameter(_)
         | DatabaseError::Execution(_) => StatusCode::BAD_REQUEST,
+        DatabaseError::ResourceLimit { .. } => StatusCode::PAYLOAD_TOO_LARGE,
         DatabaseError::Cancelled | DatabaseError::Timeout => StatusCode::REQUEST_TIMEOUT,
         DatabaseError::Config(_)
         | DatabaseError::Persistence(_)
         | DatabaseError::DataCorruption { .. }
         | DatabaseError::Invariant(_)
         | DatabaseError::Lock(_) => StatusCode::INTERNAL_SERVER_ERROR,
-    };
-    error_response(status, started, error.to_string())
+    }
+}
+
+fn terrain_database_error_response(error: DatabaseError, started: Instant) -> Response {
+    terrain_error_response(database_error_status(&error), started, error.to_string())
+}
+
+fn terrain_error_response(
+    status: StatusCode,
+    started: Instant,
+    error: impl Into<String>,
+) -> Response {
+    terrain_json_response(
+        status,
+        TerrainResponse {
+            api_version: HTTP_API_VERSION,
+            terrain_version: TERRAIN_VERSION,
+            status: "error".into(),
+            elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
+            report: None,
+            error: Some(error.into()),
+        },
+    )
+}
+
+fn terrain_json_response(status: StatusCode, body: TerrainResponse) -> Response {
+    let mut response = (status, Json(body)).into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 fn error_response(status: StatusCode, started: Instant, error: impl Into<String>) -> Response {
@@ -591,6 +746,13 @@ fn json_response(status: StatusCode, body: QueryResponse) -> Response {
 mod tests {
     use super::*;
     use crate::construct::{Database, PersistenceMode};
+
+    async fn json_body(response: Response) -> serde_json::Value {
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
 
     #[test]
     fn only_exact_loopback_origins_are_accepted() {
@@ -675,5 +837,111 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         assert!(!database.contains_role("never_created").unwrap());
+    }
+
+    #[tokio::test]
+    async fn terrain_rejects_unknown_versions_before_waiting_for_owner() {
+        let database = Arc::new(Database::new(PersistenceMode::InMemory).unwrap());
+        let state = ServerState {
+            interface: Arc::new(QueryInterface::new(Arc::clone(&database))),
+            config: ServerConfig::default(),
+        };
+        let held_database = Arc::clone(&database);
+        let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let _owner = held_database.execution_owner.lock().unwrap();
+            locked_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        locked_rx.recv().unwrap();
+        let response = terrain(
+            State(state),
+            Ok(Json(TerrainRequest {
+                terrain_version: TERRAIN_VERSION + 1,
+                as_of: None,
+                timeout_ms: None,
+                projected_role_limit: None,
+                max_relationship_signatures: None,
+            })),
+        )
+        .await;
+        release_tx.send(()).unwrap();
+        holder.join().unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-store"
+        );
+    }
+
+    #[tokio::test]
+    async fn terrain_parses_cutoffs_clamps_timeout_and_returns_no_store() {
+        let database = Arc::new(Database::new(PersistenceMode::InMemory).unwrap());
+        crate::traqula::Engine::new(&database)
+            .execute("add role name; add posit [{(+person, name)}, \"Ada\", '2024-01-01'];")
+            .unwrap();
+        let expected = database
+            .terrain_with_options(TerrainOptions {
+                as_of: Some(crate::datatype::Time::new_year_month_from("2025-06").unwrap()),
+                timeout: Some(MAX_TIMEOUT),
+                ..TerrainOptions::default()
+            })
+            .unwrap();
+        let state = ServerState {
+            interface: Arc::new(QueryInterface::new(Arc::clone(&database))),
+            config: ServerConfig::default(),
+        };
+        let response = terrain(
+            State(state),
+            Ok(Json(TerrainRequest {
+                terrain_version: TERRAIN_VERSION,
+                as_of: Some("'2025-06'".into()),
+                timeout_ms: Some(MAX_TIMEOUT.as_millis() as u64 + 10_000),
+                projected_role_limit: None,
+                max_relationship_signatures: None,
+            })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-store"
+        );
+        let body = json_body(response).await;
+        assert_eq!(body["api_version"], "v1");
+        assert_eq!(body["terrain_version"], TERRAIN_VERSION);
+        assert_eq!(body["report"]["resolved_as_of"], "'2025-06'");
+        assert_eq!(body["report"], serde_json::to_value(expected).unwrap());
+    }
+
+    #[tokio::test]
+    async fn terrain_uses_structured_resource_limit_errors() {
+        let database = Arc::new(Database::new(PersistenceMode::InMemory).unwrap());
+        let state = ServerState {
+            interface: Arc::new(QueryInterface::new(database)),
+            config: ServerConfig::default(),
+        };
+        let response = terrain(
+            State(state),
+            Ok(Json(TerrainRequest {
+                terrain_version: TERRAIN_VERSION,
+                as_of: None,
+                timeout_ms: None,
+                projected_role_limit: Some(crate::terrain::MAX_PROJECTED_ROLE_LIMIT + 1),
+                max_relationship_signatures: None,
+            })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        let body = json_body(response).await;
+        assert_eq!(body["status"], "error");
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap()
+                .contains("projected attribute Roles")
+        );
+        assert!(body.get("report").is_none());
     }
 }

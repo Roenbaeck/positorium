@@ -20,6 +20,8 @@ pub enum DatabaseError {
     Cancelled,
     #[error("Execution timed out")]
     Timeout,
+    #[error("Resource limit exceeded for {resource}: maximum {limit}")]
+    ResourceLimit { resource: &'static str, limit: u64 },
     #[error("Unknown role: {0}")]
     UnknownRole(String),
     #[error("Invalid appearance set: {0}")]

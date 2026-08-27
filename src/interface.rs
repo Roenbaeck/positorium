@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use crate::construct::Database;
 use crate::error::{DatabaseError, Result};
+use crate::terrain::{TerrainOptions, TerrainReport};
 use crate::traqula::{
     CollectedResult, CollectedResultSet, Engine, ExecutionOptions, MultiStreamCallbacks,
     ResultCell, RowSink,
@@ -96,6 +97,11 @@ impl QueryInterface {
 
     pub fn database(&self) -> &Arc<Database> {
         &self.db
+    }
+
+    /// Build an authoritative Terrain report from one coherent database capture.
+    pub fn terrain_with_options(&self, options: TerrainOptions) -> Result<TerrainReport> {
+        self.db.terrain_with_options(options)
     }
 
     fn allocate_id(&self) -> Result<QueryId> {

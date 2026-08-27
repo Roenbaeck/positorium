@@ -63,8 +63,66 @@
   color: #2f7768;
 }
 
+.terrain-data-badge.loading {
+  border-color: #a9bdd0;
+  background: #eef5fb;
+  color: #3f688b;
+}
+
+.terrain-data-badge.stale {
+  border-color: #dfc28e;
+  background: #fff7e8;
+  color: #8a5518;
+}
+
+.terrain-data-badge.error {
+  border-color: #dfa9a2;
+  background: #fff0ee;
+  color: #9a4036;
+}
+
 .terrain-controls {
   gap: 0.65rem;
+}
+
+.terrain-signature-control {
+  display: grid;
+  gap: 0.1rem;
+  color: #6d7974;
+  font-size: 0.48rem;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.terrain-signature-control select {
+  max-width: 180px;
+  height: 25px;
+  border: 1px solid #d5ded9;
+  border-radius: 5px;
+  background: #fff;
+  color: #33413c;
+  font: 0.56rem var(--mono);
+}
+
+.terrain-refresh {
+  height: 27px;
+  padding: 0 0.65rem;
+  border: 1px solid #9ec9b9;
+  border-radius: 5px;
+  background: #edf8f3;
+  color: #2f7768;
+  font-size: 0.57rem;
+  font-weight: 750;
+}
+
+.terrain-refresh:hover:not(:disabled) {
+  background: #dff2ea;
+}
+
+.terrain-refresh:disabled {
+  cursor: wait;
+  opacity: 0.55;
 }
 
 .segmented-control {
@@ -489,11 +547,24 @@
   gap: 0.45rem;
 }
 
-.endpoint-list div {
+.endpoint-list div,
+.endpoint-list button {
   padding-left: 0.55rem;
   border-left: 2px solid #c58b3f;
   display: grid;
   gap: 0.12rem;
+}
+
+.endpoint-list button {
+  padding-top: 0.25rem;
+  padding-bottom: 0.25rem;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.endpoint-list button:hover {
+  background: #fff8ed;
 }
 
 .endpoint-list strong {

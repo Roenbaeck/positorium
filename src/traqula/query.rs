@@ -1397,7 +1397,10 @@ fn maximal(matches: Vec<StructuralMatch>) -> Vec<StructuralMatch> {
             !matches.iter().enumerate().any(|(other_index, other)| {
                 *index != other_index
                     && candidate.posit.appearance_set() == other.posit.appearance_set()
-                    && candidate.posit.time().definitely_before(other.posit.time())
+                    && crate::datatype::time_is_strictly_dominated(
+                        candidate.posit.time(),
+                        other.posit.time(),
+                    )
             })
         })
         .map(|(_, candidate)| candidate.clone())

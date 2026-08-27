@@ -1,13 +1,4 @@
-const TERRAIN_REQUIRED_COLUMNS = ['posit', 'set', 'thing', 'role', 'value', 'time'];
-const TERRAIN_COLUMN_ALIASES = {
-  posit: ['posit', 'posit_id', 'p'],
-  set: ['set', 'appearance_set', 'aset'],
-  thing: ['thing'],
-  role: ['role', 'role_name', 'r'],
-  value: ['value', 'v'],
-  time: ['time', 't']
-};
-const TERRAIN_MAX_ROLES = 8;
+const TERRAIN_VERSION = 1;
 const TERRAIN_ROLE_POSITIONS = [
   [356, 155], [356, 229], [205, 222], [205, 302],
   [85, 85], [655, 270], [520, 95], [575, 390]
@@ -16,265 +7,96 @@ const TERRAIN_TONES = ['sea', 'leaf', 'earth', 'berry'];
 
 let terrainData = null;
 const terrainState = {
-  scope: 'snapshot',
+  scope: 'current',
   minimumSupport: 0,
   relationships: true,
   selectedType: null,
-  selectedId: null
+  selectedId: null,
+  selectedSignatureId: null,
+  status: 'empty',
+  source: null,
+  error: null
 };
 
-function terrainCellText(cell) {
-  if (cell && typeof cell === 'object' && Object.prototype.hasOwnProperty.call(cell, 'text')) {
-    return String(cell.text);
+function assertTerrainReport(report) {
+  if (!report || report.terrain_version !== TERRAIN_VERSION) {
+    throw new Error(`Unsupported Terrain report version ${report?.terrain_version ?? 'missing'}`);
   }
-  return cell === null || cell === undefined ? '' : String(cell);
-}
-
-function terrainResultSetColumns(resultSet) {
-  return Array.isArray(resultSet?.columns)
-    ? resultSet.columns.map(column => String(column).replace(/^\?/, '').toLowerCase())
-    : [];
-}
-
-function isTerrainIncidenceResultSet(resultSet) {
-  const columns = terrainResultSetColumns(resultSet);
-  return Array.isArray(resultSet?.rows)
-    && TERRAIN_REQUIRED_COLUMNS.every(column => TERRAIN_COLUMN_ALIASES[column].some(alias => columns.includes(alias)));
-}
-
-function normalizeTerrainRows(resultSet) {
-  const columns = terrainResultSetColumns(resultSet);
-  const indexes = Object.fromEntries(TERRAIN_REQUIRED_COLUMNS.map(column => [
-    column,
-    columns.findIndex(candidate => TERRAIN_COLUMN_ALIASES[column].includes(candidate))
-  ]));
-  return resultSet.rows.map(row => Object.fromEntries(
-    TERRAIN_REQUIRED_COLUMNS.map(column => [column, terrainCellText(row[indexes[column]])])
-  ));
-}
-
-function terrainHash(value) {
-  let hash = 2166136261;
-  for (const character of String(value)) {
-    hash ^= character.codePointAt(0);
-    hash = Math.imul(hash, 16777619);
+  if (!report.projection || !report.relationship_catalog || !report.frames?.history || !report.frames?.current) {
+    throw new Error('Incomplete Terrain report');
   }
-  return (hash >>> 0).toString(36);
+  return report;
 }
 
-function terrainId(prefix, value) {
-  const slug = String(value)
-    .toLowerCase()
-    .normalize('NFKD')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '')
-    .slice(0, 28) || 'item';
-  return `${prefix}-${slug}-${terrainHash(value)}`;
-}
-
-function terrainSetKey(values) {
-  return [...values].sort().join('\u0001');
-}
-
-function terrainAppearanceRecords(rows) {
-  const records = new Map();
-  rows.forEach(row => {
-    if (!records.has(row.set)) {
-      records.set(row.set, { id: row.set, appearances: new Map(), posits: new Set() });
-    }
-    const record = records.get(row.set);
-    record.appearances.set(`${row.role}\u0000${row.thing}`, { role: row.role, thing: row.thing });
-    record.posits.add(row.posit);
-  });
-  return records;
-}
-
-function terrainRelationship(records, profilesByThing, profiles) {
-  const signatures = new Map();
-  records.forEach(record => {
-    if (record.appearances.size < 2) return;
-    const roles = [...new Set([...record.appearances.values()].map(appearance => appearance.role))].sort();
-    if (roles.length < 2) return;
-    const key = terrainSetKey(roles);
-    if (!signatures.has(key)) signatures.set(key, { roles, records: [] });
-    signatures.get(key).records.push(record);
-  });
-
-  const selected = [...signatures.values()].sort((left, right) =>
-    right.records.length - left.records.length
-      || right.roles.length - left.roles.length
-      || left.roles.join('\u0001').localeCompare(right.roles.join('\u0001'))
-  )[0];
-  if (!selected) return null;
-
-  const profileById = new Map(profiles.map(profile => [profile.id, profile]));
-  const roleTotals = new Map(selected.roles.map(role => [role, { role, things: new Set(), participations: 0 }]));
-  const allocations = new Map();
-  const posits = new Set();
-
-  selected.records.forEach(record => {
-    record.posits.forEach(posit => posits.add(posit));
-    record.appearances.forEach(appearance => {
-      const total = roleTotals.get(appearance.role);
-      if (!total) return;
-      total.things.add(appearance.thing);
-      total.participations += 1;
-
-      const profileId = profilesByThing.get(appearance.thing);
-      const profile = profileById.get(profileId);
-      if (!profile?.isopleth_id) return;
-      const key = `${appearance.role}\u0000${profileId}`;
-      if (!allocations.has(key)) {
-        allocations.set(key, {
-          id: terrainId('allocation', key),
-          role: appearance.role,
-          profile_id: profileId,
-          isopleth_id: profile.isopleth_id,
-          things: new Set(),
-          participations: 0
-        });
-      }
-      const allocation = allocations.get(key);
-      allocation.things.add(appearance.thing);
-      allocation.participations += 1;
-    });
-  });
-
+function adaptTerrainFrame(report, frame, label) {
+  const supports = new Map(frame.role_supports.map(support => [support.role_id, support.distinct_things]));
+  const roleNames = new Map([
+    ...report.projection.roles.map(role => [role.id, role.name]),
+    ...report.relationship_catalog.signatures.flatMap(signature =>
+      signature.roles.map(role => [role.id, role.name])
+    )
+  ]);
+  const signatures = new Map(report.relationship_catalog.signatures.map(signature => [signature.id, signature]));
   return {
-    id: terrainId('relationship', selected.roles.join('|')),
-    roles: selected.roles,
-    appearance_sets: selected.records.length,
-    posits: posits.size,
-    role_totals: [...roleTotals.values()].map(total => ({
-      role: total.role,
-      distinct_things: total.things.size,
-      participations: total.participations
-    })),
-    allocations: [...allocations.values()].map(allocation => ({
-      id: allocation.id,
-      role: allocation.role,
-      profile_id: allocation.profile_id,
-      isopleth_id: allocation.isopleth_id,
-      distinct_things: allocation.things.size,
-      participations: allocation.participations
-    })).sort((left, right) => left.role.localeCompare(right.role)
-      || right.distinct_things - left.distinct_things
-      || left.profile_id.localeCompare(right.profile_id))
-  };
-}
-
-function buildTerrainFrame(resultSet, label) {
-  const rows = normalizeTerrainRows(resultSet);
-  const records = terrainAppearanceRecords(rows);
-  const allThings = new Set();
-  const allRoles = new Set();
-  const allPosits = new Set();
-  const attributeRoleThings = new Map();
-
-  records.forEach(record => {
-    record.posits.forEach(posit => allPosits.add(posit));
-    record.appearances.forEach(appearance => {
-      allThings.add(appearance.thing);
-      allRoles.add(appearance.role);
-    });
-    if (record.appearances.size !== 1) return;
-    const appearance = record.appearances.values().next().value;
-    if (!attributeRoleThings.has(appearance.role)) attributeRoleThings.set(appearance.role, new Set());
-    attributeRoleThings.get(appearance.role).add(appearance.thing);
-  });
-
-  const projectedRoleNames = [...attributeRoleThings.entries()]
-    .sort((left, right) => right[1].size - left[1].size || left[0].localeCompare(right[0]))
-    .slice(0, TERRAIN_MAX_ROLES)
-    .map(([role]) => role);
-  const projectedRoles = projectedRoleNames.map(role => ({
-    id: terrainId('role', role),
-    name: role,
-    distinct_things: attributeRoleThings.get(role).size
-  }));
-  const roleIdByName = new Map(projectedRoles.map(role => [role.name, role.id]));
-  const projectedRoleOrder = new Map(projectedRoles.map((role, index) => [role.id, index]));
-
-  const thingRoleIds = new Map([...allThings].map(thing => [thing, new Set()]));
-  records.forEach(record => {
-    if (record.appearances.size !== 1) return;
-    const appearance = record.appearances.values().next().value;
-    const roleId = roleIdByName.get(appearance.role);
-    if (roleId) thingRoleIds.get(appearance.thing)?.add(roleId);
-  });
-
-  const profileGroups = new Map();
-  thingRoleIds.forEach((roleIds, thing) => {
-    const presentRoles = [...roleIds].sort((left, right) => projectedRoleOrder.get(left) - projectedRoleOrder.get(right));
-    const key = terrainSetKey(presentRoles);
-    if (!profileGroups.has(key)) profileGroups.set(key, { present_roles: presentRoles, things: new Set() });
-    profileGroups.get(key).things.add(thing);
-  });
-
-  const profilesByThing = new Map();
-  const profiles = [...profileGroups.entries()].map(([key, group]) => {
-    const id = terrainId('profile', key || 'empty');
-    group.things.forEach(thing => profilesByThing.set(thing, id));
-    return {
-      id,
-      present_roles: group.present_roles,
-      absent_roles: projectedRoles.map(role => role.id).filter(roleId => !group.present_roles.includes(roleId)),
-      things: group.things.size,
-      isopleth_id: group.present_roles.length ? terrainId('isopleth', key) : null
-    };
-  }).sort((left, right) => right.things - left.things || left.id.localeCompare(right.id));
-
-  const isopleths = profiles
-    .filter(profile => profile.present_roles.length)
-    .map(profile => ({
-      id: profile.isopleth_id,
-      included_roles: profile.present_roles,
-      support: profiles
-        .filter(candidate => profile.present_roles.every(roleId => candidate.present_roles.includes(roleId)))
-        .reduce((total, candidate) => total + candidate.things, 0)
-    }))
-    .sort((left, right) => left.included_roles.length - right.included_roles.length
-      || right.support - left.support
-      || left.id.localeCompare(right.id));
-
-  return {
+    scope: frame.scope,
     label,
     stats: {
-      things: allThings.size,
-      roles: allRoles.size,
-      appearance_sets: records.size,
-      posits: allPosits.size,
-      rows: rows.length
+      things: frame.stats.endpoint_things,
+      roles: frame.stats.roles,
+      appearance_sets: frame.stats.appearance_sets,
+      posits: frame.stats.posits,
+      incidences: frame.stats.incidences
     },
     projection: {
-      complete: attributeRoleThings.size <= TERRAIN_MAX_ROLES,
-      total_roles: attributeRoleThings.size,
-      roles: projectedRoles
+      complete: report.projection.complete,
+      total_roles: report.projection.total_attribute_roles,
+      roles: report.projection.roles.map(role => ({
+        ...role,
+        distinct_things: supports.get(role.id) || 0
+      }))
     },
-    profiles,
-    isopleths,
-    relationship: terrainRelationship(records, profilesByThing, profiles)
+    profiles: frame.profiles.map(profile => ({
+      ...profile,
+      present_roles: profile.present_role_ids,
+      absent_roles: profile.absent_role_ids
+    })),
+    isopleths: frame.isopleths.map(isopleth => ({
+      ...isopleth,
+      included_roles: isopleth.included_role_ids
+    })),
+    relationships: frame.relationships.map(relationship => {
+      const signature = signatures.get(relationship.signature_id);
+      if (!signature) throw new Error(`Unknown Terrain relationship signature ${relationship.signature_id}`);
+      return {
+        ...relationship,
+        id: relationship.signature_id,
+        roles: signature.roles.map(role => role.name),
+        role_totals: relationship.role_totals.map(total => ({
+          ...total,
+          role: roleNames.get(total.role_id) || total.role_id
+        })),
+        allocations: relationship.allocations.map(allocation => ({
+          ...allocation,
+          role: roleNames.get(allocation.role_id) || allocation.role_id
+        }))
+      };
+    })
   };
 }
 
-function buildTerrainData(resultSets) {
-  const compatible = (Array.isArray(resultSets) ? resultSets : []).filter(isTerrainIncidenceResultSet);
-  if (compatible.length < 2) return null;
-
-  const snapshot = compatible.find(resultSet => /\bas\s+of\b/i.test(String(resultSet.search || '')))
-    || compatible[compatible.length - 1];
-  const history = compatible.find(resultSet => resultSet !== snapshot && !/\bas\s+of\b/i.test(String(resultSet.search || '')))
-    || compatible.find(resultSet => resultSet !== snapshot);
-  if (!history || history === snapshot) return null;
-
-  const historyFrame = buildTerrainFrame(history, 'All recorded history');
-  const snapshotFrame = buildTerrainFrame(snapshot, 'Maximal values as of now');
+function adaptTerrainReport(rawReport) {
+  const report = assertTerrainReport(rawReport);
   return {
-    schema_version: 3,
-    source: 'query_results',
-    database: historyFrame.stats,
-    frames: { history: historyFrame, snapshot: snapshotFrame },
-    result_rows: { history: historyFrame.stats.rows, snapshot: snapshotFrame.stats.rows }
+    ...report,
+    source: 'database_snapshot',
+    frames: {
+      history: adaptTerrainFrame(report, report.frames.history, 'All recorded history'),
+      current: adaptTerrainFrame(
+        report,
+        report.frames.current,
+        `Maximal values as of ${report.resolved_as_of}`
+      )
+    }
   };
 }
 
@@ -298,12 +120,19 @@ function terrainProfile(profileId) {
   return terrainFrame()?.profiles.find(profile => profile.id === profileId);
 }
 
+function terrainRelationship() {
+  const frame = terrainFrame();
+  if (!frame || !terrainState.selectedSignatureId) return null;
+  return frame.relationships.find(relationship => relationship.signature_id === terrainState.selectedSignatureId) || null;
+}
+
 function terrainSelection() {
   const frame = terrainFrame();
   if (!frame) return null;
-  if (terrainState.selectedType === 'relationship') return frame.relationship;
+  const relationship = terrainRelationship();
+  if (terrainState.selectedType === 'relationship') return relationship;
   if (terrainState.selectedType === 'allocation') {
-    return frame.relationship?.allocations.find(allocation => allocation.id === terrainState.selectedId) || null;
+    return relationship?.allocations.find(allocation => allocation.id === terrainState.selectedId) || null;
   }
   if (terrainState.selectedType === 'role') {
     return frame.projection.roles.find(role => role.id === terrainState.selectedId) || null;
@@ -319,43 +148,163 @@ function selectTerrainItem(type, id) {
 
 function syncTerrainControls() {
   const frame = terrainFrame();
+  const relationship = terrainRelationship();
   const maximumSupport = frame ? Math.max(1, ...frame.isopleths.map(isopleth => isopleth.support)) : 1;
   els.terrainSupport.max = String(maximumSupport);
   els.terrainSupport.disabled = !frame;
   if (terrainState.minimumSupport > maximumSupport) terrainState.minimumSupport = maximumSupport;
   els.terrainSupport.value = String(terrainState.minimumSupport);
   els.terrainSupportValue.textContent = formatTerrainCount(terrainState.minimumSupport);
-  els.terrainRelationships.disabled = !frame?.relationship;
-  if (!frame?.relationship) els.terrainRelationships.checked = false;
+  els.terrainRelationships.disabled = !relationship;
+  if (!relationship) els.terrainRelationships.checked = false;
+  const signatures = terrainData?.relationship_catalog?.signatures || [];
+  els.terrainSignature.innerHTML = signatures.map(signature =>
+    `<option value="${escapeHtml(signature.id)}">{${escapeHtml(signature.roles.map(role => role.name).join(', '))}}</option>`
+  ).join('');
+  els.terrainSignature.value = terrainState.selectedSignatureId || '';
+  els.terrainSignature.disabled = signatures.length <= 1;
 }
 
-function captureTerrainResultSets(resultSets) {
-  const nextData = buildTerrainData(resultSets);
-  if (!nextData) return false;
-  terrainData = nextData;
+function updateTerrainSource() {
+  const browser = terrainState.source === 'wasm';
+  const source = browser ? 'Browser database snapshot' : 'Database snapshot';
+  els.terrainSourceBadge.classList.remove('live', 'loading', 'stale', 'error');
+  if (terrainState.status === 'loading') {
+    els.terrainSourceBadge.textContent = 'Loading';
+    els.terrainSourceBadge.classList.add('loading');
+    els.terrainSourceText.textContent = `Refreshing ${source.toLowerCase()}…`;
+  } else if (terrainState.status === 'ready') {
+    els.terrainSourceBadge.textContent = source;
+    els.terrainSourceBadge.classList.add('live');
+    els.terrainSourceText.textContent = `${formatTerrainCount(terrainData.database.posits)} recorded posits · current cutoff ${terrainData.resolved_as_of}`;
+  } else if (terrainState.status === 'stale') {
+    els.terrainSourceBadge.textContent = 'Stale';
+    els.terrainSourceBadge.classList.add('stale');
+    els.terrainSourceText.textContent = terrainState.error || 'Database activity may have changed this snapshot; refresh Terrain.';
+  } else if (terrainState.status === 'error') {
+    els.terrainSourceBadge.textContent = 'Error';
+    els.terrainSourceBadge.classList.add('error');
+    els.terrainSourceText.textContent = terrainState.error || 'Terrain refresh failed.';
+  } else {
+    els.terrainSourceBadge.textContent = 'Not loaded';
+    els.terrainSourceText.textContent = 'Open or refresh Terrain to capture the database.';
+  }
+  els.terrainRefresh.disabled = terrainState.status === 'loading';
+}
+
+function captureTerrainReport(report, source) {
+  terrainData = adaptTerrainReport(report);
+  terrainState.source = source;
+  terrainState.status = 'ready';
+  terrainState.error = null;
   terrainState.minimumSupport = 0;
   terrainState.relationships = true;
   terrainState.selectedType = null;
   terrainState.selectedId = null;
+  terrainState.selectedSignatureId = terrainData.relationship_catalog.default_signature_id;
   els.terrainRelationships.checked = true;
-  els.terrainSourceBadge.textContent = 'Query data';
-  els.terrainSourceBadge.classList.add('live');
-  els.terrainSourceText.textContent = `${formatTerrainCount(nextData.result_rows.history)} history rows · ${formatTerrainCount(nextData.result_rows.snapshot)} current rows`;
+  updateTerrainSource();
   renderTerrain();
-  return true;
 }
 
 function clearTerrainData() {
   terrainData = null;
+  terrainState.status = 'empty';
+  terrainState.source = null;
+  terrainState.error = null;
   terrainState.minimumSupport = 0;
   terrainState.relationships = true;
   terrainState.selectedType = null;
   terrainState.selectedId = null;
-  els.terrainSourceBadge.textContent = 'Awaiting query';
-  els.terrainSourceBadge.classList.remove('live');
-  els.terrainSourceText.textContent = 'Run a Terrain incidence script to populate this workspace';
+  terrainState.selectedSignatureId = null;
   els.terrainRelationships.checked = true;
+  updateTerrainSource();
   renderTerrain();
+}
+
+function markTerrainStale() {
+  if (!terrainData || terrainState.status === 'loading') return;
+  terrainState.status = 'stale';
+  terrainState.error = null;
+  updateTerrainSource();
+}
+
+function terrainEndpoint(queryEndpoint) {
+  if (!/\/v1\/query\/?$/.test(queryEndpoint)) {
+    throw new Error('The configured endpoint must end in /v1/query to locate /v1/terrain');
+  }
+  return queryEndpoint.replace(/\/v1\/query\/?$/, '/v1/terrain');
+}
+
+async function ensureTerrainWasmEngine() {
+  if (!wasmEngine) {
+    const pkg = await loadWasmPackage();
+    await pkg.default();
+    wasmEngine = new pkg.WasmEngine();
+  }
+  if (typeof wasmEngine.terrain !== 'function') {
+    const packageLabel = wasmPackageSource === 'published' ? 'published fallback' : 'workspace';
+    throw new Error(`The ${packageLabel} WASM package does not implement Terrain contract 1. Rebuild or update the package.`);
+  }
+  return wasmEngine;
+}
+
+async function refreshTerrain() {
+  if (terrainState.status === 'loading') return;
+  const previous = terrainData;
+  const source = els.wasmMode.checked ? 'wasm' : 'http';
+  terrainState.status = 'loading';
+  terrainState.source = source;
+  terrainState.error = null;
+  updateTerrainSource();
+  renderTerrain();
+  const timeoutMs = Math.max(1, parseInt(els.timeout.value || '5000', 10));
+  const options = {
+    terrain_version: TERRAIN_VERSION,
+    timeout_ms: timeoutMs,
+    projected_role_limit: 8,
+    max_relationship_signatures: 16
+  };
+  try {
+    let report;
+    if (source === 'wasm') {
+      const engine = await ensureTerrainWasmEngine();
+      const response = engine.terrain(options);
+      if (response.interface_version !== '1' || response.terrain_version !== TERRAIN_VERSION) {
+        throw new Error(`Unsupported WASM Terrain contract ${response.terrain_version ?? 'missing'}`);
+      }
+      report = response.report;
+    } else {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs + 1_000);
+      let response;
+      try {
+        response = await fetch(terrainEndpoint(els.endpoint.value.trim()), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(options),
+          signal: controller.signal
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+      const payload = await response.json();
+      if (!response.ok || payload.status !== 'ok') {
+        throw new Error(payload.error || `Terrain request failed with HTTP ${response.status}`);
+      }
+      if (payload.api_version !== 'v1' || payload.terrain_version !== TERRAIN_VERSION) {
+        throw new Error(`Unsupported HTTP Terrain contract ${payload.terrain_version ?? 'missing'}`);
+      }
+      report = payload.report;
+    }
+    captureTerrainReport(report, source);
+  } catch (error) {
+    terrainData = previous;
+    terrainState.status = previous ? 'stale' : 'error';
+    terrainState.error = error.message || String(error);
+    updateTerrainSource();
+    renderTerrain();
+  }
 }
 
 function initializeTerrain() {
@@ -388,7 +337,25 @@ function initializeTerrain() {
     renderTerrain();
   });
 
+  els.terrainSignature.addEventListener('change', () => {
+    terrainState.selectedSignatureId = els.terrainSignature.value || null;
+    terrainState.selectedType = null;
+    terrainState.selectedId = null;
+    renderTerrain();
+  });
+
+  els.terrainRefresh.addEventListener('click', refreshTerrain);
+
   els.terrainDetail.addEventListener('click', event => {
+    if (event.target.closest('[data-terrain-refresh]')) {
+      refreshTerrain();
+      return;
+    }
+    const allocation = event.target.closest('[data-terrain-allocation-id]');
+    if (allocation) {
+      selectTerrainItem('allocation', allocation.dataset.terrainAllocationId);
+      return;
+    }
     const button = event.target.closest('[data-terrain-query]');
     if (!button) return;
     const selected = terrainSelection();
@@ -400,6 +367,7 @@ function initializeTerrain() {
     setStatus(`Query prepared from terrain ${terrainState.selectedType}`);
   });
 
+  updateTerrainSource();
   renderTerrain();
 }
 
@@ -418,7 +386,7 @@ function renderTerrainStats() {
   `).join('') + `
     <div class="terrain-stat terrain-scope-stat">
       <span>Scope</span>
-      <strong>${escapeHtml(frame?.label || 'No terrain query loaded')}</strong>
+      <strong>${escapeHtml(frame?.label || 'No database snapshot loaded')}</strong>
     </div>
   `;
 }
@@ -477,21 +445,28 @@ function terrainLayout(frame, visibleIsopleths, visibleAllocations) {
   };
 }
 
-function renderTerrainEmpty() {
+function renderTerrainEmpty(state = terrainState.status) {
+  const messages = {
+    loading: ['Capturing database snapshot', 'Terrain is reading one coherent structural state.'],
+    error: ['Terrain refresh failed', terrainState.error || 'The database snapshot could not be loaded.'],
+    empty: ['Terrain is ready to load', 'Refresh to build an authoritative database snapshot.'],
+    report_empty: ['Database snapshot is empty', 'Add Roles and Posits, then refresh Terrain to map their structure.']
+  };
+  const [title, copy] = messages[state] || messages.empty;
   els.terrainMap.innerHTML = `
-    <title id="terrainMapTitle">Terrain is waiting for query results</title>
-    <desc id="terrainMapDescription">Run the supplied Terrain Traqula fixture to build this map from returned result cells.</desc>
+    <title id="terrainMapTitle">${escapeHtml(title)}</title>
+    <desc id="terrainMapDescription">${escapeHtml(copy)}</desc>
     <rect class="terrain-background" width="940" height="500"></rect>
     <g class="terrain-empty" transform="translate(470 225)">
-      <text class="terrain-empty-title" y="0">Run the Terrain incidence fixture</text>
-      <text class="terrain-empty-copy" y="30">Paste traqula/terrain.traqula into Query, run it, then return to Terrain.</text>
+      <text class="terrain-empty-title" y="0">${escapeHtml(title)}</text>
+      <text class="terrain-empty-copy" y="30">${escapeHtml(copy)}</text>
     </g>
   `;
   els.terrainDetail.innerHTML = `
-    <span class="detail-kind">No query data</span>
-    <h3>Terrain is derived from results</h3>
-    <p class="detail-copy">Run both incidence searches in the supplied fixture. The browser will recognize their columns and build history and current frames from the actual cells.</p>
-    <a class="terrain-fixture-link" href="traqula/terrain.traqula" target="_blank" rel="noopener">Open the paste-ready fixture</a>
+    <span class="detail-kind">${state === 'error' ? 'Snapshot error' : 'Database snapshot'}</span>
+    <h3>${escapeHtml(title)}</h3>
+    <p class="detail-copy">${escapeHtml(copy)}</p>
+    <button class="terrain-query-button" type="button" data-terrain-refresh>Refresh Terrain</button>
   `;
 }
 
@@ -503,10 +478,15 @@ function renderTerrain() {
     renderTerrainEmpty();
     return;
   }
+  if (frame.stats.appearance_sets === 0) {
+    renderTerrainEmpty('report_empty');
+    return;
+  }
 
   const visibleIsopleths = frame.isopleths.filter(isopleth => isopleth.support >= terrainState.minimumSupport);
   const visibleIsoplethIds = new Set(visibleIsopleths.map(isopleth => isopleth.id));
-  const visibleAllocations = (frame.relationship?.allocations || [])
+  const relationship = terrainRelationship();
+  const visibleAllocations = (relationship?.allocations || [])
     .filter(allocation => visibleIsoplethIds.has(allocation.isopleth_id));
   const layout = terrainLayout(frame, visibleIsopleths, visibleAllocations);
 
@@ -514,13 +494,19 @@ function renderTerrain() {
     terrainState.selectedType = null;
     terrainState.selectedId = null;
   }
-  if (terrainState.selectedType === 'allocation' && !visibleAllocations.some(allocation => allocation.id === terrainState.selectedId)) {
-    terrainState.selectedType = null;
-    terrainState.selectedId = null;
+  if (terrainState.selectedType === 'allocation') {
+    const allocation = relationship?.allocations.find(candidate => candidate.id === terrainState.selectedId);
+    if (!allocation || (allocation.profile_mask !== 0 && !visibleAllocations.some(candidate => candidate.id === terrainState.selectedId))) {
+      terrainState.selectedType = null;
+      terrainState.selectedId = null;
+    }
   }
   if (!terrainSelection() && visibleIsopleths.length) {
     terrainState.selectedType = 'isopleth';
     terrainState.selectedId = visibleIsopleths[0].id;
+  } else if (!terrainSelection() && terrainState.relationships && relationship) {
+    terrainState.selectedType = 'relationship';
+    terrainState.selectedId = relationship.id;
   }
 
   const isoplethMarkup = visibleIsopleths.map(isopleth => {
@@ -555,10 +541,9 @@ function renderTerrain() {
     `;
   }).join('');
 
-  const relationship = frame.relationship;
   const relationshipLayout = layout.relationship;
   const relationshipSelected = terrainState.selectedType === 'relationship';
-  const relationshipMarkup = terrainState.relationships && relationship && visibleAllocations.length ? `
+  const relationshipMarkup = terrainState.relationships && relationship ? `
     <g class="terrain-allocations">
       <g class="relationship-panel">
         <rect class="relationship-panel-background"
@@ -599,7 +584,7 @@ function renderTerrain() {
     ? `Complete projection over ${frame.projection.roles.length} attribute Roles.`
     : `Showing ${frame.projection.roles.length} of ${frame.projection.total_roles} attribute Roles.`;
   els.terrainMap.innerHTML = `
-    <title id="terrainMapTitle">Query-derived role-isopleth visualization</title>
+    <title id="terrainMapTitle">Authoritative role-isopleth visualization</title>
     <desc id="terrainMapDescription">Role labels are enclosed by support isopleths. Relationship allocation lines connect an exact appearance-set signature to projected identity profiles.</desc>
     <rect class="terrain-background" width="940" height="500"></rect>
     <text class="terrain-axis-note" x="22" y="488">${escapeHtml(projectionNote)} Hidden isopleths do not imply zero.</text>
@@ -655,6 +640,7 @@ function renderTerrainDetail() {
   }
 
   if (terrainState.selectedType === 'relationship') {
+    const maskZeroAllocations = selected.allocations.filter(allocation => allocation.profile_mask === 0);
     els.terrainDetail.innerHTML = `
       <span class="detail-kind">Exact relationship signature</span>
       <h3>{${escapeHtml(selected.roles.join(', '))}}</h3>
@@ -671,6 +657,17 @@ function renderTerrainDetail() {
           </div>
         `).join('')}
       </div>
+      ${maskZeroAllocations.length ? `
+        <p class="profile-exclusions">Relationship-only endpoint cohorts</p>
+        <div class="endpoint-list">
+          ${maskZeroAllocations.map(allocation => `
+            <button type="button" data-terrain-allocation-id="${escapeHtml(allocation.id)}">
+              <strong>${escapeHtml(allocation.role)}</strong>
+              <span>${formatTerrainCount(allocation.distinct_things)} distinct / ${formatTerrainCount(allocation.participations)} participations · no projected attributes</span>
+            </button>
+          `).join('')}
+        </div>
+      ` : ''}
       <button class="terrain-query-button" type="button" data-terrain-query>Prepare query</button>
     `;
     return;
@@ -751,9 +748,9 @@ function terrainRoleToken(role) {
 }
 
 function terrainQuery(selected) {
-  const asOf = terrainState.scope === 'snapshot' ? ' as of @NOW' : '';
+  const asOf = terrainState.scope === 'current' ? ` as of ${terrainData.resolved_as_of}` : '';
   if (['relationship', 'allocation'].includes(terrainState.selectedType)) {
-    const relationship = terrainFrame().relationship;
+    const relationship = terrainRelationship();
     const appearances = relationship.roles.map((role, index) => `(?member_${index + 1}, ${terrainRoleToken(role)})`).join(', ');
     const variables = relationship.roles.map((_, index) => `?member_${index + 1}`).join(', ');
     return `search [{${appearances}}, ?value, ?time]${asOf}\nreturn ${variables}, ?value, ?time;`;
@@ -768,12 +765,10 @@ function terrainQuery(selected) {
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    TERRAIN_REQUIRED_COLUMNS,
-    buildTerrainData,
-    buildTerrainFrame,
-    isTerrainIncidenceResultSet,
-    normalizeTerrainRows,
-    terrainCellText
+    TERRAIN_VERSION,
+    adaptTerrainReport,
+    assertTerrainReport,
+    terrainEndpoint
   };
 }
 

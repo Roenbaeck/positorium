@@ -1,128 +1,170 @@
-# Role Terrain
+# Authoritative Role Terrain
 
-Role Terrain is an isopleth-inspired structural view of actual Positorium query
-results. The Terrain tab in `positorium.html` does not contain a seeded dataset:
-it recognizes a history/current pair of incidence result sets and derives the
-map, statistics, profiles, support contours, and relationship allocations from
-their typed cells.
+Role Terrain is an isopleth-inspired structural view of one coherent Positorium
+database snapshot. Rust reads the canonical database structures directly and
+returns a versioned, bounded report containing database totals, shared Role
+projection, History and Current frames, exact profiles and supports, and a
+catalog of relationship signatures. It does not execute Traqula, inspect query
+result rows, or consume normal query row limits.
 
-## Try the supplied terrain
+Open **Terrain** in `positorium.html` to load a report automatically. In server
+mode the browser calls `POST /v1/terrain`; in Local WASM mode it calls
+`WasmEngine.terrain(...)`. No preparatory query is required. The source badge
+distinguishes **Database snapshot** from **Browser database snapshot**, and the
+Refresh button requests a new coherent report.
 
-1. Open Query Studio with **Local WASM** enabled and start with a fresh page load.
-2. Paste the complete contents of [`traqula/terrain.traqula`](traqula/terrain.traqula)
-   into the Query editor.
-3. Run the script, including both searches at the end.
-4. Open **Terrain**.
+Query execution marks an existing report stale because the browser does not try
+to infer whether a script mutates the database. A failed refresh keeps the last
+complete report visible as stale and shows the error; it never substitutes a
+partial report or falls back to query-derived aggregation. The Query Studio
+Stream setting has no effect on Terrain.
 
-The source badge should read **Query data**. The fixture is intentionally small
-enough to audit by eye, but includes repeated values and relationship history.
-The expected measurements are:
+## Frames and snapshot semantics
 
-| Measurement | History | As of now |
+One report contains two frames over the same structural capture:
+
+- **History** includes every canonical recorded posit, including future-dated
+  posits.
+- **Current** resolves one exact cutoff and retains every eligible maximal posit
+  for each exact appearance set using Positorium's partial-order snapshot
+  semantics.
+
+The default cutoff is one resolution of `@NOW`. The resolved canonical cutoff is
+returned as `resolved_as_of`; prepared Current queries reuse that exact token
+rather than evaluating a new `@NOW`. Equal-time conflicting values and
+incomparable mixed-precision maxima remain together. A later definitely ordered
+time dominates an earlier one; identity and append order never break ties.
+
+Database totals are independent of the frames. They count all catalog Roles,
+canonical Appearances, AppearanceSets, Posits, and retained referenced Things.
+Frame statistics count only active endpoint Things, Roles, appearance sets,
+posits, and incidences.
+
+## Role projection, profiles, and isopleths
+
+A Role is an attribute candidate when it occurs in an active singleton
+appearance set. Its support is the number of distinct endpoint Things in those
+sets; repeated posits do not multiply support.
+
+History and Current share one projected Role universe, so a scope switch does
+not change Role bits, profile identities, isopleth identities, or layout. The
+union of candidates is ranked by Current support, History support, Role name,
+and Role identity. Terrain 1 projects at most eight Roles. `projection.complete`
+and `total_attribute_roles` explicitly report whether anything was omitted.
+
+For projected universe `U`, every endpoint Thing receives one exact bit mask:
+
+```text
+profile_U(t) = { r in U | t occurs in an active singleton set for r }
+```
+
+Mask zero is retained for relationship-only Things. Every populated nonzero
+profile `M` emits an isopleth whose support is the number of endpoint Things with
+a superset profile:
+
+```text
+support(M) = sum population(P) where (P & M) == M
+```
+
+Support is therefore monotone: adding a Role cannot increase it. When the
+projection is incomplete, an absent bit means absent only from the projected
+universe, not necessarily from the full database.
+
+## Relationships and allocations
+
+An active appearance set with at least two appearances is a relationship
+candidate. Its exact signature is the sorted set of backend Role identities.
+The shared History/Current catalog is ranked by Current set count, History set
+count, arity, Role-name sequence, and Role-identity sequence. Terrain returns 16
+signatures by default, with a hard maximum of 128, and reports catalog
+completeness and the untruncated total.
+
+The selected signature appears in both frames even when one frame has zero
+matching sets. For each relationship Role:
+
+- `participations` counts appearances across distinct matching appearance sets;
+- `distinct_things` counts unique endpoint Things;
+- allocations group endpoints by exact projected profile.
+
+Repeated historical posits increase the relationship posit count, not endpoint
+participation. Mask-zero allocations remain selectable in the inspector but
+have no SVG edge because there is no mask-zero isopleth.
+
+## Interfaces
+
+The Rust API is `Database::terrain()`,
+`Database::terrain_with_options(TerrainOptions)`, or the forwarding
+`QueryInterface::terrain_with_options(...)`. `TerrainReport.terrain_version` is
+`1`; Thing and Role identities are canonical unsigned-decimal strings, counters
+are checked `u64` values, and every output vector has deterministic ordering.
+
+The HTTP request is:
+
+```http
+POST /v1/terrain
+Content-Type: application/json
+
+{
+  "terrain_version": 1,
+  "as_of": "@NOW",
+  "timeout_ms": 5000,
+  "projected_role_limit": 8,
+  "max_relationship_signatures": 16
+}
+```
+
+Only `terrain_version` is required. `as_of` accepts the same time tokens and
+constants as Traqula. Responses carry HTTP API version `v1`, Terrain version `1`,
+status, elapsed time, and either a complete report or a structured error. They
+also set `Cache-Control: no-store`. Terrain 1 intentionally has no SSE route.
+
+The additive WASM method accepts the same Terrain fields and returns WASM
+interface version `1`, Terrain version `1`, and the report. It enforces deadlines
+and hard limits cooperatively. Because the WASM call is synchronous on the
+browser thread, JavaScript cannot deliver a same-thread cancellation while it is
+running.
+
+Unknown Terrain versions are rejected independently of Traqula, HTTP, SSE, and
+WASM interface versions.
+
+## Bounds and consistency
+
+Terrain starts its timeout before waiting for the database execution owner,
+captures structural sources under that owner in a fixed lock order, and releases
+all database locks before aggregation. Concurrent queries and writers therefore
+serialize with capture, while the more expensive aggregation operates on an
+immutable snapshot.
+
+Terrain 1 hard limits are one million scanned posits, 250,000 active appearance
+sets, one million distinct endpoint Things, five million temporal comparisons,
+eight projected Roles, relationship arity 256, 128 returned signatures, and
+4,096 detailed allocations. Exceeding a hard limit fails the whole report with a
+typed resource-limit error. Only the Role projection and relationship catalog
+may truncate, and both expose completeness metadata.
+
+## Golden fixture
+
+[`traqula/terrain.traqula`](traqula/terrain.traqula) is retained as a population
+fixture for backend tests, not as a browser workflow. It produces:
+
+| Measurement | History | Current |
 | --- | ---: | ---: |
-| Result rows | 30 | 27 |
-| Things | 6 | 6 |
-| Roles | 8 | 8 |
+| Endpoint Things | 6 | 6 |
+| Roles in active sets | 8 | 8 |
 | Appearance sets | 24 | 24 |
 | Posits | 26 | 24 |
+| Incidences | 30 | 27 |
 
-The four projected attribute profiles produce support labels of `6`, `3`, `2`,
-and `1`:
+The shared attribute projection contains `name`, `hair color`, `height`,
+`social security number`, `RFID`, and `beard color`. For `{owner, pet}`, History
+contains four posits and Current contains three over the same three appearance
+sets. Cass contributes two owner participations, Ada one, and Mochi and Pixel
+contribute three pet participations together.
 
-- all six Things have `name` and `hair color`;
-- Ada, Ben, and Cass also have `height` and `social security number`;
-- Mochi and Pixel instead have `RFID`;
-- Cass alone also has `beard color`.
+## Client responsibilities
 
-The `{owner, pet}` relationship has three appearance sets. It has four recorded
-posits in History because Cass and Mochi change from `fostered` to `adopted`, and
-three posits As of now. Its endpoint allocations are:
-
-- Cass as `owner`: 1 distinct Thing, 2 relationship participations;
-- Ada as `owner`: 1 distinct Thing, 1 participation;
-- Mochi and Pixel as `pet`: 2 distinct Things, 3 participations.
-
-## Result-set contract
-
-Terrain requires two compatible result sets from the same complete script
-execution. One is the recorded-history search and one contains an `as of` clause.
-Each result set must project these six logical fields:
-
-```text
-posit, appearance set, member Thing, member Role, value, time
-```
-
-The fixture uses the non-keyword variable names below:
-
-```traqula
-search ?posit_id = [?appearance_set = {(?thing, ?role_name), ...}, ?value, ?time]
-return ?posit_id, ?appearance_set, ?thing, ?role_name, ?value, ?time;
-```
-
-The client also accepts the compact aliases `p`, `aset`, `r`, `v`, and `t`.
-Column order is irrelevant. Typed cell text is used losslessly; display-table
-formatting is not scraped.
-
-The history and current searches must both be returned together. This gives the
-browser two coherent frames produced under the engine's normal script-execution
-boundary. Running an unrelated search does not silently replace an already
-loaded Terrain because its column contract does not match.
-
-## Role-space semantics
-
-The map places attribute Roles as points. A Role is treated as an attribute Role
-when it occurs in a single-appearance set. Multi-appearance sets are treated as
-relationship candidates.
-
-For displayed Role universe `U`, the projected profile of Thing `t` is:
-
-```text
-profile_U(t) = { r in U | t appears in Role r }
-```
-
-For an enclosed Role set `C`, its extent and support are:
-
-```text
-extent_U(C)  = { t | C is a subset of profile_U(t) }
-support_U(C) = |extent_U(C)|
-```
-
-Each distinct exact profile supplies one isopleth. Its support includes every
-profile that is a superset, so adding an enclosed Role cannot increase support.
-The map area does not encode population size; the numeric label does.
-
-Terrain currently projects at most eight attribute Roles, ordered by distinct
-Thing support and then Role name. The footer states whether this projection is
-complete. A missing line means “not shown”, never zero, including when the
-minimum-support control hides it.
-
-## Relationship semantics
-
-Terrain groups multi-appearance sets by their exact sorted Role signature and
-displays the signature with the most appearance sets. For that signature:
-
-- `appearance_sets` counts matching sets;
-- `posits` counts their distinct posit identities in the selected time frame;
-- `distinct_things` counts unique endpoint Things for each Role;
-- `participations` counts endpoint appearances across matching sets.
-
-Allocations group each relationship endpoint by its exact projected attribute
-profile. Their lines therefore connect real endpoint cohorts to the support
-isopleth representing that profile. Repeated historical posits for one unchanged
-appearance set increase the posit count but do not invent extra participations.
-
-## Client layout and interactions
-
-Semantic counts come from query results; the browser owns deterministic Role
-positions, contour paths, labels, and colors. Query/Results and Terrain remain
-alternate workspaces.
-
-- **As of now** is the default frame; **History** shows recorded-history structure.
-- Minimum support hides low-support isopleths.
-- Relationships can be hidden independently.
-- Selecting a Role, isopleth, relationship, or allocation opens its measurements.
-- **Prepare query** generates Traqula from the selected, query-derived Roles and
-  returns to the Query workspace.
-
-The Rust fixture test validates the result counts and typed cells. The Node test
-validates the client aggregation independently of SVG layout.
+Rust owns all semantic counts and identities. The browser owns SVG geometry,
+colors, label placement, minimum-support filtering, selection, relationship
+visibility, and query preparation. Selecting a Role, isopleth, relationship, or
+allocation opens its measurements; the relationship selector exposes every
+signature returned by the backend catalog.
