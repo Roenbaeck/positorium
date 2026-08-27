@@ -1,8 +1,6 @@
 const TERRAIN_VERSION = 1;
-const TERRAIN_ROLE_POSITIONS = [
-  [356, 155], [356, 229], [205, 222], [205, 302],
-  [85, 85], [655, 270], [520, 95], [575, 390]
-];
+const TERRAIN_VIEWBOX = { width: 940, height: 500 };
+const TERRAIN_PLOT = { left: 54, right: 886, top: 36, bottom: 342 };
 const TERRAIN_TONES = ['sea', 'leaf', 'earth', 'berry'];
 
 let terrainData = null;
@@ -106,6 +104,21 @@ function formatTerrainCount(value) {
 
 function terrainFrame() {
   return terrainData?.frames[terrainState.scope] || null;
+}
+
+function terrainTopologyIsopleths() {
+  const topology = new Map();
+  ['history', 'current'].forEach(scope => {
+    (terrainData?.frames?.[scope]?.isopleths || []).forEach(isopleth => {
+      const existing = topology.get(isopleth.id);
+      if (!existing) {
+        topology.set(isopleth.id, { ...isopleth });
+      } else {
+        existing.support = Math.max(existing.support, isopleth.support);
+      }
+    });
+  });
+  return [...topology.values()];
 }
 
 function terrainRole(roleId) {
@@ -391,57 +404,287 @@ function renderTerrainStats() {
   `;
 }
 
-function terrainRoundedPath(x, y, width, height, radius) {
-  const right = x + width;
-  const bottom = y + height;
-  return `M${x + radius} ${y} H${right - radius} Q${right} ${y} ${right} ${y + radius} V${bottom - radius} Q${right} ${bottom} ${right - radius} ${bottom} H${x + radius} Q${x} ${bottom} ${x} ${bottom - radius} V${y + radius} Q${x} ${y} ${x + radius} ${y} Z`;
-}
-
 function terrainRoleLines(name) {
   const words = name.split(/\s+/).filter(Boolean);
   if (words.length <= 3) return words;
   return [words.slice(0, 2).join(' '), words.slice(2).join(' ')];
 }
 
-function terrainLayout(frame, visibleIsopleths, visibleAllocations) {
-  const roles = Object.fromEntries(frame.projection.roles.map((role, index) => [role.id, {
-    position: TERRAIN_ROLE_POSITIONS[index], lines: terrainRoleLines(role.name)
-  }]));
-  const isopleths = {};
-  visibleIsopleths.forEach((isopleth, index) => {
-    const points = isopleth.included_roles.map(roleId => roles[roleId]?.position).filter(Boolean);
-    const xs = points.map(point => point[0]);
-    const ys = points.map(point => point[1]);
-    const padding = 34 + isopleth.included_roles.length * 9;
-    const minX = Math.max(15, Math.min(...xs) - padding);
-    const maxX = Math.min(748, Math.max(...xs) + padding);
-    const minY = Math.max(15, Math.min(...ys) - padding);
-    const maxY = Math.min(472, Math.max(...ys) + padding);
-    const width = Math.max(108, maxX - minX);
-    const height = Math.max(82, maxY - minY);
-    const x = Math.max(15, Math.min(minX, 748 - width));
-    const y = Math.max(15, Math.min(minY, 472 - height));
-    isopleths[isopleth.id] = {
-      path: terrainRoundedPath(x, y, width, height, Math.min(46, height / 2)),
-      label_fraction: [0.16, 0.34, 0.58, 0.82][index % 4],
-      tone: TERRAIN_TONES[index % TERRAIN_TONES.length]
-    };
+function terrainCompareRoleIds(left, right) {
+  const leftNumber = Number(left);
+  const rightNumber = Number(right);
+  if (Number.isFinite(leftNumber) && Number.isFinite(rightNumber) && leftNumber !== rightNumber) {
+    return leftNumber - rightNumber;
+  }
+  return String(left).localeCompare(String(right));
+}
+
+function terrainIsSubset(subset, superset) {
+  return subset.every(value => superset.includes(value));
+}
+
+function terrainHierarchy(visibleIsopleths) {
+  const nodes = visibleIsopleths.map((isopleth, index) => ({
+    isopleth,
+    index,
+    parent: null,
+    children: [],
+    depth: 0,
+    direction: Math.PI
+  }));
+  const ordered = [...nodes].sort((left, right) =>
+    left.isopleth.included_roles.length - right.isopleth.included_roles.length ||
+    right.isopleth.support - left.isopleth.support ||
+    left.isopleth.id.localeCompare(right.isopleth.id)
+  );
+
+  ordered.forEach(node => {
+    const candidates = ordered.filter(candidate =>
+      candidate !== node &&
+      candidate.isopleth.included_roles.length < node.isopleth.included_roles.length &&
+      terrainIsSubset(candidate.isopleth.included_roles, node.isopleth.included_roles)
+    );
+    node.parent = candidates.sort((left, right) =>
+      right.isopleth.included_roles.length - left.isopleth.included_roles.length ||
+      right.isopleth.support - left.isopleth.support ||
+      left.isopleth.id.localeCompare(right.isopleth.id)
+    )[0] || null;
+    if (node.parent) {
+      node.parent.children.push(node);
+      node.depth = node.parent.depth + 1;
+    }
   });
 
-  const panel = { x: 790, y: 110, width: 135, height: Math.max(170, 105 + visibleAllocations.length * 46) };
+  nodes.forEach(node => node.children.sort((left, right) =>
+    right.isopleth.support - left.isopleth.support ||
+    right.isopleth.included_roles.length - left.isopleth.included_roles.length ||
+    left.isopleth.id.localeCompare(right.isopleth.id)
+  ));
+  return { nodes, roots: nodes.filter(node => !node.parent), ordered };
+}
+
+function terrainChildAngles(node) {
+  const count = node.children.length;
+  if (!count) return [];
+  if (!node.parent) {
+    if (count === 1) return [Math.PI];
+    if (count === 2) return [Math.PI, 0];
+    if (count === 3) return [Math.PI, -Math.PI / 3, Math.PI / 3];
+    if (count === 4) return [Math.PI, -Math.PI / 2, 0, Math.PI / 2];
+    return Array.from({ length: count }, (_, index) => Math.PI + index * Math.PI * 2 / count);
+  }
+  if (count === 1) return [node.direction + 0.42];
+  const spread = Math.min(1.15, 0.62 * (count - 1));
+  return Array.from({ length: count }, (_, index) =>
+    node.direction - spread / 2 + (spread * index) / (count - 1)
+  );
+}
+
+function terrainPlaceRoleGroup(roleIds, anchor, direction, roles) {
+  const ordered = [...roleIds].sort(terrainCompareRoleIds);
+  if (ordered.length === 1) {
+    roles[ordered[0]].position = [...anchor];
+    return;
+  }
+  if (ordered.length === 2) {
+    const gap = 54;
+    const normal = [Math.sin(direction), -Math.cos(direction)];
+    ordered.forEach((roleId, index) => {
+      const offset = (index - 0.5) * gap;
+      roles[roleId].position = [anchor[0] + normal[0] * offset, anchor[1] + normal[1] * offset];
+    });
+    return;
+  }
+  const radius = 34 + ordered.length * 3;
+  ordered.forEach((roleId, index) => {
+    const angle = -Math.PI / 2 + index * Math.PI * 2 / ordered.length;
+    roles[roleId].position = [anchor[0] + Math.cos(angle) * radius, anchor[1] + Math.sin(angle) * radius];
+  });
+}
+
+function terrainFitRolePositions(roles) {
+  const items = Object.values(roles).filter(role => role.position);
+  if (!items.length) return;
+  const xs = items.map(role => role.position[0]);
+  const ys = items.map(role => role.position[1]);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const availableWidth = TERRAIN_PLOT.right - TERRAIN_PLOT.left - 90;
+  const availableHeight = TERRAIN_PLOT.bottom - TERRAIN_PLOT.top - 70;
+  const scale = Math.min(
+    1,
+    availableWidth / Math.max(1, maxX - minX),
+    availableHeight / Math.max(1, maxY - minY)
+  );
+  const sourceCenter = [(minX + maxX) / 2, (minY + maxY) / 2];
+  const targetCenter = [
+    (TERRAIN_PLOT.left + TERRAIN_PLOT.right) / 2,
+    (TERRAIN_PLOT.top + TERRAIN_PLOT.bottom) / 2 - 8
+  ];
+  items.forEach(role => {
+    role.position = [
+      targetCenter[0] + (role.position[0] - sourceCenter[0]) * scale,
+      targetCenter[1] + (role.position[1] - sourceCenter[1]) * scale
+    ];
+  });
+}
+
+function terrainConvexHull(points) {
+  const ordered = [...points].sort((left, right) => left[0] - right[0] || left[1] - right[1]);
+  if (ordered.length <= 2) return ordered;
+  const cross = (origin, left, right) =>
+    (left[0] - origin[0]) * (right[1] - origin[1]) -
+    (left[1] - origin[1]) * (right[0] - origin[0]);
+  const lower = [];
+  ordered.forEach(point => {
+    while (lower.length >= 2 && cross(lower.at(-2), lower.at(-1), point) <= 0) lower.pop();
+    lower.push(point);
+  });
+  const upper = [];
+  [...ordered].reverse().forEach(point => {
+    while (upper.length >= 2 && cross(upper.at(-2), upper.at(-1), point) <= 0) upper.pop();
+    upper.push(point);
+  });
+  lower.pop();
+  upper.pop();
+  return lower.concat(upper);
+}
+
+function terrainSmoothHullPath(points) {
+  if (!points.length) return '';
+  const midpoint = (left, right) => [(left[0] + right[0]) / 2, (left[1] + right[1]) / 2];
+  const first = midpoint(points.at(-1), points[0]);
+  let path = `M${first[0].toFixed(1)} ${first[1].toFixed(1)}`;
+  points.forEach((point, index) => {
+    const next = midpoint(point, points[(index + 1) % points.length]);
+    path += ` Q${point[0].toFixed(1)} ${point[1].toFixed(1)} ${next[0].toFixed(1)} ${next[1].toFixed(1)}`;
+  });
+  return `${path} Z`;
+}
+
+function terrainRoleExtent(role) {
+  const longestLine = Math.max(...role.lines.map(line => line.length), 1);
+  return {
+    x: Math.max(27, longestLine * 4.3),
+    y: Math.max(19, role.lines.length * 10)
+  };
+}
+
+function terrainContour(node, roles) {
+  const siblings = node.parent ? node.parent.children : [];
+  const siblingIndex = Math.max(0, siblings.indexOf(node));
+  const siblingBias = siblings.length > 1 ? (siblingIndex - (siblings.length - 1) / 2) * 8 : 0;
+  const padding = 27 + node.depth * 12 + siblingBias;
+  const perimeter = [];
+  node.isopleth.included_roles.forEach(roleId => {
+    const role = roles[roleId];
+    if (!role?.position) return;
+    const extent = terrainRoleExtent(role);
+    const radiusX = extent.x + padding;
+    const radiusY = extent.y + padding * 0.76;
+    for (let sample = 0; sample < 16; sample++) {
+      const angle = sample * Math.PI * 2 / 16;
+      perimeter.push([
+        Math.max(18, Math.min(TERRAIN_VIEWBOX.width - 18, role.position[0] + Math.cos(angle) * radiusX)),
+        Math.max(18, Math.min(356, role.position[1] + Math.sin(angle) * radiusY))
+      ]);
+    }
+  });
+  const hull = terrainConvexHull(perimeter);
+  const center = node.isopleth.included_roles.reduce((total, roleId) => {
+    const position = roles[roleId]?.position;
+    if (position) {
+      total[0] += position[0];
+      total[1] += position[1];
+      total[2] += 1;
+    }
+    return total;
+  }, [0, 0, 0]);
+  return {
+    path: terrainSmoothHullPath(hull),
+    label_fraction: 0.14 + (node.index % 5) * 0.16,
+    tone: TERRAIN_TONES[node.index % TERRAIN_TONES.length],
+    depth: node.depth,
+    parent_id: node.parent?.isopleth.id || null,
+    center: [center[0] / Math.max(1, center[2]), center[1] / Math.max(1, center[2])]
+  };
+}
+
+function terrainLayout(frame, visibleIsopleths, visibleAllocations) {
+  const roles = Object.fromEntries(frame.projection.roles.map(role => [role.id, {
+    position: null,
+    lines: terrainRoleLines(role.name)
+  }]));
+  const hierarchy = terrainHierarchy(visibleIsopleths);
+  const roleOwners = new Map();
+  hierarchy.ordered.forEach(node => {
+    node.isopleth.included_roles.forEach(roleId => {
+      if (!roleOwners.has(roleId)) roleOwners.set(roleId, node);
+    });
+  });
+  const rootGap = hierarchy.roots.length > 1 ? 300 / Math.max(1, hierarchy.roots.length - 1) : 0;
+  hierarchy.roots.forEach((root, rootIndex) => {
+    root.anchor = [
+      TERRAIN_VIEWBOX.width / 2 + (rootIndex - (hierarchy.roots.length - 1) / 2) * rootGap,
+      167 + (rootIndex % 2) * 28
+    ];
+    root.direction = Math.PI;
+  });
+
+  const placeNode = node => {
+    const introducedRoles = node.isopleth.included_roles.filter(roleId => roleOwners.get(roleId) === node);
+    terrainPlaceRoleGroup(introducedRoles, node.anchor, node.parent ? node.direction : Math.PI, roles);
+    const childAngles = terrainChildAngles(node);
+    node.children.forEach((child, index) => {
+      child.direction = childAngles[index];
+      const introducedCount = child.isopleth.included_roles.filter(roleId => roleOwners.get(roleId) === child).length;
+      const distance = 142 + Math.max(0, introducedCount - 1) * 16;
+      child.anchor = [
+        node.anchor[0] + Math.cos(child.direction) * distance,
+        node.anchor[1] + Math.sin(child.direction) * distance * 0.62
+      ];
+      placeNode(child);
+    });
+  };
+  hierarchy.roots.forEach(placeNode);
+
+  const unplaced = frame.projection.roles.filter(role => !roles[role.id].position);
+  unplaced.forEach((role, index) => {
+    const columns = Math.min(5, Math.max(1, unplaced.length));
+    roles[role.id].position = [
+      TERRAIN_VIEWBOX.width / 2 + (index % columns - (columns - 1) / 2) * 110,
+      305 + Math.floor(index / columns) * 44
+    ];
+  });
+  terrainFitRolePositions(roles);
+
+  const isopleths = {};
+  hierarchy.nodes.forEach(node => {
+    isopleths[node.isopleth.id] = terrainContour(node, roles);
+  });
+
+  const allocationOrder = [...visibleAllocations].sort((left, right) => {
+    const leftX = isopleths[left.isopleth_id]?.center[0] ?? TERRAIN_VIEWBOX.width / 2;
+    const rightX = isopleths[right.isopleth_id]?.center[0] ?? TERRAIN_VIEWBOX.width / 2;
+    return leftX - rightX || left.id.localeCompare(right.id);
+  });
+  const portGap = Math.min(124, 330 / Math.max(1, allocationOrder.length - 1));
   const allocations = {};
-  visibleAllocations.forEach((allocation, index) => {
-    const portY = panel.y + 88 + index * 46;
+  allocationOrder.forEach((allocation, index) => {
+    const portX = TERRAIN_VIEWBOX.width / 2 + (index - (allocationOrder.length - 1) / 2) * portGap;
     allocations[allocation.id] = {
-      anchor_fraction: [0.18, 0.4, 0.62, 0.84][index % 4],
-      port: [panel.x, portY],
-      label: [panel.x + panel.width / 2, portY]
+      anchor_fraction: 0.5,
+      port: [portX, 392],
+      label: [portX, 407],
+      branch_end: [TERRAIN_VIEWBOX.width / 2 + (index - (allocationOrder.length - 1) / 2) * 34, 440]
     };
   });
   return {
     roles,
     isopleths,
-    relationship: { panel, label: [panel.x + panel.width / 2, panel.y + 34], allocations }
+    relationship: { label: [TERRAIN_VIEWBOX.width / 2, 457], allocations }
   };
 }
 
@@ -488,7 +731,8 @@ function renderTerrain() {
   const relationship = terrainRelationship();
   const visibleAllocations = (relationship?.allocations || [])
     .filter(allocation => visibleIsoplethIds.has(allocation.isopleth_id));
-  const layout = terrainLayout(frame, visibleIsopleths, visibleAllocations);
+  // Keep Role positions stable across scope switches and support filtering.
+  const layout = terrainLayout(frame, terrainTopologyIsopleths(), visibleAllocations);
 
   if (terrainState.selectedType === 'isopleth' && !visibleIsoplethIds.has(terrainState.selectedId)) {
     terrainState.selectedType = null;
@@ -545,11 +789,6 @@ function renderTerrain() {
   const relationshipSelected = terrainState.selectedType === 'relationship';
   const relationshipMarkup = terrainState.relationships && relationship ? `
     <g class="terrain-allocations">
-      <g class="relationship-panel">
-        <rect class="relationship-panel-background"
-          x="${relationshipLayout.panel.x}" y="${relationshipLayout.panel.y}"
-          width="${relationshipLayout.panel.width}" height="${relationshipLayout.panel.height}" rx="9"></rect>
-      </g>
       ${visibleAllocations.map(allocation => {
         const itemLayout = relationshipLayout.allocations[allocation.id];
         const selected = terrainState.selectedType === 'allocation' && terrainState.selectedId === allocation.id;
@@ -559,12 +798,13 @@ function renderTerrain() {
            data-terrain-type="allocation" data-terrain-id="${allocation.id}">
           <path class="allocation-halo" data-target-isopleth="${allocation.isopleth_id}" data-path-fraction="${itemLayout.anchor_fraction}"></path>
           <path class="allocation-line" data-target-isopleth="${allocation.isopleth_id}" data-path-fraction="${itemLayout.anchor_fraction}"></path>
+          <path class="allocation-branch" d="M${itemLayout.label[0]} ${itemLayout.label[1] + 16} L${itemLayout.branch_end[0]} ${itemLayout.branch_end[1]}"></path>
           <circle class="allocation-anchor" data-target-isopleth="${allocation.isopleth_id}" data-path-fraction="${itemLayout.anchor_fraction}" r="6"></circle>
           <circle class="allocation-port" cx="${itemLayout.port[0]}" cy="${itemLayout.port[1]}" r="5"></circle>
           <g class="allocation-label" transform="translate(${itemLayout.label[0]} ${itemLayout.label[1]})">
-            <rect x="-58" y="-19" width="116" height="38" rx="5"></rect>
-            <text class="allocation-role" x="-47" y="-3">${escapeHtml(allocation.role)}</text>
-            <text class="allocation-count" x="47" y="12">${formatTerrainCount(allocation.distinct_things)} (${formatTerrainCount(allocation.participations)})</text>
+            <rect x="-54" y="-15" width="108" height="30" rx="15"></rect>
+            <text class="allocation-role" x="-42" y="4">${escapeHtml(allocation.role)}</text>
+            <text class="allocation-count" x="42" y="4">${formatTerrainCount(allocation.distinct_things)} (${formatTerrainCount(allocation.participations)})</text>
           </g>
         </g>
       `;
@@ -607,28 +847,56 @@ function renderTerrain() {
 }
 
 function positionTerrainGeometry(layout) {
+  const rolePositions = Object.values(layout.roles).map(role => role.position);
+  const labelPositions = [];
   els.terrainMap.querySelectorAll('.terrain-isopleth').forEach(group => {
     const path = group.querySelector(':scope > path');
     const label = group.querySelector('.isopleth-label');
-    const point = path.getPointAtLength(path.getTotalLength() * Number(label.dataset.pathFraction));
+    const length = path.getTotalLength();
+    const candidates = Array.from({ length: 32 }, (_, index) => {
+      const fraction = (index + 0.5) / 32;
+      const point = path.getPointAtLength(length * fraction);
+      const roleClearance = Math.min(...rolePositions.map(position =>
+        Math.hypot(point.x - position[0], point.y - position[1])
+      ));
+      const labelClearance = labelPositions.length
+        ? Math.min(...labelPositions.map(position => Math.hypot(point.x - position[0], point.y - position[1])))
+        : 120;
+      const bottomPenalty = Math.max(0, point.y - 320) * 4;
+      const edgePenalty = Math.max(0, 44 - point.x) * 4 + Math.max(0, point.x - 896) * 4;
+      return { fraction, point, score: roleClearance + Math.min(90, labelClearance) - bottomPenalty - edgePenalty };
+    });
+    const preferredFraction = Number(label.dataset.pathFraction);
+    candidates.forEach(candidate => {
+      candidate.score -= Math.abs(candidate.fraction - preferredFraction) * 8;
+    });
+    const point = candidates.sort((left, right) => right.score - left.score)[0].point;
     label.setAttribute('transform', `translate(${point.x} ${point.y})`);
+    labelPositions.push([point.x, point.y]);
   });
 
-  els.terrainMap.querySelectorAll('[data-target-isopleth]').forEach(element => {
+  els.terrainMap.querySelectorAll('.terrain-allocation').forEach(allocation => {
+    const targetId = allocation.querySelector('[data-target-isopleth]')?.dataset.targetIsopleth;
     const target = els.terrainMap.querySelector(
-      `[data-terrain-type="isopleth"][data-terrain-id="${element.dataset.targetIsopleth}"] > path`
+      `[data-terrain-type="isopleth"][data-terrain-id="${targetId}"] > path`
     );
     if (!target) return;
-    const point = target.getPointAtLength(target.getTotalLength() * Number(element.dataset.pathFraction));
-    const allocation = element.closest('.terrain-allocation');
     const itemLayout = layout.relationship.allocations[allocation.dataset.terrainId];
-    if (element.tagName === 'circle') {
-      element.setAttribute('cx', point.x);
-      element.setAttribute('cy', point.y);
-      return;
-    }
-    const route = `M${point.x} ${point.y} C${Math.max(point.x + 34, itemLayout.port[0] - 72)} ${point.y} ${itemLayout.port[0] - 42} ${itemLayout.port[1]} ${itemLayout.port[0]} ${itemLayout.port[1]}`;
-    element.setAttribute('d', route);
+    const length = target.getTotalLength();
+    const candidates = Array.from({ length: 72 }, (_, index) => {
+      const point = target.getPointAtLength(length * index / 72);
+      return {
+        point,
+        score: point.y * 3 - Math.abs(point.x - itemLayout.port[0]) * 0.7
+      };
+    });
+    const point = candidates.sort((left, right) => right.score - left.score)[0].point;
+    allocation.querySelector('.allocation-anchor').setAttribute('cx', point.x);
+    allocation.querySelector('.allocation-anchor').setAttribute('cy', point.y);
+    const controlY = Math.max(point.y + 24, (point.y + itemLayout.port[1]) / 2);
+    const route = `M${point.x} ${point.y} C${point.x} ${controlY} ${itemLayout.port[0]} ${controlY} ${itemLayout.port[0]} ${itemLayout.port[1]}`;
+    allocation.querySelector('.allocation-halo').setAttribute('d', route);
+    allocation.querySelector('.allocation-line').setAttribute('d', route);
   });
 }
 
@@ -768,6 +1036,7 @@ if (typeof module !== 'undefined' && module.exports) {
     TERRAIN_VERSION,
     adaptTerrainReport,
     assertTerrainReport,
+    terrainLayout,
     terrainEndpoint
   };
 }

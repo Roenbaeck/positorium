@@ -15,7 +15,7 @@
 <meta name="twitter:description" content="Compose Traqula scripts and inspect Positorium results in a focused local workspace." />
 <meta name="twitter:image" content="https://roenbaeck.github.io/positorium/og.png" />
 <link rel="stylesheet" href="positorium.css" />
-<link rel="stylesheet" href="positorium-terrain.css" />
+<link rel="stylesheet" href="positorium-terrain.css?v=0.6.0" />
 </head>
 <body>
 <!-- Inline regex-based syntax highlighting (no external deps) -->
@@ -33,7 +33,7 @@
   </nav>
   <div class="workspace-meta" aria-label="Workspace details">
     <span class="workspace-status"><span class="status-dot" aria-hidden="true"></span>Local workspace</span>
-    <span id="studioVersion" class="version-chip" data-version="0.5.0">Studio v0.5.0</span>
+    <span id="studioVersion" class="version-chip" data-version="0.6.0">Studio v0.6.0</span>
     <span class="version-chip traqula-version">Traqula v1</span>
     <button id="settingsBtn" class="icon-button settings-button" type="button" aria-label="Studio settings" aria-controls="settingsPanel" aria-expanded="false" title="Studio settings"></button>
   </div>
@@ -1068,6 +1068,6 @@ async function runStream(endpoint, payload, started, controller) {
   flushEvents(buffer); // flush remainder
 }
 </script>
-<script src="positorium-terrain.js"></script>
+<script src="positorium-terrain.js?v=0.6.0"></script>
 </body>
 </html>

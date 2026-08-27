@@ -384,7 +384,8 @@
 }
 
 .allocation-halo,
-.allocation-line {
+.allocation-line,
+.allocation-branch {
   fill: none;
   stroke-linecap: round;
   vector-effect: non-scaling-stroke;
@@ -400,6 +401,11 @@
   stroke-width: 2;
 }
 
+.allocation-branch {
+  stroke: #a48151;
+  stroke-width: 1.5;
+}
+
 .terrain-allocation circle {
   fill: #fffaf0;
   stroke: #805f35;
@@ -413,10 +419,18 @@
 }
 
 .terrain-allocation:hover .allocation-line,
+.terrain-allocation:hover .allocation-branch,
 .terrain-allocation:focus-visible .allocation-line,
+.terrain-allocation:focus-visible .allocation-branch,
 .terrain-allocation.selected .allocation-line {
   stroke: #a35f13;
   stroke-width: 5;
+}
+
+.terrain-allocation:focus-visible .allocation-branch,
+.terrain-allocation.selected .allocation-branch {
+  stroke: #a35f13;
+  stroke-width: 2.5;
 }
 
 .terrain-allocation:hover circle,
@@ -429,6 +443,8 @@
 .allocation-label rect {
   fill: #fffaf0;
   stroke: #cfa05f;
+  stroke-width: 1.25;
+  vector-effect: non-scaling-stroke;
 }
 
 .allocation-label text,
@@ -444,13 +460,6 @@
 .allocation-count {
   text-anchor: end;
   font: 700 10px var(--mono);
-}
-
-.relationship-panel-background {
-  fill: #fffdf8;
-  stroke: #dac49e;
-  stroke-width: 1.5;
-  vector-effect: non-scaling-stroke;
 }
 
 .relation-label text {

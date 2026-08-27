@@ -3,7 +3,13 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { TERRAIN_VERSION, adaptTerrainReport, assertTerrainReport, terrainEndpoint } = require('../positorium-terrain.js');
+const {
+  TERRAIN_VERSION,
+  adaptTerrainReport,
+  assertTerrainReport,
+  terrainEndpoint,
+  terrainLayout
+} = require('../positorium-terrain.js');
 
 const report = {
   terrain_version: 1,
@@ -88,9 +94,49 @@ assert.equal(httpData.frames.history.relationships[0].allocations[1].role, 'pet'
 assert.equal(httpData.frames.history.relationships[0].allocations[0].profile_mask, 0);
 assert.equal(httpData.frames.history.relationships[0].allocations[0].isopleth_id, null);
 
+const goldenTopology = {
+  projection: {
+    roles: [
+      { id: '3', name: 'name' },
+      { id: '4', name: 'hair color' },
+      { id: '5', name: 'height' },
+      { id: '6', name: 'social security number' },
+      { id: '7', name: 'beard color' },
+      { id: '8', name: 'RFID' }
+    ]
+  }
+};
+const goldenIsopleths = [
+  { id: 'core', included_roles: ['3', '4'], support: 6 },
+  { id: 'rfid', included_roles: ['3', '4', '8'], support: 2 },
+  { id: 'identity', included_roles: ['3', '4', '5', '6'], support: 3 },
+  { id: 'beard', included_roles: ['3', '4', '5', '6', '7'], support: 1 }
+];
+const goldenAllocations = [
+  { id: 'owner-beard', isopleth_id: 'beard' },
+  { id: 'owner-identity', isopleth_id: 'identity' },
+  { id: 'pet-rfid', isopleth_id: 'rfid' }
+];
+const goldenLayout = terrainLayout(goldenTopology, goldenIsopleths, goldenAllocations);
+assert.deepEqual(goldenLayout, terrainLayout(goldenTopology, goldenIsopleths, goldenAllocations), 'layout must be deterministic');
+assert.equal(goldenLayout.isopleths.identity.parent_id, 'core');
+assert.equal(goldenLayout.isopleths.beard.parent_id, 'identity');
+assert.equal(goldenLayout.isopleths.rfid.parent_id, 'core');
+assert.ok(goldenLayout.roles['5'].position[0] < goldenLayout.roles['3'].position[0], 'identity-only Roles branch left of the core');
+assert.ok(goldenLayout.roles['8'].position[0] > goldenLayout.roles['3'].position[0], 'RFID branches right of the core');
+assert.ok(goldenLayout.roles['7'].position[0] < goldenLayout.roles['5'].position[0], 'nested additions extend their branch');
+assert.ok(goldenLayout.roles['7'].position[1] < goldenLayout.roles['5'].position[1], 'nested additions fan away from their parent');
+assert.ok(Object.values(goldenLayout.isopleths).every(isopleth => /^M.*Q.*Z$/.test(isopleth.path)), 'isopleths use smooth hulls');
+assert.ok(Object.values(goldenLayout.roles).every(role => role.position.every(Number.isFinite)), 'every projected Role is positioned');
+assert.ok(goldenLayout.relationship.label[1] > Math.max(...Object.values(goldenLayout.roles).map(role => role.position[1])), 'relationship fan sits below the role topology');
+
 const clientSource = fs.readFileSync(path.join(__dirname, '..', 'positorium-terrain.js'), 'utf8');
 const studioSource = fs.readFileSync(path.join(__dirname, '..', 'positorium.html'), 'utf8');
 const serverSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'server.rs'), 'utf8');
+const studioVersion = studioSource.match(/data-version="([^"]+)"/)?.[1];
+assert.ok(studioVersion, 'Studio version must be declared');
+assert.ok(studioSource.includes(`positorium-terrain.css?v=${studioVersion}`), 'Terrain CSS must follow the Studio cache version');
+assert.ok(studioSource.includes(`positorium-terrain.js?v=${studioVersion}`), 'Terrain JavaScript must follow the Studio cache version');
 for (const removed of [
   'buildTerrainData', 'captureTerrainResultSets', 'TERRAIN_REQUIRED_COLUMNS',
   'normalizeTerrainRows', 'terrainHash', 'Query data'

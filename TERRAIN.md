@@ -167,4 +167,8 @@ Rust owns all semantic counts and identities. The browser owns SVG geometry,
 colors, label placement, minimum-support filtering, selection, relationship
 visibility, and query preparation. Selecting a Role, isopleth, relationship, or
 allocation opens its measurements; the relationship selector exposes every
-signature returned by the backend catalog.
+signature returned by the backend catalog. The layout derives a stable subset
+hierarchy from the union of History and Current isopleths: shared Roles form a
+core, Roles introduced by supersets fan into separate branches, smooth hulls
+follow those branches, and relationship allocations connect below the Role
+topology. Scope changes and support filtering do not move Role positions.
