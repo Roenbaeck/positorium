@@ -1156,7 +1156,7 @@ fn validate_pending_records(records: &[PendingRecord]) -> Result<()> {
 
 fn initialize_store(directory: &Path) -> Result<Manifest> {
     let mut store_uuid = [0u8; 16];
-    getrandom::getrandom(&mut store_uuid).map_err(|error| {
+    getrandom::fill(&mut store_uuid).map_err(|error| {
         DatabaseError::Persistence(format!("failed to generate store UUID: {error}"))
     })?;
     store_uuid[6] = (store_uuid[6] & 0x0f) | 0x40;

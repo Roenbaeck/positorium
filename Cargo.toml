@@ -14,7 +14,7 @@ default = ["server", "persistence", "cli"]
 server = ["tokio", "axum", "tokio-stream", "futures-util", "tower-http"]
 persistence = ["getrandom"]
 cli = ["config"]
-wasm = ["wasm-bindgen", "serde-wasm-bindgen", "getrandom/js"]
+wasm = ["wasm-bindgen", "serde-wasm-bindgen", "getrandom/wasm_js"]
 
 [dependencies]
 # core dependencies
@@ -36,18 +36,18 @@ tracing-subscriber = { version = "0.3.20", features = ["fmt", "env-filter"] }
 unicode-normalization = "0.1"
 wasm-bindgen = { version = "0.2.100", optional = true }
 serde-wasm-bindgen = { version = "0.6", optional = true }
-getrandom = { version = "0.2", features = ["js"], optional = true }
+getrandom = { version = "0.4", optional = true }
 
 # Optional dependencies for features
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"], optional = true }
 axum = { version = "0.8.6", features = ["ws"], optional = true }
 tokio-stream = { version = "0.1", optional = true }
 futures-util = { version = "0.3", optional = true }
-tower-http = { version = "0.6", features = ["cors"], optional = true }
+tower-http = { version = "0.7", features = ["cors"], optional = true }
 config = { version = "0.15.18", optional = true }
 
 [dev-dependencies]
-criterion = { version = "0.7", default-features = false }
+criterion = { version = "0.8", default-features = false }
 wasm-bindgen-test = "0.3"
 
 [[bench]]

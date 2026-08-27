@@ -1444,9 +1444,7 @@ impl<'en> Engine<'en> {
             use std::cmp::Ordering::{Equal, Greater, Less};
             matches!(
                 (ordering, op),
-                (Less, "<" | "<=")
-                    | (Equal, "<=" | ">=")
-                    | (Greater, ">" | ">=")
+                (Less, "<" | "<=") | (Equal, "<=" | ">=") | (Greater, ">" | ">=")
             )
         }
         // Track variables referenced in this search command to guide projection
