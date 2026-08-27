@@ -161,6 +161,7 @@ impl WasmEngine {
 #[cfg(all(test, target_arch = "wasm32"))]
 mod tests {
     use super::*;
+    use serde::Serialize;
     use wasm_bindgen_test::*;
 
     // This ensures tests run in a environment with a JS global if using Node or Browser
@@ -228,10 +229,10 @@ mod tests {
             "as_of": "'2025-01-01'",
             "projected_role_limit": 8,
             "max_relationship_signatures": 16
-        });
-        let output = engine
-            .terrain(serde_wasm_bindgen::to_value(&options).unwrap())
-            .unwrap();
+        })
+        .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
+        .unwrap();
+        let output = engine.terrain(options).unwrap();
         let output: serde_json::Value = serde_wasm_bindgen::from_value(output).unwrap();
         let rust_report = engine
             .db
