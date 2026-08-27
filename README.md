@@ -199,7 +199,7 @@ Logging uses `tracing` with `RUST_LOG` filtering.
 
 ### Web UI (positorium.html)
 
-A focused static query studio (`positorium.html`) supports composing Traqula scripts, submitting them to the server or local WASM engine, and inspecting table, JSON, and activity views. Open it in a browser (or host it) and point the endpoint field to your server's `/v1/query` URL.
+A focused static query studio (`positorium.html`) supports composing Traqula scripts, submitting them to the server or local WASM engine, and inspecting table, JSON, and activity views. Query/Results and Terrain are alternate workspaces, while the endpoint and Local WASM execution mode live under the header settings button. Both settings persist in browser `localStorage`. Open the studio in a browser or host it, then point the endpoint setting to your server's `/v1/query` URL.
 
 The repository does not contain generated `pkg/` artifacts. On a loopback development
 server such as VS Code Live Preview, Local WASM prefers a workspace `pkg/` build and
@@ -214,6 +214,11 @@ Query Studio has an independent beta SemVer in the `studioVersion` element in
 `positorium.html`. Increment it when the console's behavior or published assets
 change. The version is visible in the header; the browser remembers the last-seen
 version for that origin and reports upgrades in the Activity view.
+
+The Terrain tab currently uses explicitly labelled mock data to prototype Role
+support isopleths and exact relationship-profile allocations without requiring the
+future Rust statistics API. Its semantics, payload boundary, and backend handoff
+are specified in [TERRAIN.md](TERRAIN.md).
 
 ## Updated Status and Roadmap
 

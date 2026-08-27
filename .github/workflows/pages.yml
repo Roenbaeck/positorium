@@ -10,6 +10,8 @@ on:
       - "Cargo.lock"
       - "positorium.html"
       - "positorium.css"
+      - "positorium-terrain.js"
+      - "positorium-terrain.css"
       - "og.png"
       - ".github/workflows/pages.yml"
 
@@ -39,7 +41,7 @@ jobs:
         run: |
           mkdir site
           cp positorium.html site/index.html
-          cp positorium.css og.png site/
+          cp positorium.css positorium-terrain.css positorium-terrain.js og.png site/
           cp -R pkg site/pkg
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5

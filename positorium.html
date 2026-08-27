@@ -15,6 +15,7 @@
 <meta name="twitter:description" content="Compose Traqula scripts and inspect Positorium results in a focused local workspace." />
 <meta name="twitter:image" content="https://roenbaeck.github.io/positorium/og.png" />
 <link rel="stylesheet" href="positorium.css" />
+<link rel="stylesheet" href="positorium-terrain.css" />
 </head>
 <body>
 <!-- Inline regex-based syntax highlighting (no external deps) -->
@@ -26,28 +27,45 @@
       <span class="brand-product">Traqula Query Studio</span>
     </div>
   </div>
+  <nav class="workspace-switch" aria-label="Workspace view">
+    <button type="button" class="workspace-mode active" data-workspace="query" aria-pressed="true">Query</button>
+    <button type="button" class="workspace-mode" data-workspace="terrain" aria-pressed="false">Terrain</button>
+  </nav>
   <div class="workspace-meta" aria-label="Workspace details">
     <span class="workspace-status"><span class="status-dot" aria-hidden="true"></span>Local workspace</span>
-    <span id="studioVersion" class="version-chip" data-version="0.1.1">Studio v0.1.1</span>
+    <span id="studioVersion" class="version-chip" data-version="0.3.3">Studio v0.3.3</span>
     <span class="version-chip traqula-version">Traqula v1</span>
+    <button id="settingsBtn" class="icon-button settings-button" type="button" aria-label="Studio settings" aria-controls="settingsPanel" aria-expanded="false" title="Studio settings"></button>
   </div>
+  <section id="settingsPanel" class="settings-panel" aria-label="Studio settings" hidden>
+    <div class="settings-heading">
+      <div>
+        <span class="eyebrow">Workspace</span>
+        <strong>Studio settings</strong>
+      </div>
+      <button id="settingsCloseBtn" class="icon-button close-button" type="button" aria-label="Close studio settings" title="Close"></button>
+    </div>
+    <div class="settings-section">
+      <label class="settings-label" for="endpoint">Query endpoint</label>
+      <div class="endpoint-field">
+        <span class="protocol-chip" aria-hidden="true">POST</span>
+        <input id="endpoint" type="url" value="http://127.0.0.1:8080/v1/query" aria-describedby="endpointHint" />
+      </div>
+      <span id="endpointHint" class="connection-hint">Trusted loopback connection</span>
+    </div>
+    <div class="settings-option">
+      <div>
+        <strong>Local WASM</strong>
+        <span>Run queries in this browser instead of the HTTP endpoint</span>
+      </div>
+      <label class="switch-label settings-switch" title="Run queries in this browser">
+        <input type="checkbox" id="wasmMode" aria-label="Local WASM">
+        <span class="switch" aria-hidden="true"></span>
+      </label>
+    </div>
+  </section>
 </header>
 <main class="app-main">
-  <section class="connection-bar" aria-label="Connection settings">
-    <div class="connection-label">
-      <span class="connection-icon" aria-hidden="true"></span>
-      <div>
-        <label for="endpoint">Query endpoint</label>
-        <span>Trusted local interface</span>
-      </div>
-    </div>
-    <div class="endpoint-field">
-      <span class="protocol-chip" aria-hidden="true">POST</span>
-      <input id="endpoint" type="url" value="http://127.0.0.1:8080/v1/query" aria-describedby="endpointHint" />
-    </div>
-    <span id="endpointHint" class="connection-hint">Loopback connections only</span>
-  </section>
-
   <div id="splitContainer">
     <div id="editorPane" class="workspace-pane">
       <section class="query-panel">
@@ -90,11 +108,6 @@
             <input type="checkbox" id="streamMode">
             <span class="switch" aria-hidden="true"></span>
             <span>Stream</span>
-          </label>
-          <label class="switch-label">
-            <input type="checkbox" id="wasmMode">
-            <span class="switch" aria-hidden="true"></span>
-            <span>Local WASM</span>
           </label>
         </div>
         <div class="run-feedback">
@@ -143,6 +156,46 @@
       </div>
     </div>
   </div>
+  <section id="terrainView" class="terrain-workspace" aria-label="Terrain workspace" hidden>
+    <div class="terrain-header">
+      <div class="terrain-source">
+        <span class="mock-badge">Mock data</span>
+        <span>Backend contract preview</span>
+      </div>
+      <div class="terrain-controls" aria-label="Terrain controls">
+        <div class="segmented-control" role="group" aria-label="Data scope">
+          <button type="button" class="terrain-scope" data-scope="history" aria-pressed="false">History</button>
+          <button type="button" class="terrain-scope active" data-scope="snapshot" aria-pressed="true">As of now</button>
+        </div>
+        <label class="terrain-toggle">
+          <input id="terrainRelationships" type="checkbox" checked>
+          <span>Relationships</span>
+        </label>
+      </div>
+    </div>
+    <div id="terrainStats" class="terrain-stats" aria-label="Mock database statistics"></div>
+    <div class="terrain-body">
+      <div class="terrain-map-panel">
+        <div class="terrain-map-heading">
+          <div>
+            <span class="terrain-kicker">Identity-role incidence</span>
+            <strong>Role support isopleths</strong>
+          </div>
+          <label class="support-control" for="terrainSupport">
+            <span>Minimum support <output id="terrainSupportValue">0</output></span>
+            <input id="terrainSupport" type="range" min="0" max="6000" step="250" value="0">
+          </label>
+        </div>
+        <div class="terrain-canvas">
+          <svg id="terrainMap" viewBox="0 0 940 500" role="img" aria-labelledby="terrainMapTitle terrainMapDescription">
+            <title id="terrainMapTitle">Mock role-isopleth visualization</title>
+            <desc id="terrainMapDescription">Role labels are enclosed by support isopleths. Relationship allocation lines connect an exact appearance-set signature to projected identity profiles.</desc>
+          </svg>
+        </div>
+      </div>
+      <aside id="terrainDetail" class="terrain-detail" aria-live="polite"></aside>
+    </div>
+  </section>
 </main>
 <footer>
   <span><span class="footer-dot" aria-hidden="true"></span>Positorium local console</span>
@@ -151,6 +204,11 @@
 <script>
 const els = {
   endpoint: document.getElementById('endpoint'),
+  settingsBtn: document.getElementById('settingsBtn'),
+  settingsCloseBtn: document.getElementById('settingsCloseBtn'),
+  settingsPanel: document.getElementById('settingsPanel'),
+  queryWorkspace: document.getElementById('splitContainer'),
+  workspaceModes: document.querySelectorAll('.workspace-mode'),
   script: document.getElementById('script'),
   runBtn: document.getElementById('runBtn'),
   runBtnLabel: document.getElementById('runBtnLabel'),
@@ -172,14 +230,23 @@ const els = {
   tableView: document.getElementById('tableView'),
   jsonView: document.getElementById('jsonView'),
   statusView: document.getElementById('statusView'),
+  terrainView: document.getElementById('terrainView'),
   statusOut: document.getElementById('statusOut'),
   resultSetSelect: document.getElementById('resultSetSelect'),
   emptyState: document.getElementById('emptyState'),
-  studioVersion: document.getElementById('studioVersion')
+  studioVersion: document.getElementById('studioVersion'),
+  terrainMap: document.getElementById('terrainMap'),
+  terrainStats: document.getElementById('terrainStats'),
+  terrainDetail: document.getElementById('terrainDetail'),
+  terrainSupport: document.getElementById('terrainSupport'),
+  terrainSupportValue: document.getElementById('terrainSupportValue'),
+  terrainRelationships: document.getElementById('terrainRelationships')
 };
 let lastResponse = null;
 const STUDIO_VERSION = els.studioVersion.dataset.version;
 const STUDIO_VERSION_STORAGE_KEY = 'positorium-query-studio-version';
+const ENDPOINT_STORAGE_KEY = 'positorium-endpoint';
+const WASM_MODE_STORAGE_KEY = 'positorium-local-wasm';
 
 function compareStudioVersions(left, right) {
   const leftParts = left.split('.').map(Number);
@@ -215,6 +282,23 @@ function activateTab(tab) {
   els.statusView.style.display = tab === 'status' ? 'block' : 'none';
 }
 
+function setWorkspaceMode(mode) {
+  const terrain = mode === 'terrain';
+  els.queryWorkspace.hidden = terrain;
+  els.terrainView.hidden = !terrain;
+  els.workspaceModes.forEach(button => {
+    const active = button.dataset.workspace === mode;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
+}
+
+function setSettingsOpen(open) {
+  els.settingsPanel.hidden = !open;
+  els.settingsBtn.setAttribute('aria-expanded', String(open));
+  if (open) els.endpoint.focus();
+}
+
 function clearResults() {
   els.tableHead.innerHTML = '';
   els.tableBody.innerHTML = '';
@@ -237,6 +321,9 @@ document.addEventListener('DOMContentLoaded', () => {
   if (savedQuery) {
     scriptEditor.textContent = savedQuery;
   }
+  const savedEndpoint = localStorage.getItem(ENDPOINT_STORAGE_KEY);
+  if (savedEndpoint) els.endpoint.value = savedEndpoint;
+  els.wasmMode.checked = localStorage.getItem(WASM_MODE_STORAGE_KEY) === 'true';
 
   // Initialize highlighting
   setTimeout(() => {
@@ -252,6 +339,25 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   els.runBtn.addEventListener('click', runQuery);
   els.clearBtn.addEventListener('click', clearResults);
+  els.workspaceModes.forEach(button => {
+    button.addEventListener('click', () => setWorkspaceMode(button.dataset.workspace));
+  });
+  els.settingsBtn.addEventListener('click', event => {
+    event.stopPropagation();
+    setSettingsOpen(els.settingsPanel.hidden);
+  });
+  els.settingsCloseBtn.addEventListener('click', () => setSettingsOpen(false));
+  els.settingsPanel.addEventListener('click', event => event.stopPropagation());
+  document.addEventListener('click', () => setSettingsOpen(false));
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !els.settingsPanel.hidden) {
+      setSettingsOpen(false);
+      els.settingsBtn.focus();
+    }
+  });
+  els.endpoint.addEventListener('change', () => {
+    localStorage.setItem(ENDPOINT_STORAGE_KEY, els.endpoint.value.trim());
+  });
 
   // Tabs switching
   els.tabs.forEach(btn=>{
@@ -323,6 +429,9 @@ document.addEventListener('DOMContentLoaded', () => {
     connectionHint.textContent = local ? 'Runs entirely in this browser' : 'Loopback connections only';
   }
   els.wasmMode.addEventListener('change', syncExecutionMode);
+  els.wasmMode.addEventListener('change', () => {
+    localStorage.setItem(WASM_MODE_STORAGE_KEY, String(els.wasmMode.checked));
+  });
   syncExecutionMode();
 });
 
@@ -948,5 +1057,6 @@ async function runStream(endpoint, payload, started, controller) {
   flushEvents(buffer); // flush remainder
 }
 </script>
+<script src="positorium-terrain.js"></script>
 </body>
 </html>
