@@ -201,6 +201,20 @@ Logging uses `tracing` with `RUST_LOG` filtering.
 
 A focused static query studio (`positorium.html`) supports composing Traqula scripts, submitting them to the server or local WASM engine, and inspecting table, JSON, and activity views. Open it in a browser (or host it) and point the endpoint field to your server's `/v1/query` URL.
 
+The repository does not contain generated `pkg/` artifacts. On a loopback development
+server such as VS Code Live Preview, Local WASM prefers a workspace `pkg/` build and
+falls back to the compatible package published on GitHub Pages. To test local Rust
+changes instead, generate the workspace package before starting the preview:
+
+```text
+wasm-pack build --release --target web --out-dir pkg . --no-default-features --features wasm
+```
+
+Query Studio has an independent beta SemVer in the `studioVersion` element in
+`positorium.html`. Increment it when the console's behavior or published assets
+change. The version is visible in the header; the browser remembers the last-seen
+version for that origin and reports upgrades in the Activity view.
+
 ## Updated Status and Roadmap
 
 Implemented:

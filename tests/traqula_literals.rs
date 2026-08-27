@@ -144,7 +144,7 @@ fn literal_operators_keep_identity_nominality_and_compatibility_distinct() {
 }
 
 #[test]
-fn unpublished_pre_beta_search_spellings_are_rejected() {
+fn unsupported_search_spellings_are_rejected() {
     let engine = engine();
     engine
         .execute("add role number; add posit [{(+item, number)}, 10, @NOW];")
@@ -158,7 +158,7 @@ fn unpublished_pre_beta_search_spellings_are_rejected() {
     ] {
         assert!(
             engine.execute_collect(script).is_err(),
-            "unpublished spelling unexpectedly parsed: {script}"
+            "unsupported spelling unexpectedly parsed: {script}"
         );
     }
 }

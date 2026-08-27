@@ -4,8 +4,7 @@
 # Traqula language version 1
 
 Traqula is Positorium's declarative language for recording and querying
-transitional propositions. Version 1 is the first published grammar. There is
-no compatibility mode for the unpublished prototype syntax.
+transitional propositions. Version 1 is the first published grammar.
 
 ## The data model
 
@@ -141,8 +140,7 @@ decodes escapes but does not normalize text; string ordering is not supported.
 JSON nominal equality is structural, while `===` preserves presentation such as
 key order, spacing, and numeric spelling.
 
-Ordering operators are `<`, `<=`, `>`, and `>=`. The unpublished `==` spelling
-is rejected; use `=`.
+Ordering operators are `<`, `<=`, `>`, and `>=`.
 
 ## Time and snapshots
 
@@ -248,8 +246,7 @@ use the same structured result contract.
 Parse errors, unknown variables, inconsistent variable domains, unsafe
 negation, invalid recall, unsupported comparisons, bad parameters, timeouts,
 and cancellation are reported as errors. They do not panic and do not silently
-reinterpret source. Version 1 has no legacy syntax warnings because it has no
-legacy grammar.
+reinterpret source.
 
 For complete API and compatibility boundaries, see [CONTRACTS.md](CONTRACTS.md).
 For startup, backup, validation, and recovery procedures, see

@@ -1444,7 +1444,9 @@ impl<'en> Engine<'en> {
             use std::cmp::Ordering::{Equal, Greater, Less};
             matches!(
                 (ordering, op),
-                (Less, "<" | "<=") | (Equal, "<=" | ">=" | "=" | "==") | (Greater, ">" | ">=")
+                (Less, "<" | "<=")
+                    | (Equal, "<=" | ">=")
+                    | (Greater, ">" | ">=")
             )
         }
         // Track variables referenced in this search command to guide projection
@@ -2570,7 +2572,7 @@ impl<'en> Engine<'en> {
                                                 "<=" => pt.definitely_at_or_before(tcmp),
                                                 ">" => pt.definitely_after(tcmp),
                                                 ">=" => pt.definitely_at_or_after(tcmp),
-                                                "===" | "==" | "=" => pt == tcmp,
+                                                "===" | "=" => pt == tcmp,
                                                 "?=" => pt.overlaps(tcmp),
                                                 _ => false,
                                             };
@@ -2608,7 +2610,7 @@ impl<'en> Engine<'en> {
                                                 "<=" => pt1.definitely_at_or_before(pt2),
                                                 ">" => pt1.definitely_after(pt2),
                                                 ">=" => pt1.definitely_at_or_after(pt2),
-                                                "===" | "==" | "=" => pt1 == pt2,
+                                                "===" | "=" => pt1 == pt2,
                                                 "?=" => pt1.overlaps(pt2),
                                                 _ => false,
                                             };
@@ -2660,7 +2662,7 @@ impl<'en> Engine<'en> {
                                         Ok(lhs.exactly_equals(&rhs))
                                     } else if op == "?=" {
                                         lhs.possibly_equals(&rhs)
-                                    } else if op == "=" || op == "==" {
+                                    } else if op == "=" {
                                         lhs.nominally_equals(&rhs)
                                     } else {
                                         Err(format!("unsupported comparison operator '{op}'"))
@@ -2722,7 +2724,7 @@ impl<'en> Engine<'en> {
                                         Ok(stored.exactly_equals(rhs))
                                     } else if op == "?=" {
                                         stored.possibly_equals(rhs)
-                                    } else if op == "=" || op == "==" {
+                                    } else if op == "=" {
                                         stored.nominally_equals(rhs)
                                     } else {
                                         Err(format!("unsupported comparison operator '{op}'"))
@@ -3286,7 +3288,7 @@ fn friendly_rule_name(rule: Rule) -> &'static str {
         Rule::time => "time literal (e.g., 'YYYY-MM-DD')",
         Rule::constant => "time constant (@NOW/@BOT/@EOT)",
         Rule::as_of_clause => "as of <time> or <variable>",
-        Rule::comparator => "comparator (<, <=, >, >=, =, ==)",
+        Rule::comparator => "comparator (<, <=, >, >=, =, ===, ?=)",
         _ => "token",
     }
 }

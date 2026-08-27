@@ -28,7 +28,8 @@
   </div>
   <div class="workspace-meta" aria-label="Workspace details">
     <span class="workspace-status"><span class="status-dot" aria-hidden="true"></span>Local workspace</span>
-    <span class="version-chip">Traqula v1</span>
+    <span id="studioVersion" class="version-chip" data-version="0.1.1">Studio v0.1.1</span>
+    <span class="version-chip traqula-version">Traqula v1</span>
   </div>
 </header>
 <main class="app-main">
@@ -59,7 +60,7 @@
             <button id="clearBtn" class="button-secondary" type="button" title="Clear results">Clear</button>
             <button id="runBtn" class="button-primary" type="button" title="Run query (Ctrl or Command + Enter)">
               <span class="run-icon" aria-hidden="true"></span>
-              <span>Run query</span>
+              <span id="runBtnLabel">Run query</span>
               <kbd>⌘↵</kbd>
             </button>
           </div>
@@ -152,6 +153,7 @@ const els = {
   endpoint: document.getElementById('endpoint'),
   script: document.getElementById('script'),
   runBtn: document.getElementById('runBtn'),
+  runBtnLabel: document.getElementById('runBtnLabel'),
   clearBtn: document.getElementById('clearBtn'),
   tableHead: document.querySelector('#resultsTable thead'),
   tableBody: document.querySelector('#resultsTable tbody'),
@@ -172,9 +174,34 @@ const els = {
   statusView: document.getElementById('statusView'),
   statusOut: document.getElementById('statusOut'),
   resultSetSelect: document.getElementById('resultSetSelect'),
-  emptyState: document.getElementById('emptyState')
+  emptyState: document.getElementById('emptyState'),
+  studioVersion: document.getElementById('studioVersion')
 };
 let lastResponse = null;
+const STUDIO_VERSION = els.studioVersion.dataset.version;
+const STUDIO_VERSION_STORAGE_KEY = 'positorium-query-studio-version';
+
+function compareStudioVersions(left, right) {
+  const leftParts = left.split('.').map(Number);
+  const rightParts = right.split('.').map(Number);
+  const length = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < length; index++) {
+    const difference = (leftParts[index] || 0) - (rightParts[index] || 0);
+    if (difference !== 0) return Math.sign(difference);
+  }
+  return 0;
+}
+
+function trackStudioVersion() {
+  const previousVersion = localStorage.getItem(STUDIO_VERSION_STORAGE_KEY);
+  localStorage.setItem(STUDIO_VERSION_STORAGE_KEY, STUDIO_VERSION);
+  els.studioVersion.title = `Positorium Query Studio v${STUDIO_VERSION}`;
+  if (!previousVersion || previousVersion === STUDIO_VERSION) return null;
+  const direction = compareStudioVersions(STUDIO_VERSION, previousVersion);
+  return direction > 0
+    ? `Query Studio updated from v${previousVersion} to v${STUDIO_VERSION}`
+    : `Query Studio v${STUDIO_VERSION} loaded after v${previousVersion}`;
+}
 
 function activateTab(tab) {
   els.tabs.forEach(btn => {
@@ -204,6 +231,7 @@ function clearResults() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  const versionNotice = trackStudioVersion();
   // Load saved query from localStorage
   const savedQuery = localStorage.getItem('positorium-query');
   if (savedQuery) {
@@ -213,14 +241,15 @@ document.addEventListener('DOMContentLoaded', () => {
   // Initialize highlighting
   setTimeout(() => {
     updateHighlight();
-    setStatus('Ready');
-    
-    // Initialize status view with welcome message
     const initTime = new Date().toLocaleTimeString();
-  els.statusOut.textContent = `[${initTime}] Positorium Query Console initialized\n[${initTime}] Editor loaded with syntax highlighting\n`;
+    els.statusOut.textContent = `[${initTime}] Positorium Query Studio v${STUDIO_VERSION} initialized\n[${initTime}] Editor loaded with syntax highlighting\n`;
+    setStatus(versionNotice || 'Ready');
   }, 100);
 
   // Button event listeners
+  els.runBtn.addEventListener('pointerdown', () => {
+    pendingSelectedScript = selectedScript;
+  });
   els.runBtn.addEventListener('click', runQuery);
   els.clearBtn.addEventListener('click', clearResults);
 
@@ -342,6 +371,66 @@ function highlightTraqula(src) {
 
 // Get DOM elements  
 const scriptEditor = document.getElementById('script');
+let selectedScript = '';
+let pendingSelectedScript = '';
+
+function editorSelectionOffsets() {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) return null;
+  const range = selection.getRangeAt(0);
+  if (!scriptEditor.contains(range.startContainer) || !scriptEditor.contains(range.endContainer)) return null;
+  const startRange = range.cloneRange();
+  startRange.selectNodeContents(scriptEditor);
+  startRange.setEnd(range.startContainer, range.startOffset);
+  const endRange = range.cloneRange();
+  endRange.selectNodeContents(scriptEditor);
+  endRange.setEnd(range.endContainer, range.endOffset);
+  return { start: startRange.toString().length, end: endRange.toString().length };
+}
+
+function editorBoundaryAt(offset) {
+  const walker = document.createTreeWalker(scriptEditor, NodeFilter.SHOW_TEXT);
+  let remaining = offset;
+  let node = walker.nextNode();
+  while (node) {
+    if (remaining <= node.nodeValue.length) return { node, offset: remaining };
+    remaining -= node.nodeValue.length;
+    node = walker.nextNode();
+  }
+  return { node: scriptEditor, offset: scriptEditor.childNodes.length };
+}
+
+function restoreEditorSelection(offsets) {
+  const selection = window.getSelection();
+  const start = editorBoundaryAt(offsets.start);
+  const end = editorBoundaryAt(offsets.end);
+  const range = document.createRange();
+  range.setStart(start.node, start.offset);
+  range.setEnd(end.node, end.offset);
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+function getSelectedEditorScript() {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return '';
+  const range = selection.getRangeAt(0);
+  if (!scriptEditor.contains(range.startContainer) || !scriptEditor.contains(range.endContainer)) return '';
+  const text = range.toString();
+  return text.trim() ? text : '';
+}
+
+function syncRunAction() {
+  selectedScript = getSelectedEditorScript();
+  const hasSelection = selectedScript.length > 0;
+  els.runBtnLabel.textContent = hasSelection ? 'Run selection' : 'Run query';
+  els.runBtn.title = hasSelection
+    ? 'Run selection (Ctrl or Command + Enter)'
+    : 'Run query (Ctrl or Command + Enter)';
+  els.runBtn.setAttribute('aria-label', hasSelection ? 'Run selection' : 'Run query');
+}
+
+document.addEventListener('selectionchange', syncRunAction);
 // Debounce timer for highlighting
 let highlightTimer = null;
 function scheduleHighlight(delay = 50) {
@@ -373,44 +462,10 @@ function updateHighlight() {
   
   const code = scriptEditor.innerText;
   const highlightedCode = highlightTraqula(code);
-  // Save selection
-  const selection = window.getSelection();
-  const range = selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
-  let startOffset = 0;
-  if (range) {
-    const preCaretRange = range.cloneRange();
-    preCaretRange.selectNodeContents(scriptEditor);
-    preCaretRange.setEnd(range.startContainer, range.startOffset);
-    startOffset = preCaretRange.toString().length;
-  }
+  const offsets = editorSelectionOffsets();
   scriptEditor.innerHTML = highlightedCode;
-  // Restore selection
-  if (range) {
-    const newRange = document.createRange();
-    let charCount = 0;
-    let found = false;
-    function traverse(node) {
-      if (found) return;
-      if (node.nodeType === Node.TEXT_NODE) {
-        const nextCharCount = charCount + node.length;
-        if (startOffset <= nextCharCount) {
-          const pos = Math.max(0, Math.min(node.length, startOffset - charCount));
-          newRange.setStart(node, pos);
-          found = true;
-        }
-        charCount = nextCharCount;
-      } else {
-        for (let child of node.childNodes) {
-          traverse(child);
-        }
-      }
-    }
-    traverse(scriptEditor);
-    if (found) {
-      selection.removeAllRanges();
-      selection.addRange(newRange);
-    }
-  }
+  if (offsets) restoreEditorSelection(offsets);
+  syncRunAction();
   
   // Reconnect observer after updating
   observer.observe(scriptEditor, { subtree: true, characterData: true });
@@ -436,6 +491,7 @@ observer.observe(scriptEditor, { subtree: true, characterData: true });
 
 scriptEditor.addEventListener('keydown', function(e) {
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
     runQuery();
   }
   // Handle plain Enter to prevent div/br insertion
@@ -525,24 +581,80 @@ function setStatus(msg, cls='') {
     activateTab('table');
   }
 }
+
+function resultOutcome(resultSetCount, rowCount) {
+  if (resultSetCount === 0) return 'no result sets';
+  const rows = `${rowCount} ${rowCount === 1 ? 'row' : 'rows'}`;
+  return resultSetCount === 1 ? rows : `${resultSetCount} result sets | ${rows}`;
+}
+
+function showCompletionSummary(details) {
+  els.perf.classList.remove('completion-flash');
+  els.perf.textContent = `Complete | ${details}`;
+  els.perf.title = els.perf.textContent;
+  void els.perf.offsetWidth;
+  els.perf.classList.add('completion-flash');
+}
+
 let wasmEngine = null;
+let wasmPackageSource = 'workspace';
+const PUBLISHED_WASM_MODULE = 'https://roenbaeck.github.io/positorium/pkg/positorium.js';
+
+function isLoopbackHost(hostname) {
+  return hostname === 'localhost' || hostname === '[::1]' || /^127\./.test(hostname);
+}
+
+async function loadWasmPackage() {
+  try {
+    return await import('./pkg/positorium.js');
+  } catch (localError) {
+    if (!isLoopbackHost(location.hostname)) throw localError;
+    setStatus('Workspace WASM package unavailable; loading the published package…');
+    try {
+      wasmPackageSource = 'published';
+      return await import(PUBLISHED_WASM_MODULE);
+    } catch (publishedError) {
+      throw new Error(
+        `WASM package unavailable. Build ./pkg with wasm-pack or use the server endpoint. ` +
+        `Workspace package: ${localError.message}; published fallback: ${publishedError.message}`
+      );
+    }
+  }
+}
+
 async function runWasm(script, started) {
   try {
     if (!wasmEngine) {
       setStatus('Initializing WASM engine...');
-      const pkg = await import('./pkg/positorium.js');
+      const pkg = await loadWasmPackage();
       const { WasmEngine } = pkg;
       await pkg.default();
       wasmEngine = new WasmEngine();
     }
     const output = wasmEngine.execute(script);
+    if (output.interface_version !== '1' || output.traqula_version !== 1) {
+      throw new Error(
+        `Unsupported WASM contract (interface ${output.interface_version}, Traqula ${output.traqula_version})`
+      );
+    }
     els.progress.value = 80;
-    const first = output.result_sets[0] || { columns: [], rows: [] };
+    const resultSets = output.result_sets || [];
+    populateResultSetSelect(resultSets);
+    const first = resultSets[0] || { columns: [], rows: [] };
     const columns = first.columns;
     const rows = first.rows;
     buildTable(columns, rows);
+    els.resultSetSelect.onchange = () => {
+      const index = parseInt(els.resultSetSelect.value, 10);
+      const resultSet = resultSets[index];
+      buildTable(resultSet.columns, resultSet.rows || []);
+    };
+    const totalRows = resultSets.reduce((total, resultSet) => total + (resultSet.row_count ?? resultSet.rows.length), 0);
     const ms = (performance.now() - started).toFixed(2);
-    els.perf.textContent = `WASM local | execution ${ms} ms | rows ${rows.length}`;
+    const packageLabel = wasmPackageSource === 'published' ? 'published package' : 'workspace package';
+    showCompletionSummary(
+      `WASM browser | ${packageLabel} | ${ms} ms | ${resultOutcome(resultSets.length, totalRows)}`
+    );
     els.jsonOut.textContent = JSON.stringify(output, null, 2);
     setStatus('OK');
   } catch (e) {
@@ -642,7 +754,9 @@ function rebuildStreamingDropdown(multiSets, currentIdx) {
 async function runQuery() {
   console.log('runQuery called');
   const endpoint = els.endpoint.value.trim();
-  const script = scriptEditor.innerText;
+  const selection = pendingSelectedScript || selectedScript || getSelectedEditorScript();
+  pendingSelectedScript = '';
+  const script = selection || scriptEditor.innerText;
   console.log('script:', script);
   const doStream = els.streamMode.checked;
   const doWasm = els.wasmMode.checked;
@@ -650,7 +764,10 @@ async function runQuery() {
   const payload = { traqula_version: 1, script: script, stream: doStream, parameters: {}, ...(timeoutMs > 0 ? { timeout_ms: timeoutMs } : {}) };
   els.runBtn.disabled = true;
   els.runBtn.setAttribute('aria-busy', 'true');
-  setStatus('Running query…');
+  els.perf.classList.remove('completion-flash');
+  els.perf.textContent = '';
+  els.perf.removeAttribute('title');
+  setStatus(selection ? 'Running selection…' : 'Running query…');
   els.progress.style.visibility='visible'; els.progress.value=15;
   const controller = timeoutMs>0 ? new AbortController() : null;
   if (controller) setTimeout(()=>controller.abort(), timeoutMs);
@@ -686,7 +803,12 @@ async function runQuery() {
           buildTable(json.columns, json.rows||[]);
         }
         const ms = (performance.now()-started).toFixed(2);
-        els.perf.textContent = `client ${(ms)} ms | server ${(json.elapsed_ms).toFixed(3)} ms | rows ${json.row_count}`;
+        const resultSetCount = json.result_sets
+          ? json.result_sets.length
+          : (json.columns && json.columns.length > 0 ? 1 : 0);
+        showCompletionSummary(
+          `client ${ms} ms | server ${json.elapsed_ms.toFixed(3)} ms | ${resultOutcome(resultSetCount, json.row_count)}`
+        );
         setStatus('OK');
       } else {
         buildTable([],[],[]);
@@ -780,13 +902,17 @@ async function runStream(endpoint, payload, started, controller) {
             const ms = (performance.now()-started).toFixed(2);
             if (streamingMulti) {
               const total = evt.total_rows ?? multiSets.reduce((a,s)=>a+(s.row_count||s.rows.length),0);
-              els.perf.textContent = `client ${(ms)} ms | sets ${multiSets.length} | total rows ${total}`;
+              showCompletionSummary(
+                `stream | client ${ms} ms | ${resultOutcome(multiSets.length, total)}`
+              );
               setStatus('OK');
               // Ensure dropdown exists even if earlier start events had an exception
               rebuildStreamingDropdown(multiSets, currentSetIndex);
               els.jsonOut.textContent = JSON.stringify({ status:'ok', result_sets: multiSets.map((s,i)=>({ index:i, columns:s.columns, rows:s.rows, row_count: s.row_count||s.rows.length, limited: !!s.limited, search: s.search })) }, null, 2);
             } else {
-              els.perf.textContent = `client ${(ms)} ms | total rows ${evt.total_rows ?? rowCount}`;
+              showCompletionSummary(
+                `stream | client ${ms} ms | ${resultOutcome(columns ? 1 : 0, evt.total_rows ?? rowCount)}`
+              );
               setStatus('OK');
               const summary = { status:'ok', last_set: { columns, rows, row_count: rowCount }, total_rows: evt.total_rows ?? rowCount };
               els.jsonOut.textContent = JSON.stringify(summary,null,2);
@@ -796,7 +922,9 @@ async function runStream(endpoint, payload, started, controller) {
         } else if (evt.event==='end') {
       // Fallback completion (single-search or legacy); if multi already handled do nothing extra
             const ms = (performance.now()-started).toFixed(2);
-            els.perf.textContent = `client ${(ms)} ms | rows ${rowCount}${limited?' (limited)':''}`;
+            showCompletionSummary(
+              `stream | client ${ms} ms | ${resultOutcome(columns ? 1 : 0, rowCount)}${limited?' | limited':''}`
+            );
             setStatus('OK');
             // Summarize JSON output
             const summary = { status:'ok', columns, rows, row_count: rowCount, limited };
