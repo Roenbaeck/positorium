@@ -1,7 +1,9 @@
 #[cfg(feature = "persistence")]
 use criterion::BatchSize;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use positorium::EffectCut;
 use positorium::construct::{Database, PersistenceMode};
+use positorium::datatype::Time;
 use positorium::traqula::{Engine, ResultSet};
 use std::cell::{Cell, OnceCell};
 use std::hint::black_box;
@@ -129,6 +131,26 @@ fn historical_database(entities: usize, versions: usize) -> Database {
         .execute(&historical_batch(entities, versions))
         .unwrap();
     database
+}
+
+fn information_effect_database(assertions: usize) -> Database {
+    let database = Database::new(PersistenceMode::InMemory).unwrap();
+    let mut script = String::from("add role status;");
+    for index in 0..assertions {
+        script.push_str(&format!(
+            "add posit +target_{index} [{{(+case_{index}, status)}}, {index}, '2024-01-01'];\
+             add posit [{{(target_{index}, posit), (+source_{index}, ascertains)}}, 100%, '2024-02-01'];"
+        ));
+    }
+    Engine::new(&database).execute(&script).unwrap();
+    database
+}
+
+fn information_effect_cut() -> EffectCut {
+    EffectCut::new(
+        Time::new_date_from("2025-01-01").unwrap(),
+        Time::new_date_from("2025-01-01").unwrap(),
+    )
 }
 
 #[cfg(feature = "persistence")]
@@ -303,6 +325,41 @@ fn query_benchmarks(c: &mut Criterion) {
         });
     });
     history.finish();
+
+    let mut effect = c.benchmark_group("query/information_in_effect");
+    for assertions in [10_000_usize, 100_000] {
+        let fixture = OnceCell::new();
+        let reported = Cell::new(false);
+        effect.throughput(Throughput::Elements(assertions as u64));
+        effect.bench_with_input(
+            BenchmarkId::from_parameter(assertions),
+            &assertions,
+            move |benchmark, &assertions| {
+                let database =
+                    fixture.get_or_init(|| information_effect_database(assertions));
+                if !reported.replace(true) {
+                    let measured = database
+                        .information_in_effect(information_effect_cut())
+                        .unwrap();
+                    let counters = measured.counters();
+                    eprintln!(
+                        "positorium information-in-effect measurement: {} assertion candidates, {} retractions, {} temporal comparisons, {} effective rows",
+                        counters.assertion_candidates,
+                        counters.retractions,
+                        counters.temporal_comparisons,
+                        counters.effective_assertions
+                    );
+                }
+                benchmark.iter(|| {
+                    let slice = database
+                        .information_in_effect(black_box(information_effect_cut()))
+                        .unwrap();
+                    black_box(slice.assertions().len());
+                });
+            },
+        );
+    }
+    effect.finish();
 }
 
 fn result_set_benchmarks(c: &mut Criterion) {

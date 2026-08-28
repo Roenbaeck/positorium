@@ -85,6 +85,64 @@
   gap: 0.65rem;
 }
 
+.terrain-class-controls {
+  min-height: 46px;
+  padding: 0.42rem 0.75rem;
+  border-bottom: 1px solid #d9e2de;
+  background: #fbfcfb;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.terrain-class-badge {
+  padding: 0.24rem 0.38rem;
+  border: 1px solid #b8a9d2;
+  border-radius: 4px;
+  background: #f4f0fa;
+  color: #695286;
+  font-size: 0.52rem;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.terrain-class-controls label {
+  display: grid;
+  gap: 0.08rem;
+  color: #6d7974;
+  font-size: 0.46rem;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.terrain-class-controls select {
+  min-width: 112px;
+  max-width: 180px;
+  height: 25px;
+  border: 1px solid #d5ded9;
+  border-radius: 5px;
+  background: #fff;
+  color: #33413c;
+  font: 0.55rem var(--mono);
+}
+
+.terrain-class-controls select:disabled {
+  color: #98a19d;
+  background: #f2f5f3;
+}
+
+.terrain-class-policy {
+  min-width: 0;
+  margin-left: auto;
+  color: #76817d;
+  font-size: 0.55rem;
+  line-height: 1.35;
+  text-align: right;
+}
+
 .terrain-signature-control {
   display: grid;
   gap: 0.1rem;
@@ -320,6 +378,28 @@
 .relation-label {
   cursor: pointer;
   outline: none;
+}
+
+.terrain-class-overlay {
+  pointer-events: none;
+}
+
+.terrain-class-region {
+  fill: rgba(123, 91, 166, 0.18);
+  stroke: rgba(105, 82, 134, 0.5);
+  stroke-width: 1.25;
+  vector-effect: non-scaling-stroke;
+}
+
+.terrain-class-region.full-profile {
+  fill: rgba(123, 91, 166, 0.13);
+  stroke-dasharray: 5 4;
+}
+
+.terrain-class-member-label {
+  fill: #5f497a;
+  text-anchor: middle;
+  font: 650 9px var(--mono);
 }
 
 .terrain-isopleth > path {
@@ -680,6 +760,14 @@
   .terrain-controls {
     width: 100%;
     justify-content: space-between;
+  }
+
+  .terrain-class-controls {
+    overflow-x: auto;
+  }
+
+  .terrain-class-policy {
+    display: none;
   }
 
   .terrain-stats {

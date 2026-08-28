@@ -2,11 +2,12 @@
 
 ## Status and sources
 
-This document is an implementation plan for information in effect, five-role
-vocabulary bootstrap, neutral classification queries, and a selected-class
-Terrain overlay. Constraints are deliberately **not** ready for implementation;
-the constraint sections record the current direction and the questions that
-must be answered first.
+This document records the accepted design and implementation of information in
+effect, five-role vocabulary bootstrap, neutral classification queries, and a
+selected-class Terrain overlay. These classification phases were implemented on
+2026-08-28. Constraints are deliberately **not** ready for implementation; the
+constraint sections record the current direction and the questions that must be
+answered first.
 
 The design draws on the three paper revisions retained in this repository:
 
@@ -305,7 +306,7 @@ binds columns from `IE`; without it, those columns remain fresh hidden
 variables. This lowering fixes target matching after resolution and preserves
 source-local bag multiplicity without giving `in effect` a second meaning.
 
-Current Traqula does not yet have enough composable query algebra to spell this
+Traqula does not yet have enough composable query algebra to spell this
 expansion faithfully. Its correlated `not exists` block has no local `where`
 predicate or nested/named intermediate relation, while pattern-local `as of`
 cannot perform grouped maxima over the joined assertion/target rows. Extending
@@ -317,12 +318,11 @@ should therefore first define a general lower-level representation for:
 - nondominated reduction partitioned by explicit grouping variables and
   ordered by a selected time variable.
 
-`in effect` can then lower to the four-stage plan above, and the executor may
-optimize that recognized plan with a shared Rust resolver. Until those general
-operations exist, implementing only an opaque `in effect` AST node is
-acceptable as an executable reference, but it is not yet a true desugaring to
-the current language. The expansion must be tested for invariance under query
-planning, pattern order, append order, unrelated data, and identity allocation.
+The implemented `in effect` AST node therefore uses the shared Rust resolver as
+the executable reference. It is not yet a surface-language desugaring. If the
+general operations are added later, equivalence and invariance under query
+planning, pattern order, append order, unrelated data, and identity allocation
+must be tested before switching execution strategies.
 
 The Rust resolver must be implemented once and shared by query execution and
 all assertion-aware consumers so their temporal semantics cannot drift.
@@ -357,8 +357,8 @@ closure or name resolution is added to Traqula.
 
 ### 1. Information in effect
 
-Add a reusable semantic module, for example `src/effect.rs`, with opaque public
-result types and an internal resolver. It should:
+`src/effect.rs` provides opaque public result types and one internal resolver.
+It:
 
 - find exact two-role assertion posits using the `posit` and `ascertains`
   indexes;
@@ -374,10 +374,11 @@ before considering durable materialization or persisted indexes.
 
 ### 2. Vocabulary bootstrap and neutral access
 
-Bootstrap and verify the five fixed Roles. Do not add `src/classification.rs`, a
-classification decoder, lifecycle diagnostics, materialized member indexes, or
-subclass inference. Existing exact/open appearance matching and the shared
-information-in-effect resolver provide the required data access.
+Fresh stores bootstrap and verify the five fixed Roles. There is no
+`src/classification.rs`, classification decoder, lifecycle diagnostic,
+materialized member index, or subclass inference. Existing exact/open appearance
+matching and the shared information-in-effect resolver provide the required
+data access.
 
 Expose high-level assertion types such as `EffectCut` and
 `EffectiveAssertion`; do not expose `ClassificationView`, `MembershipMode`, or
@@ -388,19 +389,19 @@ useful for selecting identities but do not change this boundary.
 
 Terrain 1 remains an authoritative, value-independent structural report. The
 browser combines its geometry with a separate neutral classification query.
-The first overlay:
+The overlay:
 
 - allows exactly one selected class;
 - begins with direct `{thing, class}` evidence only;
 - shows the selected lifecycle value, positor/source treatment, certainty rule,
   and temporal cuts as presentation settings;
 - may default to exact value `"active"`, but only in the UI;
-- uses an ordinary descriptive posit for the selector label when available and
-  otherwise shows the class Thing identity;
+- currently shows the class Thing identity; descriptive labels remain a client
+  enhancement;
 - draws translucent shading behind isopleth strokes, connections, and labels;
 - reuses an isopleth interior when it already represents the classified Thing;
-- creates padded regions around other visible member geometry;
-- merges overlapping regions while retaining disconnected islands; and
+- creates padded member regions inside partial profiles;
+- allows natural overlap without bridging disconnected islands; and
 - leaves Terrain report counts, identities, layout, and version unchanged.
 
 Subclass expansion is deferred. When added, it remains an explicit client
@@ -635,14 +636,13 @@ Expected files and responsibilities:
 - `src/storage.rs` and `src/maintenance.rs`: update fresh-store bootstrap,
   logical export/import validation, and built-in identity checks; no migration.
 - `src/effect.rs`: dual-cut assertion resolution.
-- `src/traqula.pest`: `in effect`, `via`, and eventual typed identity positions;
-  no classification commands.
-- `src/traqula.rs` and `src/traqula/query.rs`: AST/desugaring, execution, and
+- `src/traqula.pest`: `in effect` and `via`; no classification commands.
+- `src/traqula.rs` and `src/traqula/query.rs`: AST, execution, and
   structured results. New query work belongs in `src/traqula/query.rs`; do not
   extend the retained `search_legacy` evaluator.
-- `src/error.rs`: stable assertion-resolution and resource diagnostics.
-- `src/interface.rs`, `src/server.rs`, and `src/wasm.rs`: identity parameters,
-  result fields, limits, and boundary serialization.
+- `src/error.rs`: existing execution, invariant, and resource-limit diagnostics.
+- `src/interface.rs`, `src/server.rs`, and `src/wasm.rs`: the generic query path
+  carries neutral effective rows without transport-specific interpretation.
 - both `traqula.tmLanguage.json` files: syntax highlighting kept in lockstep.
 - `positorium-terrain.js`, `positorium-terrain.css`, `positorium.html`, and
   `tests/terrain_client.test.js`: selected-class controls and shaded overlay.
@@ -653,9 +653,9 @@ No physical posit-record or Terrain report change is required. Classification
 data fits the existing appearance-set/value/time representation, and its
 shading is browser geometry.
 
-## Delivery sequence
+## Delivered sequence
 
-### Phase 0: contracts and golden fixtures
+### Phase 0: contracts and golden fixtures — complete
 
 - Record the neutral classification boundary and revise D006.
 - Add raw fixtures for unary class, `{thing, class}`, and `{subclass, class}`
@@ -663,33 +663,33 @@ shading is browser geometry.
 - Specify exact information-in-effect slices before coding.
 - Mark all constraint syntax and implementation work as deferred.
 
-### Phase 1: vocabulary and raw representation
+### Phase 1: vocabulary and raw representation — complete
 
 - Bootstrap the five fixed roles in fresh stores.
 - Update replay, logical transfer, role-count, and catalog-integrity tests.
 - Demonstrate that every structural convention can be inserted and retrieved
   without value interpretation.
 
-### Phase 2: information in effect
+### Phase 2: information in effect — complete
 
 - Implement and test the reusable Rust resolver.
 - Add the dual-cut assertion-pattern operator.
 - Keep existing `as of` behavior unchanged.
 
-### Phase 3: selected-class presentation
+### Phase 3: selected-class presentation — complete
 
 - Add a one-class selector and explicit display-policy controls to Terrain.
 - Fetch direct classification evidence through neutral Traqula results.
 - Render shaded regions without changing structural geometry or report counts.
 - Do not implement subclass closure or classification mutation sugar.
 
-### Phase 4: interfaces, documentation, and performance
+### Phase 4: interfaces, documentation, and performance — complete
 
 - Carry `in effect` results and provenance through Rust, HTTP, SSE, and WASM.
 - Update the web console and editor grammars for `in effect` and `via`.
 - Add benchmarks and optimize only from profiles.
-- Update crate and contract version declarations immediately before the first
-  Positorium release; do not create legacy shims for unreleased behavior.
+- Retain the unreleased crate and contract versions; update declarations
+  immediately before the first Positorium release without adding legacy shims.
 
 ### Separate future work: constraint semantics
 
@@ -701,45 +701,30 @@ shading is browser geometry.
 
 ## Test matrix
 
-At minimum, add tests for:
+The implementation matrix covers:
 
-- fixed identities and names for all five reserved Roles;
-- unary class statements and a class with no direct classification statements;
-- names as ordinary posits, renaming over time, non-unique names, and conflicting
-  names without any effect on class identity;
-- arbitrary string, boolean, numeric, and JSON values on all three structural
-  conventions, returned without classification decoding;
-- the literals `"active"` and `"inactive"` receiving no special core behavior;
-- multiple `{thing, class}` statements and absence of implicit exclusivity;
-- role, class, and posit identities appearing in the `thing` position;
-- `{thing, class}` remaining structurally distinct from `{subclass, class}`;
-- no implicit subclass traversal, source fusion, or display-name lookup;
-- both temporal cuts, reassertion, restatement, retraction, correction, equal
-  maxima, incomparable times, and dangling target posits;
-- malformed assertion posits while arbitrary non-assertion shapes remain data;
-- same-time alternative values remaining in effect regardless of their
-   relative certainties, followed by separately tested diagnostic and
-   acceptance policies;
-- target value and time restrictions being applied after effect resolution so
-   an older matching target cannot be resurrected;
-- two positors asserting the same target producing two shorthand rows, with
-   `return distinct` producing one projected row;
-- `via` bindings exposing the same evidence as the shorthand hides, including
-   same-positor correlation across multiple effective target patterns;
-- semantic equivalence between the reference information-in-effect resolver
-   and its eventual lower-level four-stage expansion;
-- one selected Terrain class at a time and a visible display policy;
-- exact reuse of an isopleth interior, padded non-isopleth regions, merged
-  overlaps, preserved disconnected islands, and legible foreground marks;
-- unchanged Terrain report identity, counts, and layout with the overlay toggled;
-- restart, logical export/import, WASM, HTTP, SSE, cancellation, and limits; and
-- invariance under append order, query-plan order, unrelated data, and Thing
-  identity ordering.
+- fixed identities, names, replay, integrity, and logical transfer for all five
+  reserved Roles;
+- the unary class, direct classification, and subclass structures with opaque
+  values, including `"active"` and `"inactive"` as ordinary literals;
+- structural distinction and absence of implicit subclass traversal;
+- both temporal cuts, reassertion, retraction, equal and incomparable maxima,
+  malformed envelopes, dangling targets, and larger ordinary shapes;
+- post-resolution target filtering, source-local bag rows, `distinct`, explicit
+  `via` provenance, same-source correlation, cancellation, and fail-closed
+  limits;
+- grouped comparison behavior for independent assertions and restart through
+  the append-only store;
+- buffered HTTP, SSE, WASM test coverage, editor grammar synchronization, and
+  the browser's real HTTP classification flow; and
+- one selected Terrain class, explicit client policy, exact isopleth reuse,
+  padded partial regions, and disconnected unmapped islands.
 
-Add Criterion cases for information-in-effect resolution at 10,000 and 100,000
-posits. Measure assertions scanned, retractions examined, temporal comparisons,
-effective rows, and peak result size. Use browser performance tests for overlay
-geometry. Do not add a materialized class index.
+Criterion covers information-in-effect resolution at 10,000 and 100,000
+assertion posits and reports candidates, retractions, temporal comparisons, and
+effective rows. Pure client tests cover overlay geometry, and the complete HTTP
+flow is browser-verified against a local populated database. No materialized
+class index is added.
 
 ## Definition of done
 

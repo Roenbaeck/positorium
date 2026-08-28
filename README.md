@@ -225,6 +225,12 @@ keeps the previous complete snapshot visible. The versioned report contract,
 semantics, limits, interfaces, and golden backend fixture are documented in
 [TERRAIN.md](TERRAIN.md).
 
+In the Current view, Terrain also obtains assertion-backed direct
+`{thing, class}` evidence with Traqula's dual-cut `in effect` operator. One
+selected class can be shaded at a time. The exact literal value, evidence
+source treatment, certainty rule, and resolved temporal cut remain visible UI
+policy; the structural Terrain report and database remain value-neutral.
+
 ## Updated Status and Roadmap
 
 Implemented:
@@ -232,9 +238,11 @@ Implemented:
 * Framed append-only persistence with atomic durable command batches, hidden
   lossless codecs, deterministic replay, recovery, backup, and logical transfer
 * Declarative Traqula joins, union, safe `not exists`, snapshots, typed
-  comparisons and parameters, `distinct`, ordering, and limits
+  comparisons and parameters, `in effect` with optional provenance, `distinct`,
+  ordering, and limits
 * Structured native, HTTP/SSE, and WASM results with cooperative limits and cancellation
 * Trusted/local Axum service, browser testbed, lifecycle scripts, and synchronized editor grammar
+* Five fixed neutral classification Roles and a one-class Terrain presentation
 
 Planned/next:
 * WHERE enhancements: OR, grouping, BETWEEN, IN
@@ -249,10 +257,9 @@ Planned/next:
 These are aspirational features that align with the full vision of Transitional Modeling, extending Positorium beyond its current experimental state:
 
 * **Advanced Query Capabilities**: Implement all theoretical query types from Transitional Modeling, including probabilistic searches (e.g., "find facts with at least 75% certainty"), audit trails (e.g., "show all corrections between dates"), and log-like queries (e.g., "all model changes by a specific identity").
-* **Classification Presentation**: Use the reserved `thing`, `class`, and
-  `subclass` vocabulary in explicit query and visualization policies while
-  keeping lifecycle values neutral in storage. Terrain will initially shade one
-  selected direct class at a time.
+* **Classification Expansion**: Explore explicit, optional subclass traversal,
+  descriptive class labels, and richer comparison views without moving
+  lifecycle or source-fusion policy into storage.
 * **Constraint Research**: Define reproducible, versioned constraint programs
   over immutable effective snapshots before adding enforcement or specialized
   cardinality syntax.

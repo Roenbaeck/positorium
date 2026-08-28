@@ -86,6 +86,20 @@ pub const GENESIS: Thing = 0;
 pub const POSIT_ROLE_ID: Thing = 1;
 /// Fixed store-local identity of the built-in `ascertains` role.
 pub const ASCERTAINS_ROLE_ID: Thing = 2;
+/// Fixed store-local identity of the built-in `thing` role.
+pub const THING_ROLE_ID: Thing = 3;
+/// Fixed store-local identity of the built-in `class` role.
+pub const CLASS_ROLE_ID: Thing = 4;
+/// Fixed store-local identity of the built-in `subclass` role.
+pub const SUBCLASS_ROLE_ID: Thing = 5;
+/// Complete fixed Role catalog required by D006.
+pub(crate) const BUILTIN_ROLES: [(Thing, &str); 5] = [
+    (POSIT_ROLE_ID, "posit"),
+    (ASCERTAINS_ROLE_ID, "ascertains"),
+    (THING_ROLE_ID, "thing"),
+    (CLASS_ROLE_ID, "class"),
+    (SUBCLASS_ROLE_ID, "subclass"),
+];
 
 pub type ThingHasher = BuildHasherDefault<SeaHasher>;
 pub type OtherHasher = BuildHasherDefault<SeaHasher>;
@@ -725,8 +739,9 @@ impl Database {
         }
         #[cfg(not(feature = "persistence"))]
         {
-            database.ensure_builtin_role(POSIT_ROLE_ID, "posit")?;
-            database.ensure_builtin_role(ASCERTAINS_ROLE_ID, "ascertains")?;
+            for (identity, name) in BUILTIN_ROLES {
+                database.ensure_builtin_role(identity, name)?;
+            }
         }
         #[cfg(feature = "persistence")]
         if database
@@ -735,8 +750,9 @@ impl Database {
             .map_err(|error| DatabaseError::Lock(error.to_string()))?
             .is_empty()
         {
-            database.ensure_builtin_role(POSIT_ROLE_ID, "posit")?;
-            database.ensure_builtin_role(ASCERTAINS_ROLE_ID, "ascertains")?;
+            for (identity, name) in BUILTIN_ROLES {
+                database.ensure_builtin_role(identity, name)?;
+            }
         }
 
         Ok(database)
@@ -744,9 +760,11 @@ impl Database {
 
     #[cfg(feature = "persistence")]
     fn bootstrap_append_store(&self) -> Result<(), DatabaseError> {
-        let posit = Role::new(POSIT_ROLE_ID, "posit".to_string(), true);
-        let ascertains = Role::new(ASCERTAINS_ROLE_ID, "ascertains".to_string(), true);
-        let mut records = vec![role_record(&posit), role_record(&ascertains)];
+        let roles = BUILTIN_ROLES
+            .into_iter()
+            .map(|(identity, name)| Role::new(identity, name.to_string(), true))
+            .collect::<Vec<_>>();
+        let mut records = roles.iter().map(role_record).collect::<Vec<_>>();
         records.extend(codec_records());
         self.store
             .lock()
@@ -754,16 +772,13 @@ impl Database {
             .as_mut()
             .ok_or_else(|| DatabaseError::Invariant("persistent store is absent".to_string()))?
             .append_batch(&records)?;
-        self.thing_generator
-            .lock()
-            .map_err(|error| DatabaseError::Lock(error.to_string()))?
-            .retain(POSIT_ROLE_ID);
-        self.thing_generator
-            .lock()
-            .map_err(|error| DatabaseError::Lock(error.to_string()))?
-            .retain(ASCERTAINS_ROLE_ID);
-        self.keep_role(posit)?;
-        self.keep_role(ascertains)?;
+        for role in roles {
+            self.thing_generator
+                .lock()
+                .map_err(|error| DatabaseError::Lock(error.to_string()))?
+                .retain(role.role());
+            self.keep_role(role)?;
+        }
         Ok(())
     }
 
@@ -821,8 +836,9 @@ impl Database {
                 });
             }
         }
-        self.ensure_builtin_role(POSIT_ROLE_ID, "posit")?;
-        self.ensure_builtin_role(ASCERTAINS_ROLE_ID, "ascertains")?;
+        for (identity, name) in BUILTIN_ROLES {
+            self.ensure_builtin_role(identity, name)?;
+        }
         Ok(())
     }
     // functions to access the owned generator and keepers
@@ -1223,7 +1239,7 @@ mod append_store_tests {
         let mut store = database.store.lock().unwrap();
         let batches = store.as_mut().unwrap().committed_batches().unwrap();
         assert_eq!(batches.len(), 3, "bootstrap plus two commands");
-        assert_eq!(batches[0].len(), 5, "built-ins and v1 codec registry");
+        assert_eq!(batches[0].len(), 8, "built-ins and v1 codec registry");
         assert_eq!(batches[1].len(), 2, "both roles commit together");
         assert_eq!(batches[2].len(), 2, "both posits commit together");
         drop(store);

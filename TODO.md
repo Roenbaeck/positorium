@@ -506,15 +506,16 @@ posit replay.
 
 ## Post-Beta Formalism And Ecosystem
 
-- [ ] **Information in Effect and assertion resolution.**
+- [x] **Information in Effect and assertion resolution.**
         - Implement the target-pattern `in effect T, t` operator with separate
             assertion and appearance cutoffs, retraction handling, source-local bag
             semantics, optional `via` provenance, and partial-order maxima.
         - Resolve the complete effective assertion slice before applying target
             value/time predicates. Keep manual assertion joins possible and do not
             redefine ordinary `as of`.
-        - Test the shared Rust resolver against its four-stage relational semantics.
-- [ ] **Neutral classification vocabulary and presentation.**
+        - Test the shared Rust resolver against the four-stage semantic cases;
+            defer mechanical expansion equivalence until the lower algebra exists.
+- [x] **Neutral classification vocabulary and presentation.**
         - Bootstrap the five D006 Roles in fresh stores and update integrity,
             transfer, restart, and interface tests. No migration is required.
         - Retrieve unary `{class}`, binary `{thing, class}`, and binary

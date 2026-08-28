@@ -183,8 +183,8 @@ Ask which layer the query is intended to read:
 - `in effect T, t` asks which source assertions are effective at an
   assertion-time cut `T` about target states at an appearance-time cut `t`. It
   reads assertion-backed evidence, preserves source-local alternatives, and
-  applies retractions. This dual-cut operator is planned post-version 1 syntax
-  and is not accepted by the current parser.
+  applies retractions. This dual-cut operator is part of the unreleased
+  Traqula 1 grammar.
 
 The target pattern can look identical because the operators answer different
 questions:
@@ -196,7 +196,7 @@ search
 return
   ?person, ?name, ?appeared;
 
-/* Effective evidence: which names do sources currently assert? (planned) */
+/* Effective evidence: which names do sources currently assert? */
 search
   [{(?person, name)}, ?name, ?appeared] in effect @NOW, @NOW
 return
@@ -207,7 +207,28 @@ The first query can return a latest name posit even if nobody asserts it. The
 second returns one binding per matching effective assertion, so two sources
 asserting the same name produce two rows unless `return distinct` is requested.
 The first `in effect` operand is assertion time and the second is target
-appearance time; the fixed arity makes the comma syntax unambiguous.
+appearance time; the fixed arity makes the comma syntax unambiguous. A later
+zero-certainty assertion by the same source retracts that exact target posit.
+Resolution then retains every equal or incomparable maximum at both temporal
+stages. Target value and time predicates run after this reduction, so they
+cannot resurrect older matching evidence.
+
+Use `via` when provenance must be visible or correlated with another pattern:
+
+```traqula
+search ?claim = [{(?person, name)}, ?name, ?appeared]
+  in effect @NOW, @NOW
+  via ?assertion = [
+    {(?claim, posit), (?source, ascertains)},
+    ?certainty,
+    ?asserted
+  ]
+return ?person, ?name, ?source, ?certainty, ?asserted;
+```
+
+Without `via`, provenance remains hidden but its source-local bag multiplicity
+is preserved. `via` must describe the exact `{posit, ascertains}` assertion
+shape. `latest` cannot be combined with `in effect`.
 
 Assertions are ordinary posits joined explicitly through the reserved `posit`
 and `ascertains` roles:
@@ -221,8 +242,9 @@ return ?case, ?status, ?changed, ?source, ?certainty, ?asserted;
 Five Roles have fixed identities in the accepted version 1 model: `posit`,
 `ascertains`, `thing`, `class`, and `subclass`. Only `posit` and `ascertains`
 participate in built-in assertion resolution. Information-in-effect selection is
-a planned query operation. Source preference, certainty combination, and
-accepted-truth selection remain separate application policies. None alters
+implemented as the neutral `in effect` query operation. Source preference,
+certainty combination, and accepted-truth selection remain separate application
+policies. None alters
 ordinary snapshot semantics or silently discards disagreement.
 
 The three classification Roles are stable vocabulary, not an inference engine.

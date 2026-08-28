@@ -840,6 +840,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn information_in_effect_is_identical_in_buffered_and_sse_queries() {
+        let database = Arc::new(Database::new(PersistenceMode::InMemory).unwrap());
+        crate::traqula::Engine::new(&database)
+            .execute(
+                "add role status; \
+                 add posit +target [{(+case, status)}, \"open\", '2024-01-01']; \
+                 add posit [{(target, posit), (+source, ascertains)}, 80%, '2024-02-01'];",
+            )
+            .unwrap();
+        let state = ServerState {
+            interface: Arc::new(QueryInterface::new(database)),
+            config: ServerConfig::default(),
+        };
+        let script = "search [{(?case, status)}, ?state, *] \
+                      in effect '2025-01-01', '2025-01-01' \
+                      return ?state;";
+
+        let buffered = query(
+            State(state.clone()),
+            Ok(Json(QueryRequest {
+                traqula_version: TRAQULA_VERSION,
+                script: script.into(),
+                stream: false,
+                timeout_ms: None,
+                parameters: std::collections::HashMap::new(),
+            })),
+        )
+        .await;
+        assert_eq!(buffered.status(), StatusCode::OK);
+        let body = json_body(buffered).await;
+        assert_eq!(body["rows"][0][0]["text"], "\"open\"");
+
+        let streamed = query(
+            State(state),
+            Ok(Json(QueryRequest {
+                traqula_version: TRAQULA_VERSION,
+                script: script.into(),
+                stream: true,
+                timeout_ms: None,
+                parameters: std::collections::HashMap::new(),
+            })),
+        )
+        .await;
+        assert_eq!(streamed.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(streamed.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let events = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(events.contains(r#""text":"\"open\"""#), "{events}");
+        assert!(events.contains(r#""event":"end""#), "{events}");
+    }
+
+    #[tokio::test]
     async fn terrain_rejects_unknown_versions_before_waiting_for_owner() {
         let database = Arc::new(Database::new(PersistenceMode::InMemory).unwrap());
         let state = ServerState {

@@ -216,6 +216,23 @@ mod tests {
     }
 
     #[wasm_bindgen_test]
+    fn test_wasm_information_in_effect() {
+        let engine = WasmEngine::new().expect("Failed to create engine");
+        let output = engine
+            .execute(
+                "add role status; \
+                 add posit +target [{(+case, status)}, \"open\", '2024-01-01']; \
+                 add posit [{(target, posit), (+source, ascertains)}, 80%, '2024-02-01']; \
+                 search [{(?case, status)}, ?state, *] \
+                   in effect '2025-01-01', '2025-01-01' \
+                 return ?state;",
+            )
+            .unwrap();
+        let output: serde_json::Value = serde_wasm_bindgen::from_value(output).unwrap();
+        assert_eq!(output["result_sets"][0]["rows"][0][0]["text"], "\"open\"");
+    }
+
+    #[wasm_bindgen_test]
     fn test_wasm_terrain_matches_the_rust_report() {
         let engine = WasmEngine::new().expect("Failed to create engine");
         engine

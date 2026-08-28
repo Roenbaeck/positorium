@@ -26,7 +26,7 @@ fn terrain_fixture_produces_the_exact_authoritative_report() {
             report.database.appearance_sets,
             report.database.posits,
         ),
-        (42, 10, 25, 24, 26)
+        (45, 13, 25, 24, 26)
     );
 
     assert_eq!(

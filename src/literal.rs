@@ -58,6 +58,19 @@ impl LiteralValue {
         self.family
     }
 
+    /// Returns the exact signed percentage carried by a certainty literal.
+    ///
+    /// Non-certainty literals return `None`. Construction has already validated
+    /// certainty tokens, so an error here indicates an internal invariant
+    /// violation rather than user input that was accepted unchecked.
+    pub fn certainty_percent(&self) -> Result<Option<i8>, String> {
+        if self.family == LiteralFamily::Certainty {
+            parse_certainty(&self.token).map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Exact literal identity is byte-for-byte token equality.
     pub fn exactly_equals(&self, other: &Self) -> bool {
         self.token == other.token

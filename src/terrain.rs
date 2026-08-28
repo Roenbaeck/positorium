@@ -1177,8 +1177,8 @@ mod tests {
                 ..TerrainOptions::default()
             })
             .unwrap();
-        assert_eq!(report.database.referenced_things, 2);
-        assert_eq!(report.database.roles, 2);
+        assert_eq!(report.database.referenced_things, 5);
+        assert_eq!(report.database.roles, 5);
         assert_eq!(report.database.appearances, 0);
         assert_eq!(report.database.appearance_sets, 0);
         assert_eq!(report.database.posits, 0);

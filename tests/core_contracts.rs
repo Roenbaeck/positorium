@@ -98,7 +98,7 @@ fn role_catalog_normalizes_nfc_and_keeps_names_case_sensitive() {
     Engine::new(&db)
         .execute("add role cafe\u{301}; add role caf\u{e9}; add role CAF\u{c9};")
         .unwrap();
-    assert_eq!(db.role_count().unwrap(), 4);
+    assert_eq!(db.role_count().unwrap(), 7);
     assert!(db.contains_role("cafe\u{301}").unwrap());
     assert!(db.contains_role("caf\u{e9}").unwrap());
     assert!(db.contains_role("CAF\u{c9}").unwrap());
@@ -162,14 +162,14 @@ fn certainty_boundaries_and_consistency_follow_the_signed_scale() {
 }
 
 #[test]
-fn only_assertion_roles_are_reserved_by_default() {
+fn all_five_fixed_roles_are_reserved_by_default() {
     let db = Database::new(PersistenceMode::InMemory).unwrap();
-    assert_eq!(db.role_count().unwrap(), 2);
+    assert_eq!(db.role_count().unwrap(), 5);
     assert!(db.contains_role("posit").unwrap());
     assert!(db.contains_role("ascertains").unwrap());
-    assert!(!db.contains_role("thing").unwrap());
-    Engine::new(&db).execute("add role thing;").unwrap();
-    assert_eq!(db.role_count().unwrap(), 3);
+    assert!(db.contains_role("thing").unwrap());
+    assert!(db.contains_role("class").unwrap());
+    assert!(db.contains_role("subclass").unwrap());
 }
 
 #[test]

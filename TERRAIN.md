@@ -177,32 +177,35 @@ core, Roles introduced by supersets fan into separate branches, smooth hulls
 follow those branches, and relationship allocations connect below the Role
 topology. Scope changes and support filtering do not move Role positions.
 
-## Planned selected-class overlay
+## Selected-class overlay
 
 Terrain 1's authoritative report remains structural and value-independent. A
 class overlay is a separate browser presentation over ordinary classification
 query results; it does not change Rust counts, profile identities, isopleth
 identities, or the Terrain report contract.
 
-The first overlay should allow exactly one selected class. The browser obtains
-direct `{thing, class}` posit evidence at explicit temporal cuts, then applies a
-visible display policy for lifecycle value, positor/source, and certainty. A
-default such as exact value `"active"` belongs to the UI and is never database
-truth. Start with direct classification only. Optional traversal of
-`{subclass, class}` posits can be added later under an equally explicit policy.
+The overlay allows exactly one selected class. In the Current view, the browser
+uses the report's resolved cutoff for both operands of a separate `in effect`
+query over direct `{thing, class}` evidence. It then applies visible controls
+for exact lifecycle value, positor/source, and certainty sign. The History view
+does not shade a class. Values such as `"active"` belong to the selected UI
+policy and are never database truth. Optional traversal of `{subclass, class}`
+posits remains deferred and would require an equally explicit policy.
 
 Render the selected class as translucent shaded areas behind existing isopleth
 lines and text:
 
-- when a classified Thing already corresponds to an isopleth region, reuse that
-  interior exactly;
-- otherwise form a padded region around the Thing's rendered geometry;
-- merge overlapping regions but retain disconnected islands instead of drawing
-  a bridge that implies a relationship; and
+- when the selected members exhaust a projected profile, reuse that profile's
+  isopleth interior exactly;
+- otherwise form padded member regions within the matching profile;
+- allow natural overlap but retain disconnected islands instead of drawing a
+  bridge that implies a relationship; and
 - keep labels, isopleth strokes, connections, selection, and inspection legible
   above the fill.
 
-The class selector should use an ordinary descriptive posit when one is
-available and fall back to the class Thing identity. The selected class and
-display policy must remain visible so shading cannot be mistaken for an
-inference made by Positorium.
+The selector currently uses the class Thing identity; descriptive labels are a
+future client enhancement. The selected class, value, source treatment,
+certainty rule, member count, and resolved cuts remain visible so shading cannot
+be mistaken for an inference made by Positorium. Class-member Role profiles are
+obtained by a second ordinary query and mapped to Terrain's structural geometry;
+unmapped members remain visible as disconnected islands.

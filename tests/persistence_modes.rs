@@ -43,7 +43,7 @@ fn append_only_store_replays_roles_posits_and_indexes() {
                 "add role amount; add posit [{(+item, amount)}, +001.00, '2026-08-26'];",
             )
             .expect("durable commands");
-        assert_eq!(db.role_count().unwrap(), 3);
+        assert_eq!(db.role_count().unwrap(), 6);
     }
 
     let restored = Database::new(PersistenceMode::File(path.clone())).expect("replay store");
@@ -105,6 +105,37 @@ fn every_literal_family_survives_append_only_restart_losslessly() {
     ];
     expected.sort();
     assert_eq!(tokens, expected);
+    drop(restored);
+    remove_store(&path);
+}
+
+#[test]
+#[cfg(feature = "persistence")]
+fn information_in_effect_survives_append_only_restart() {
+    use positorium::traqula::Engine;
+
+    let path = temporary_store_path("information-in-effect");
+    {
+        let database = Database::new(PersistenceMode::File(path.clone())).unwrap();
+        Engine::new(&database)
+            .execute(
+                "add role status; \
+                 add posit +target [{(+case, status)}, \"open\", '2024-01-01']; \
+                 add posit [{(target, posit), (+source, ascertains)}, 80%, '2024-02-01'];",
+            )
+            .unwrap();
+    }
+
+    let restored = Database::new(PersistenceMode::File(path.clone())).unwrap();
+    let result = Engine::new(&restored)
+        .execute_collect(
+            "search [{(?case, status)}, ?state, *] \
+             in effect '2025-01-01', '2025-01-01' \
+             return ?case, ?state;",
+        )
+        .unwrap();
+    assert_eq!(result.rows.len(), 1);
+    assert_eq!(result.rows[0][1].text, "\"open\"");
     drop(restored);
     remove_store(&path);
 }

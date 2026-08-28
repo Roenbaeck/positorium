@@ -56,6 +56,7 @@
 #[doc(hidden)]
 pub mod construct;
 pub mod datatype;
+pub mod effect;
 pub mod error;
 pub mod interface;
 pub mod literal;
@@ -71,6 +72,10 @@ pub mod traqula;
 pub mod wasm;
 
 pub use construct::{Database, PersistenceMode};
+pub use effect::{
+    EffectCounters, EffectCut, EffectLimits, EffectiveAssertion, EffectiveSlice,
+    MAX_EFFECT_ASSERTION_CANDIDATES, MAX_EFFECT_TEMPORAL_COMPARISONS,
+};
 pub use error::{DatabaseError, Result};
 pub use interface::{CancelToken, QueryHandle, QueryId, QueryInterface, QueryOptions, Row};
 pub use literal::{LiteralFamily, LiteralValue};

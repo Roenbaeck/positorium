@@ -4,6 +4,7 @@ const TERRAIN_PLOT = { left: 54, right: 886, top: 36, bottom: 342 };
 const TERRAIN_TONES = ['sea', 'leaf', 'earth', 'berry'];
 
 let terrainData = null;
+let terrainClassificationData = null;
 const terrainState = {
   scope: 'current',
   minimumSupport: 0,
@@ -11,6 +12,12 @@ const terrainState = {
   selectedType: null,
   selectedId: null,
   selectedSignatureId: null,
+  selectedClass: null,
+  selectedClassValue: null,
+  selectedClassSource: 'all',
+  classCertainty: 'positive',
+  classStatus: 'empty',
+  classError: null,
   status: 'empty',
   source: null,
   error: null
@@ -176,6 +183,56 @@ function syncTerrainControls() {
   ).join('');
   els.terrainSignature.value = terrainState.selectedSignatureId || '';
   els.terrainSignature.disabled = signatures.length <= 1;
+  syncTerrainClassControls();
+}
+
+function syncTerrainClassControls() {
+  const evidence = terrainClassificationData?.evidence || [];
+  const classes = [...new Set(evidence.map(row => row.class_id))].sort(terrainCompareRoleIds);
+  if (!classes.includes(terrainState.selectedClass)) terrainState.selectedClass = classes[0] || null;
+  els.terrainClass.innerHTML = classes.length
+    ? classes.map(identity => `<option value="${escapeHtml(identity)}">Thing ${escapeHtml(identity)}</option>`).join('')
+    : '<option value="">No effective classes</option>';
+  els.terrainClass.value = terrainState.selectedClass || '';
+  els.terrainClass.disabled = terrainState.classStatus !== 'ready' || classes.length === 0;
+
+  const classRows = evidence.filter(row => row.class_id === terrainState.selectedClass);
+  const values = [...new Set(classRows.map(row => row.state))].sort();
+  if (!values.includes(terrainState.selectedClassValue)) {
+    terrainState.selectedClassValue = values.includes('"active"') ? '"active"' : (values[0] || null);
+  }
+  els.terrainClassValue.innerHTML = values.length
+    ? values.map(value => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join('')
+    : '<option value="">No values</option>';
+  els.terrainClassValue.value = terrainState.selectedClassValue || '';
+  els.terrainClassValue.disabled = terrainState.classStatus !== 'ready' || values.length === 0;
+
+  const valueRows = classRows.filter(row => row.state === terrainState.selectedClassValue);
+  const sources = [...new Set(valueRows.map(row => row.source))].sort(terrainCompareRoleIds);
+  if (terrainState.selectedClassSource !== 'all' && !sources.includes(terrainState.selectedClassSource)) {
+    terrainState.selectedClassSource = 'all';
+  }
+  els.terrainClassSource.innerHTML = '<option value="all">All effective sources (union)</option>' +
+    sources.map(source => `<option value="${escapeHtml(source)}">Thing ${escapeHtml(source)}</option>`).join('');
+  els.terrainClassSource.value = terrainState.selectedClassSource;
+  els.terrainClassSource.disabled = terrainState.classStatus !== 'ready' || sources.length === 0;
+  els.terrainClassCertainty.value = terrainState.classCertainty;
+  els.terrainClassCertainty.disabled = terrainState.classStatus !== 'ready' || valueRows.length === 0;
+
+  if (terrainState.classStatus === 'loading') {
+    els.terrainClassPolicy.textContent = 'Loading effective direct classifications…';
+  } else if (terrainState.classStatus === 'error') {
+    els.terrainClassPolicy.textContent = `Class overlay unavailable: ${terrainState.classError}`;
+  } else if (!terrainState.selectedClass) {
+    els.terrainClassPolicy.textContent = 'No effective direct classifications at this cut';
+  } else {
+    const members = terrainSelectedClassMembers();
+    const source = terrainState.selectedClassSource === 'all'
+      ? 'all sources (visible union)'
+      : `source ${terrainState.selectedClassSource}`;
+    const certainty = terrainState.classCertainty === 'positive' ? 'positive support' : 'all non-zero evidence';
+    els.terrainClassPolicy.textContent = `${formatTerrainCount(members.length)} direct members · exact ${terrainState.selectedClassValue} · ${certainty} · ${source} · cuts ${terrainData?.resolved_as_of || '—'}`;
+  }
 }
 
 function updateTerrainSource() {
@@ -215,6 +272,12 @@ function captureTerrainReport(report, source) {
   terrainState.selectedType = null;
   terrainState.selectedId = null;
   terrainState.selectedSignatureId = terrainData.relationship_catalog.default_signature_id;
+  terrainClassificationData = null;
+  terrainState.selectedClass = null;
+  terrainState.selectedClassValue = null;
+  terrainState.selectedClassSource = 'all';
+  terrainState.classStatus = 'loading';
+  terrainState.classError = null;
   els.terrainRelationships.checked = true;
   updateTerrainSource();
   renderTerrain();
@@ -222,6 +285,7 @@ function captureTerrainReport(report, source) {
 
 function clearTerrainData() {
   terrainData = null;
+  terrainClassificationData = null;
   terrainState.status = 'empty';
   terrainState.source = null;
   terrainState.error = null;
@@ -230,6 +294,11 @@ function clearTerrainData() {
   terrainState.selectedType = null;
   terrainState.selectedId = null;
   terrainState.selectedSignatureId = null;
+  terrainState.selectedClass = null;
+  terrainState.selectedClassValue = null;
+  terrainState.selectedClassSource = 'all';
+  terrainState.classStatus = 'empty';
+  terrainState.classError = null;
   els.terrainRelationships.checked = true;
   updateTerrainSource();
   renderTerrain();
@@ -247,6 +316,238 @@ function terrainEndpoint(queryEndpoint) {
     throw new Error('The configured endpoint must end in /v1/query to locate /v1/terrain');
   }
   return queryEndpoint.replace(/\/v1\/query\/?$/, '/v1/terrain');
+}
+
+function terrainClassificationScript(cutoff) {
+  return `search ?classification = [
+  {(?member, thing), (?class, class)}, ?state, ?appeared
+] in effect ${cutoff}, ${cutoff}
+  via ?assertion = [
+    {(?classification, posit), (?source, ascertains)}, ?certainty, ?asserted
+  ]
+return ?classification, ?member, ?class, ?state, ?appeared,
+       ?assertion, ?source, ?certainty, ?asserted;
+
+search ?classification = [
+  {(?member, thing), (?class, class)}, ?state, ?appeared
+] in effect ${cutoff}, ${cutoff}
+  via [
+    {(?classification, posit), (?source, ascertains)}, ?certainty, *
+  ],
+  [{(?member, ?member_role)}, *, *] as of ${cutoff}
+return ?member, ?class, ?state, ?source, ?certainty, ?member_role;`;
+}
+
+function terrainCellText(cell) {
+  if (cell && typeof cell === 'object' && 'text' in cell) return String(cell.text);
+  return String(cell ?? '');
+}
+
+function terrainResultObjects(resultSet) {
+  const columns = resultSet?.columns || [];
+  return (resultSet?.rows || []).map(row => Object.fromEntries(
+    columns.map((column, index) => [column, terrainCellText(row[index])])
+  ));
+}
+
+function adaptTerrainClassification(resultSets) {
+  const evidenceRows = terrainResultObjects(resultSets?.[0]);
+  const roleRows = terrainResultObjects(resultSets?.[1]);
+  const required = ['classification', 'member', 'class', 'state', 'appeared', 'assertion', 'source', 'certainty', 'asserted'];
+  if (evidenceRows.length && required.some(column => !(column in evidenceRows[0]))) {
+    throw new Error('Classification query returned an incompatible evidence result');
+  }
+  const rolesByMember = {};
+  roleRows.forEach(row => {
+    if (!row.member || !row.member_role) return;
+    if (!rolesByMember[row.member]) rolesByMember[row.member] = [];
+    if (!rolesByMember[row.member].includes(row.member_role)) rolesByMember[row.member].push(row.member_role);
+  });
+  Object.values(rolesByMember).forEach(roles => roles.sort(terrainCompareRoleIds));
+  return {
+    evidence: evidenceRows.map(row => ({
+      classification_id: row.classification,
+      member_id: row.member,
+      class_id: row.class,
+      state: row.state,
+      appeared: row.appeared,
+      assertion_id: row.assertion,
+      source: row.source,
+      certainty: row.certainty,
+      certainty_percent: Number.parseInt(row.certainty, 10),
+      asserted: row.asserted
+    })),
+    roles_by_member: rolesByMember
+  };
+}
+
+function terrainFilterClassEvidence(classification, policy) {
+  return (classification?.evidence || []).filter(row =>
+    row.class_id === policy.class_id &&
+    row.state === policy.value &&
+    (policy.source === 'all' || row.source === policy.source) &&
+    (policy.certainty === 'nonzero' ? row.certainty_percent !== 0 : row.certainty_percent > 0)
+  );
+}
+
+function terrainSelectedClassPolicy() {
+  return {
+    class_id: terrainState.selectedClass,
+    value: terrainState.selectedClassValue,
+    source: terrainState.selectedClassSource,
+    certainty: terrainState.classCertainty
+  };
+}
+
+function terrainSelectedClassMembers() {
+  return [...new Set(
+    terrainFilterClassEvidence(terrainClassificationData, terrainSelectedClassPolicy())
+      .map(row => row.member_id)
+  )].sort(terrainCompareRoleIds);
+}
+
+function terrainCirclePath(x, y, radius) {
+  return `M${(x - radius).toFixed(1)} ${y.toFixed(1)} ` +
+    `A${radius} ${radius} 0 1 0 ${(x + radius).toFixed(1)} ${y.toFixed(1)} ` +
+    `A${radius} ${radius} 0 1 0 ${(x - radius).toFixed(1)} ${y.toFixed(1)} Z`;
+}
+
+function terrainPaddedHull(points, padding) {
+  const perimeter = points.flatMap(([x, y]) => Array.from({ length: 12 }, (_, index) => {
+    const angle = index * Math.PI * 2 / 12;
+    return [x + Math.cos(angle) * padding, y + Math.sin(angle) * padding];
+  }));
+  return terrainSmoothHullPath(terrainConvexHull(perimeter));
+}
+
+function terrainClassOverlay(layout, frame, classification, policy) {
+  if (!policy.class_id || !policy.value) return { regions: [], members: [] };
+  const members = [...new Set(
+    terrainFilterClassEvidence(classification, policy).map(row => row.member_id)
+  )].sort(terrainCompareRoleIds);
+  const projected = new Set(frame.projection.roles.map(role => role.id));
+  const projectedByName = new Map(frame.projection.roles.map(role => [role.name, role.id]));
+  const grouped = new Map();
+  const unmapped = [];
+
+  members.forEach(member => {
+    const present = (classification?.roles_by_member?.[member] || [])
+      .map(role => projected.has(role) ? role : projectedByName.get(role))
+      .filter(Boolean)
+      .sort(terrainCompareRoleIds);
+    const profile = frame.profiles.find(candidate => {
+      const candidateRoles = [...candidate.present_roles].sort(terrainCompareRoleIds);
+      return candidateRoles.length === present.length &&
+        candidateRoles.every((role, index) => role === present[index]);
+    });
+    if (!profile?.isopleth_id || !layout.isopleths[profile.isopleth_id]) {
+      unmapped.push(member);
+      return;
+    }
+    if (!grouped.has(profile.id)) grouped.set(profile.id, { profile, members: [] });
+    grouped.get(profile.id).members.push(member);
+  });
+
+  const regions = [];
+  for (const { profile, members: profileMembers } of grouped.values()) {
+    const isopleth = layout.isopleths[profile.isopleth_id];
+    if (profileMembers.length >= profile.things) {
+      regions.push({
+        kind: 'full-profile',
+        path: isopleth.path,
+        members: profileMembers,
+        labels: []
+      });
+      continue;
+    }
+    const points = profileMembers.map((member, index) => {
+      const columns = Math.min(3, profileMembers.length);
+      return {
+        member,
+        point: [
+          isopleth.center[0] + (index % columns - (columns - 1) / 2) * 38,
+          isopleth.center[1] + (Math.floor(index / columns) - 0.25) * 34
+        ]
+      };
+    });
+    regions.push({
+      kind: 'member-group',
+      path: points.length === 1
+        ? terrainCirclePath(points[0].point[0], points[0].point[1], 21)
+        : terrainPaddedHull(points.map(item => item.point), 21),
+      members: profileMembers,
+      labels: points
+    });
+  }
+
+  unmapped.forEach((member, index) => {
+    const x = 826 + (index % 3) * 34;
+    const y = 58 + Math.floor(index / 3) * 38;
+    regions.push({
+      kind: 'unmapped-member',
+      path: terrainCirclePath(x, y, 17),
+      members: [member],
+      labels: [{ member, point: [x, y] }]
+    });
+  });
+  return { regions, members };
+}
+
+async function executeTerrainClassification(script, source, timeoutMs) {
+  if (source === 'wasm') {
+    const engine = await ensureTerrainWasmEngine();
+    const response = engine.execute(script);
+    if (response.interface_version !== '1' || response.traqula_version !== 1) {
+      throw new Error('Unsupported WASM query contract for class overlay');
+    }
+    return response.result_sets || [];
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs + 1_000);
+  let response;
+  try {
+    response = await fetch(els.endpoint.value.trim(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        traqula_version: 1,
+        script,
+        stream: false,
+        timeout_ms: timeoutMs,
+        parameters: {}
+      }),
+      signal: controller.signal
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+  const payload = await response.json();
+  if (!response.ok || payload.status !== 'ok') {
+    throw new Error(payload.error || `Classification query failed with HTTP ${response.status}`);
+  }
+  return payload.result_sets || (payload.columns ? [payload] : []);
+}
+
+async function refreshTerrainClassification() {
+  if (!terrainData) return;
+  terrainState.classStatus = 'loading';
+  terrainState.classError = null;
+  syncTerrainClassControls();
+  try {
+    const timeoutMs = Math.max(1, parseInt(els.timeout.value || '5000', 10));
+    const resultSets = await executeTerrainClassification(
+      terrainClassificationScript(terrainData.resolved_as_of),
+      terrainState.source,
+      timeoutMs
+    );
+    terrainClassificationData = adaptTerrainClassification(resultSets);
+    terrainState.classStatus = 'ready';
+  } catch (error) {
+    terrainClassificationData = { evidence: [], roles_by_member: {} };
+    terrainState.classStatus = 'error';
+    terrainState.classError = error.message || String(error);
+  }
+  renderTerrain();
 }
 
 async function ensureTerrainWasmEngine() {
@@ -311,6 +612,7 @@ async function refreshTerrain() {
       report = payload.report;
     }
     captureTerrainReport(report, source);
+    await refreshTerrainClassification();
   } catch (error) {
     terrainData = previous;
     terrainState.status = previous ? 'stale' : 'error';
@@ -354,6 +656,29 @@ function initializeTerrain() {
     terrainState.selectedSignatureId = els.terrainSignature.value || null;
     terrainState.selectedType = null;
     terrainState.selectedId = null;
+    renderTerrain();
+  });
+
+  els.terrainClass.addEventListener('change', () => {
+    terrainState.selectedClass = els.terrainClass.value || null;
+    terrainState.selectedClassValue = null;
+    terrainState.selectedClassSource = 'all';
+    renderTerrain();
+  });
+
+  els.terrainClassValue.addEventListener('change', () => {
+    terrainState.selectedClassValue = els.terrainClassValue.value || null;
+    terrainState.selectedClassSource = 'all';
+    renderTerrain();
+  });
+
+  els.terrainClassSource.addEventListener('change', () => {
+    terrainState.selectedClassSource = els.terrainClassSource.value || 'all';
+    renderTerrain();
+  });
+
+  els.terrainClassCertainty.addEventListener('change', () => {
+    terrainState.classCertainty = els.terrainClassCertainty.value;
     renderTerrain();
   });
 
@@ -733,6 +1058,14 @@ function renderTerrain() {
     .filter(allocation => visibleIsoplethIds.has(allocation.isopleth_id));
   // Keep Role positions stable across scope switches and support filtering.
   const layout = terrainLayout(frame, terrainTopologyIsopleths(), visibleAllocations);
+  const classOverlay = terrainState.scope === 'current' && terrainState.classStatus === 'ready'
+    ? terrainClassOverlay(
+        layout,
+        frame,
+        terrainClassificationData,
+        terrainSelectedClassPolicy()
+      )
+    : { regions: [], members: [] };
 
   if (terrainState.selectedType === 'isopleth' && !visibleIsoplethIds.has(terrainState.selectedId)) {
     terrainState.selectedType = null;
@@ -769,6 +1102,22 @@ function renderTerrain() {
       </g>
     `;
   }).join('');
+
+  const classOverlayMarkup = classOverlay.regions.length ? `
+    <g class="terrain-class-overlay" aria-label="Selected direct class overlay">
+      ${classOverlay.regions.map(region => `
+        <g>
+          <title>${escapeHtml(region.members.length === 1
+            ? `Direct class member Thing ${region.members[0]}`
+            : `${region.members.length} direct class members`)}</title>
+          <path class="terrain-class-region ${escapeHtml(region.kind)}" d="${region.path}"></path>
+          ${region.labels.map(label => `
+            <text class="terrain-class-member-label" x="${label.point[0]}" y="${label.point[1] + 3}">${escapeHtml(label.member)}</text>
+          `).join('')}
+        </g>
+      `).join('')}
+    </g>
+  ` : '';
 
   const roleMarkup = frame.projection.roles.map(role => {
     const itemLayout = layout.roles[role.id];
@@ -825,9 +1174,10 @@ function renderTerrain() {
     : `Showing ${frame.projection.roles.length} of ${frame.projection.total_roles} attribute Roles.`;
   els.terrainMap.innerHTML = `
     <title id="terrainMapTitle">Authoritative role-isopleth visualization</title>
-    <desc id="terrainMapDescription">Role labels are enclosed by support isopleths. Relationship allocation lines connect an exact appearance-set signature to projected identity profiles.</desc>
+    <desc id="terrainMapDescription">Role labels are enclosed by support isopleths. Relationship allocation lines connect an exact appearance-set signature to projected identity profiles. Optional translucent areas show one client-selected direct class.</desc>
     <rect class="terrain-background" width="940" height="500"></rect>
-    <text class="terrain-axis-note" x="22" y="488">${escapeHtml(projectionNote)} Hidden isopleths do not imply zero.</text>
+    <text class="terrain-axis-note" x="22" y="488">${escapeHtml(projectionNote)} Hidden isopleths do not imply zero.${terrainState.scope === 'history' && terrainState.selectedClass ? ' Class overlay is shown in Current scope only.' : ''}</text>
+    ${classOverlayMarkup}
     ${isoplethMarkup}
     ${relationshipMarkup}
     ${roleMarkup}
@@ -1073,7 +1423,11 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     TERRAIN_VERSION,
     adaptTerrainReport,
+    adaptTerrainClassification,
     assertTerrainReport,
+    terrainClassOverlay,
+    terrainClassificationScript,
+    terrainFilterClassEvidence,
     terrainLayout,
     terrainEndpoint
   };

@@ -788,18 +788,14 @@ impl LogicalReplay {
             .into_iter()
             .all(|codec| self.codecs.contains(&codec));
         if !self.roles.is_empty() || !self.posits.is_empty() || !self.codecs.is_empty() {
-            validate_builtin_role(
-                &self.roles_by_identity,
-                &self.identities_by_name,
-                1,
-                "posit",
-            )?;
-            validate_builtin_role(
-                &self.roles_by_identity,
-                &self.identities_by_name,
-                2,
-                "ascertains",
-            )?;
+            for (identity, name) in crate::construct::BUILTIN_ROLES {
+                validate_builtin_role(
+                    &self.roles_by_identity,
+                    &self.identities_by_name,
+                    identity,
+                    name,
+                )?;
+            }
         }
         if !has_required_codecs
             && (!self.roles.is_empty() || !self.posits.is_empty() || !self.codecs.is_empty())
@@ -1766,11 +1762,22 @@ mod tests {
         }
     }
 
+    fn builtin_role_records() -> Vec<StoredRecord> {
+        crate::construct::BUILTIN_ROLES
+            .into_iter()
+            .enumerate()
+            .map(|(index, (identity, name))| {
+                stored(
+                    role_record(&Role::new(identity, name.to_string(), true)),
+                    1 + index as u64,
+                )
+            })
+            .collect()
+    }
+
     #[test]
     fn logical_records_round_trip_every_literal_family_and_time_precision() {
-        let posit_role = Role::new(1, "posit".to_string(), true);
-        let ascertains_role = Role::new(2, "ascertains".to_string(), true);
-        let value_role = Arc::new(Role::new(3, "value".to_string(), false));
+        let value_role = Arc::new(Role::new(6, "value".to_string(), false));
         let appearance = Arc::new(Appearance::new(42, Arc::clone(&value_role)));
         let appearance_set = Arc::new(AppearanceSet::new(vec![appearance]).unwrap());
         let values = [
@@ -1789,16 +1796,13 @@ mod tests {
             Time::new_date_from("2024-05-06").unwrap(),
             Time::new_datetime_from("2024-05-06T07:08:09.123456789").unwrap(),
         ];
-        let mut batch = vec![
-            stored(role_record(&posit_role), 1),
-            stored(role_record(&ascertains_role), 2),
-            stored(role_record(&value_role), 3),
-        ];
+        let mut batch = builtin_role_records();
+        batch.push(stored(role_record(&value_role), 6));
         batch.extend(
             codec_records()
                 .into_iter()
                 .enumerate()
-                .map(|(index, record)| stored(record, 4 + index as u64)),
+                .map(|(index, record)| stored(record, 7 + index as u64)),
         );
         for (index, (value, time)) in values.iter().zip(times.iter()).enumerate() {
             let posit = Posit::new(
@@ -1807,17 +1811,17 @@ mod tests {
                 value.clone(),
                 time.clone(),
             );
-            batch.push(stored(posit_record(&posit).unwrap(), 7 + index as u64));
+            batch.push(stored(posit_record(&posit).unwrap(), 10 + index as u64));
         }
 
         let replayed = replay_logical([7; 16], &[batch]).unwrap();
         assert_eq!(replayed.store_uuid, [7; 16]);
         assert!(replayed.has_required_codecs);
-        assert_eq!(replayed.roles.len(), 3);
+        assert_eq!(replayed.roles.len(), 6);
         assert_eq!(replayed.posits.len(), values.len());
         for (index, posit) in replayed.posits.iter().enumerate() {
             assert_eq!(posit.identity, 100 + index as u64);
-            assert_eq!(posit.appearances, vec![(3, 42)]);
+            assert_eq!(posit.appearances, vec![(6, 42)]);
             assert_eq!(posit.value, values[index]);
             assert_eq!(posit.time, times[index]);
         }
@@ -1825,9 +1829,7 @@ mod tests {
 
     #[test]
     fn compact_and_raw_codecs_reconstruct_one_logical_literal_identity() {
-        let posit_role = Role::new(1, "posit".to_string(), true);
-        let ascertains_role = Role::new(2, "ascertains".to_string(), true);
-        let value_role = Role::new(3, "value".to_string(), false);
+        let value_role = Role::new(6, "value".to_string(), false);
         let value = LiteralValue::new("9223372036854775807", LiteralFamily::Integer).unwrap();
         let padded = LiteralValue::new("+001", LiteralFamily::Integer).unwrap();
         let certainty = LiteralValue::new("75%", LiteralFamily::Certainty).unwrap();
@@ -1838,7 +1840,7 @@ mod tests {
         assert_eq!(select_codec(&padded_certainty), BuiltinCodec::RawUtf8);
 
         let time = Time::new_date_from("2024-05-06").unwrap();
-        let appearances = [(3, 42)];
+        let appearances = [(6, 42)];
         let compact = posit_record_logical_with_codec(
             100,
             &appearances,
@@ -1859,30 +1861,27 @@ mod tests {
         assert!(compact.payload.len() < raw.payload.len());
 
         let metadata = || {
-            let mut batch = vec![
-                stored(role_record(&posit_role), 1),
-                stored(role_record(&ascertains_role), 2),
-                stored(role_record(&value_role), 3),
-            ];
+            let mut batch = builtin_role_records();
+            batch.push(stored(role_record(&value_role), 6));
             batch.extend(
                 codec_records()
                     .into_iter()
                     .enumerate()
-                    .map(|(index, record)| stored(record, 4 + index as u64)),
+                    .map(|(index, record)| stored(record, 7 + index as u64)),
             );
             batch
         };
 
         for record in [compact.clone(), raw.clone()] {
             let mut batch = metadata();
-            batch.push(stored(record, 7));
+            batch.push(stored(record, 10));
             let replayed = replay_logical([6; 16], &[batch]).unwrap();
             assert_eq!(replayed.posits[0].value, value);
         }
 
         let mut duplicate = metadata();
-        duplicate.push(stored(compact, 7));
-        duplicate.push(stored(raw, 8));
+        duplicate.push(stored(compact, 10));
+        duplicate.push(stored(raw, 11));
         let error = replay_logical([6; 16], &[duplicate]).unwrap_err();
         assert!(
             error.to_string().contains("duplicate Posit proposition"),
@@ -1892,8 +1891,6 @@ mod tests {
 
     #[test]
     fn logical_replay_rejects_dangling_roles_and_duplicate_propositions() {
-        let posit_role = Role::new(1, "posit".to_string(), true);
-        let ascertains_role = Role::new(2, "ascertains".to_string(), true);
         let missing_role = Arc::new(Role::new(9, "missing".to_string(), false));
         let appearance = Arc::new(Appearance::new(42, missing_role));
         let appearance_set = Arc::new(AppearanceSet::new(vec![appearance]).unwrap());
@@ -1904,34 +1901,33 @@ mod tests {
             value,
             Time::new_date_from("2024-05-06").unwrap(),
         );
-        let mut base = vec![
-            stored(role_record(&posit_role), 1),
-            stored(role_record(&ascertains_role), 2),
-        ];
+        let mut base = builtin_role_records();
         base.extend(
             codec_records()
                 .into_iter()
                 .enumerate()
-                .map(|(index, record)| stored(record, 3 + index as u64)),
+                .map(|(index, record)| stored(record, 6 + index as u64)),
         );
         let mut dangling = base.clone();
-        dangling.push(stored(posit_record(&posit).unwrap(), 6));
+        dangling.push(stored(posit_record(&posit).unwrap(), 9));
         let error = replay_logical([8; 16], &[dangling]).unwrap_err();
         assert!(error.to_string().contains("unknown Role"), "{error}");
 
         let missing_role_record = Role::new(9, "missing".to_string(), false);
         let mut duplicate = base;
-        duplicate.push(stored(role_record(&missing_role_record), 6));
-        duplicate.push(stored(posit_record(&posit).unwrap(), 7));
+        duplicate.push(stored(role_record(&missing_role_record), 9));
+        duplicate.push(stored(posit_record(&posit).unwrap(), 10));
         let mut second = posit_record(&posit).unwrap();
         second.payload[0..8].copy_from_slice(&101u64.to_le_bytes());
-        duplicate.push(stored(second, 8));
+        duplicate.push(stored(second, 11));
         let error = replay_logical([8; 16], &[duplicate]).unwrap_err();
         assert!(
             error.to_string().contains("duplicate Posit proposition"),
             "{error}"
         );
 
+        let posit_role = Role::new(1, "posit".to_string(), true);
+        let ascertains_role = Role::new(2, "ascertains".to_string(), true);
         let mut duplicate_role = vec![
             stored(role_record(&posit_role), 1),
             stored(role_record(&posit_role), 2),
@@ -1949,19 +1945,14 @@ mod tests {
 
     #[test]
     fn logical_replay_rejects_unknown_required_codecs() {
-        let posit_role = Role::new(1, "posit".to_string(), true);
-        let ascertains_role = Role::new(2, "ascertains".to_string(), true);
         let mut codecs = codec_records();
         codecs[0].payload[2..4].copy_from_slice(&2u16.to_le_bytes());
-        let mut batch = vec![
-            stored(role_record(&posit_role), 1),
-            stored(role_record(&ascertains_role), 2),
-        ];
+        let mut batch = builtin_role_records();
         batch.extend(
             codecs
                 .into_iter()
                 .enumerate()
-                .map(|(index, record)| stored(record, 3 + index as u64)),
+                .map(|(index, record)| stored(record, 6 + index as u64)),
         );
         let error = replay_logical([9; 16], &[batch]).unwrap_err();
         assert!(error.to_string().contains("unknown required codec"));

@@ -1,6 +1,6 @@
 //! Stable native inspection, backup, and logical-transfer tools.
 
-use crate::construct::{ASCERTAINS_ROLE_ID, POSIT_ROLE_ID, Thing};
+use crate::construct::{BUILTIN_ROLES, Thing};
 use crate::datatype::{Time, TimeType};
 use crate::error::{DatabaseError, Result};
 use crate::literal::{LiteralFamily, LiteralValue};
@@ -496,7 +496,7 @@ fn validate_imported(roles: &[ReplayedRole], posits: &[ReplayedPosit]) -> Result
             return data_error("logical export contains duplicate Role identity or name");
         }
     }
-    for (identity, name) in [(POSIT_ROLE_ID, "posit"), (ASCERTAINS_ROLE_ID, "ascertains")] {
+    for (identity, name) in BUILTIN_ROLES {
         if !roles
             .iter()
             .any(|role| role.identity == identity && role.name == name && role.reserved)
@@ -561,11 +561,12 @@ fn build_identity_remap(
         }
     }
 
-    let mut used = HashSet::from([POSIT_ROLE_ID, ASCERTAINS_ROLE_ID]);
+    let mut used = HashSet::from(BUILTIN_ROLES.map(|(identity, _)| identity));
     let mut map = HashMap::with_capacity(foreign.len());
-    map.insert(POSIT_ROLE_ID, POSIT_ROLE_ID);
-    map.insert(ASCERTAINS_ROLE_ID, ASCERTAINS_ROLE_ID);
-    let mut next = 3u64;
+    for (identity, _) in BUILTIN_ROLES {
+        map.insert(identity, identity);
+    }
+    let mut next = 6u64;
     for &source in &foreign {
         if map.contains_key(&source) {
             continue;

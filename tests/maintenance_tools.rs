@@ -90,7 +90,7 @@ fn logical_export_import_is_lossless_and_remaps_every_non_builtin_identity() {
 
     let source_inspection = inspect_store(&source).unwrap();
     let export_report = export_store(&source, &export).unwrap();
-    assert_eq!(export_report.roles, 3);
+    assert_eq!(export_report.roles, 6);
     assert_eq!(export_report.posits, 6);
 
     let import_report = import_store(&export, &destination, &remap).unwrap();
@@ -113,7 +113,7 @@ fn logical_export_import_is_lossless_and_remaps_every_non_builtin_identity() {
             destination_identities.insert(destination_local),
             "identity remapping produced a destination collision"
         );
-        if !matches!(source_local, 1 | 2) {
+        if !matches!(source_local, 1..=5) {
             assert_ne!(source_local, destination_local);
         }
         assert_eq!(

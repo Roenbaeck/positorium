@@ -48,8 +48,27 @@ return ?case, ?status, ?changed, ?source, ?certainty, ?asserted;
 
 This is a manual assertion join. Ordinary `as of` never follows assertion
 posits implicitly, chooses a preferred source, combines certainty, or treats a
-negative certainty as deletion. The planned `in effect T, t` operator selects
-source-local effective assertions explicitly and still does not choose truth.
+negative certainty as deletion. `in effect T, t` selects source-local effective
+assertions explicitly and still does not choose truth:
+
+```traqula
+add role status, source;
+add posit +claim [{(+case, status)}, "open", '2024-03-01'];
+add posit [{(+registry, source)}, "Registry A", @NOW];
+add posit [{(claim, posit), (registry, ascertains)}, 75%, @NOW];
+
+search ?claim = [{(?case, status)}, ?status, ?changed]
+  in effect @NOW, @NOW
+  via ?assertion = [
+    {(?claim, posit), (?source, ascertains)}, ?certainty, ?asserted
+  ]
+return ?case, ?status, ?source, ?certainty, ?asserted;
+```
+
+The first cutoff applies to assertion time and the second to the target posit's
+appearance time. A later zero-certainty assertion by the same source retracts
+that exact target posit. Omit `via` when provenance columns are not needed; bag
+multiplicity by effective source is still preserved.
 
 ## Classification without hidden lifecycle semantics
 

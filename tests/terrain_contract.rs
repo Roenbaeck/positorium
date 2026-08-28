@@ -129,7 +129,7 @@ fn profiles_and_isopleths_use_exact_distinct_support() {
         )
         .unwrap();
     let report = report_at(&database, date("2025-01-01"));
-    assert_eq!(report.database.roles, 7, "unused and built-in Roles count");
+    assert_eq!(report.database.roles, 10, "unused and built-in Roles count");
     assert_eq!(report.frames.current.stats.roles, 4);
     assert_eq!(
         report
@@ -373,7 +373,7 @@ fn separate_query_interfaces_yield_only_old_or_new_atomic_captures() {
         assert!(
             matches!(
                 (report.database.roles, report.database.posits),
-                (2, 0) | (3, 2)
+                (5, 0) | (6, 2)
             ),
             "Terrain observed a mixed writer state: {:?}",
             (report.database.roles, report.database.posits)

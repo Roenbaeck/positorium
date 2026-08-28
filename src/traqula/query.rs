@@ -1,5 +1,6 @@
 use super::*;
 use crate::construct::{Appearance, AppearanceSet, Posit, Role};
+use crate::effect::{EffectCut, EffectiveSlice};
 use pest::iterators::Pair;
 use roaring::RoaringTreemap;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -153,6 +154,14 @@ struct PositPattern {
     time: TimeSlot,
     cutoff: Option<Cutoff>,
     latest_matching: bool,
+    effect: Option<EffectPattern>,
+}
+
+#[derive(Debug, Clone)]
+struct EffectPattern {
+    assertion_cutoff: Cutoff,
+    appearance_cutoff: Cutoff,
+    via: Option<Box<PositPattern>>,
 }
 
 #[derive(Debug, Clone)]
@@ -191,6 +200,8 @@ struct StructuralMatch {
     binding: Binding,
 }
 
+type EffectCache = HashMap<EffectCut, Arc<EffectiveSlice>>;
+
 pub(super) fn execute(
     database: &Database,
     command: Pair<'_, Rule>,
@@ -201,6 +212,7 @@ pub(super) fn execute(
     execution.check()?;
     let query = parse_query(command, execution)?;
     let domains = validate_domains(&query)?;
+    let mut effect_cache = EffectCache::new();
 
     let mut bindings = Vec::new();
     for branch in &query.branches {
@@ -211,7 +223,12 @@ pub(super) fn execute(
             for binding in &branch_bindings {
                 execution.check()?;
                 joined.extend(evaluate_pattern(
-                    database, pattern, binding, &domains, execution,
+                    database,
+                    pattern,
+                    binding,
+                    &domains,
+                    execution,
+                    &mut effect_cache,
                 )?);
             }
             branch_bindings = joined;
@@ -226,7 +243,14 @@ pub(super) fn execute(
         let mut retained = Vec::with_capacity(bindings.len());
         for binding in bindings {
             execution.check()?;
-            if !block_has_match(absence, &binding, database, &domains, execution)? {
+            if !block_has_match(
+                absence,
+                &binding,
+                database,
+                &domains,
+                execution,
+                &mut effect_cache,
+            )? {
                 retained.push(binding);
             }
         }
@@ -399,12 +423,13 @@ fn parse_pattern(
     pattern: Pair<'_, Rule>,
     execution: &ExecutionContext,
 ) -> Result<PositPattern, DatabaseError> {
-    let resolved_now = &execution.metadata.resolved_now;
     let mut posit = None;
     let mut appearances = None;
     let mut value = None;
     let mut time = None;
     let mut cutoff = None;
+    let mut effect = None;
+    let mut via = None;
     let mut latest_matching = false;
     let mut legacy_syntax = false;
     for component in pattern.into_inner() {
@@ -433,36 +458,35 @@ fn parse_pattern(
                     .into_inner()
                     .next()
                     .ok_or_else(|| DatabaseError::Invariant("as-of clause has no cutoff".into()))?;
-                cutoff = Some(match component.as_rule() {
-                    Rule::recall | Rule::insert | Rule::query_variable => {
-                        legacy_syntax |= component.as_rule() != Rule::query_variable;
-                        Cutoff::Variable(variable_name(&component))
-                    }
-                    Rule::constant | Rule::time => Cutoff::Literal(
-                        parse_time_with_now(component.as_str(), resolved_now).ok_or_else(|| {
-                            DatabaseError::Execution(format!(
-                                "invalid as-of cutoff '{}'",
-                                component.as_str()
-                            ))
-                        })?,
-                    ),
-                    Rule::parameter => Cutoff::Literal(
-                        execution
-                            .parameter(component.as_str())?
-                            .time()
-                            .ok_or_else(|| {
-                                DatabaseError::Parameter(format!(
-                                    "{} is a literal parameter, not a time parameter",
-                                    component.as_str()
-                                ))
-                            })?,
-                    ),
-                    rule => {
-                        return Err(DatabaseError::Invariant(format!(
-                            "unexpected as-of cutoff {rule:?}"
-                        )));
-                    }
+                cutoff = Some(parse_cutoff(component, execution, "as-of")?);
+            }
+            Rule::in_effect_clause => {
+                let mut cuts = component.into_inner();
+                let assertion_cutoff = cuts.next().ok_or_else(|| {
+                    DatabaseError::Invariant("in-effect clause has no assertion cutoff".into())
+                })?;
+                let appearance_cutoff = cuts.next().ok_or_else(|| {
+                    DatabaseError::Invariant("in-effect clause has no appearance cutoff".into())
+                })?;
+                effect = Some(EffectPattern {
+                    assertion_cutoff: parse_cutoff(
+                        assertion_cutoff,
+                        execution,
+                        "in-effect assertion",
+                    )?,
+                    appearance_cutoff: parse_cutoff(
+                        appearance_cutoff,
+                        execution,
+                        "in-effect appearance",
+                    )?,
+                    via: None,
                 });
+            }
+            Rule::via_clause => {
+                let via_pattern = component.into_inner().next().ok_or_else(|| {
+                    DatabaseError::Invariant("via clause has no assertion pattern".into())
+                })?;
+                via = Some(parse_pattern(via_pattern, execution)?);
             }
             rule => {
                 return Err(DatabaseError::Invariant(format!(
@@ -483,7 +507,19 @@ fn parse_pattern(
     if legacy_syntax && !appearances.open {
         appearances.open = true;
     }
-    Ok(PositPattern {
+    if latest_matching && effect.is_some() {
+        return Err(DatabaseError::Execution(
+            "latest cannot be combined with in effect".into(),
+        ));
+    }
+    if let Some(via) = via {
+        let effect = effect.as_mut().ok_or_else(|| {
+            DatabaseError::Execution("via requires an in effect target pattern".into())
+        })?;
+        validate_via_pattern(&via)?;
+        effect.via = Some(Box::new(via));
+    }
+    let parsed = PositPattern {
         posit,
         appearances,
         value: value
@@ -492,7 +528,85 @@ fn parse_pattern(
             .ok_or_else(|| DatabaseError::Invariant("posit pattern has no time slot".into()))?,
         cutoff,
         latest_matching,
-    })
+        effect,
+    };
+    Ok(parsed)
+}
+
+fn parse_cutoff(
+    component: Pair<'_, Rule>,
+    execution: &ExecutionContext,
+    label: &str,
+) -> Result<Cutoff, DatabaseError> {
+    if component.as_rule() == Rule::effect_cut_operand {
+        return parse_cutoff(
+            component
+                .into_inner()
+                .next()
+                .ok_or_else(|| DatabaseError::Invariant(format!("{label} cutoff is empty")))?,
+            execution,
+            label,
+        );
+    }
+    match component.as_rule() {
+        Rule::query_variable => Ok(Cutoff::Variable(variable_name(&component))),
+        Rule::constant | Rule::time => Ok(Cutoff::Literal(
+            parse_time_with_now(component.as_str(), &execution.metadata.resolved_now).ok_or_else(
+                || {
+                    DatabaseError::Execution(format!(
+                        "invalid {label} cutoff '{}'",
+                        component.as_str()
+                    ))
+                },
+            )?,
+        )),
+        Rule::parameter => Ok(Cutoff::Literal(
+            execution
+                .parameter(component.as_str())?
+                .time()
+                .ok_or_else(|| {
+                    DatabaseError::Parameter(format!(
+                        "{} is a literal parameter, not a time parameter",
+                        component.as_str()
+                    ))
+                })?,
+        )),
+        rule => Err(DatabaseError::Invariant(format!(
+            "unexpected {label} cutoff {rule:?}"
+        ))),
+    }
+}
+
+fn validate_via_pattern(pattern: &PositPattern) -> Result<(), DatabaseError> {
+    if pattern.cutoff.is_some() || pattern.effect.is_some() || pattern.latest_matching {
+        return Err(DatabaseError::Execution(
+            "via must be a plain assertion-envelope pattern".into(),
+        ));
+    }
+    if pattern.appearances.any || pattern.appearances.open || pattern.appearances.members.len() != 2
+    {
+        return Err(DatabaseError::Execution(
+            "via requires the exact {posit, ascertains} assertion shape".into(),
+        ));
+    }
+    let mut roles = pattern
+        .appearances
+        .members
+        .iter()
+        .map(|member| match &member.role {
+            RoleSlot::Named(name) => Ok(name.as_str()),
+            _ => Err(DatabaseError::Execution(
+                "via assertion roles must be the literal roles posit and ascertains".into(),
+            )),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    roles.sort_unstable();
+    if roles != ["ascertains", "posit"] {
+        return Err(DatabaseError::Execution(
+            "via requires the exact {posit, ascertains} assertion shape".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn parse_appearance_set(pattern: Pair<'_, Rule>) -> Result<AppearanceSetPattern, DatabaseError> {
@@ -794,6 +908,13 @@ fn register_pattern(
     if let TimeSlot::Variable(name) | TimeSlot::LegacyVariable(name) = &pattern.time {
         register_domain(domains, name, Domain::Time)?;
     }
+    if let Some(via) = pattern
+        .effect
+        .as_ref()
+        .and_then(|effect| effect.via.as_deref())
+    {
+        register_pattern(via, domains)?;
+    }
     Ok(())
 }
 
@@ -852,6 +973,13 @@ impl PositPattern {
         if let TimeSlot::Variable(name) | TimeSlot::LegacyVariable(name) = &self.time {
             names.insert(name.as_str());
         }
+        if let Some(via) = self
+            .effect
+            .as_ref()
+            .and_then(|effect| effect.via.as_deref())
+        {
+            names.extend(via.introduced());
+        }
         names
     }
 
@@ -859,6 +987,17 @@ impl PositPattern {
         let mut names = HashSet::new();
         if let Some(Cutoff::Variable(name)) = &self.cutoff {
             names.insert(name.as_str());
+        }
+        if let Some(effect) = &self.effect {
+            if let Cutoff::Variable(name) = &effect.assertion_cutoff {
+                names.insert(name.as_str());
+            }
+            if let Cutoff::Variable(name) = &effect.appearance_cutoff {
+                names.insert(name.as_str());
+            }
+            if let Some(via) = effect.via.as_deref() {
+                names.extend(via.dependencies());
+            }
         }
         for member in &self.appearances.members {
             if let ThingSlot::OneOf(union) = &member.thing {
@@ -950,22 +1089,24 @@ fn evaluate_pattern(
     input: &Binding,
     domains: &HashMap<String, Domain>,
     execution: &ExecutionContext,
+    effect_cache: &mut EffectCache,
 ) -> Result<Vec<Binding>, DatabaseError> {
-    let cutoff = match &pattern.cutoff {
-        None => None,
-        Some(Cutoff::Literal(time)) => Some(time.clone()),
-        Some(Cutoff::Variable(name)) => match input.get(name) {
-            Some(BoundValue::Time(time)) => Some(time.clone()),
-            Some(other) => {
-                return Err(DatabaseError::VariableDomain {
-                    name: name.clone(),
-                    first: other.domain().label(),
-                    second: Domain::Time.label(),
-                });
-            }
-            None => return Err(DatabaseError::InvalidRecall(name.clone())),
-        },
-    };
+    if let Some(effect) = &pattern.effect {
+        return evaluate_effect_pattern(
+            database,
+            pattern,
+            effect,
+            input,
+            domains,
+            execution,
+            effect_cache,
+        );
+    }
+    let cutoff = pattern
+        .cutoff
+        .as_ref()
+        .map(|cutoff| resolve_cutoff(cutoff, input))
+        .transpose()?;
 
     let posits = candidate_posits(database, pattern, input, execution)?;
     let mut structural = Vec::new();
@@ -1011,6 +1152,80 @@ fn evaluate_pattern(
         matched
     };
     Ok(matched.into_iter().map(|matched| matched.binding).collect())
+}
+
+fn evaluate_effect_pattern(
+    database: &Database,
+    pattern: &PositPattern,
+    effect: &EffectPattern,
+    input: &Binding,
+    domains: &HashMap<String, Domain>,
+    execution: &ExecutionContext,
+    effect_cache: &mut EffectCache,
+) -> Result<Vec<Binding>, DatabaseError> {
+    let cut = EffectCut::new(
+        resolve_cutoff(&effect.assertion_cutoff, input)?,
+        resolve_cutoff(&effect.appearance_cutoff, input)?,
+    );
+    let slice = if let Some(slice) = effect_cache.get(&cut) {
+        Arc::clone(slice)
+    } else {
+        let resolved = Arc::new(crate::effect::resolve(
+            database,
+            cut.clone(),
+            crate::effect::EffectLimits::default(),
+            || execution.check(),
+        )?);
+        effect_cache.insert(cut, Arc::clone(&resolved));
+        resolved
+    };
+
+    let mut matched = Vec::new();
+    for evidence in slice.assertions() {
+        execution.check()?;
+        let target = evidence.target();
+        for binding in match_appearance_set(
+            &pattern.appearances,
+            &target.appearance_set(),
+            input,
+            domains,
+        )? {
+            let Some(binding) = match_fields(pattern, &target, binding)? else {
+                continue;
+            };
+            let Some(via) = effect.via.as_deref() else {
+                matched.push(binding);
+                continue;
+            };
+            let assertion = evidence.assertion();
+            for via_binding in match_appearance_set(
+                &via.appearances,
+                &assertion.appearance_set(),
+                &binding,
+                domains,
+            )? {
+                if let Some(via_binding) = match_fields(via, &assertion, via_binding)? {
+                    matched.push(via_binding);
+                }
+            }
+        }
+    }
+    Ok(matched)
+}
+
+fn resolve_cutoff(cutoff: &Cutoff, input: &Binding) -> Result<Time, DatabaseError> {
+    match cutoff {
+        Cutoff::Literal(time) => Ok(time.clone()),
+        Cutoff::Variable(name) => match input.get(name) {
+            Some(BoundValue::Time(time)) => Ok(time.clone()),
+            Some(other) => Err(DatabaseError::VariableDomain {
+                name: name.clone(),
+                first: other.domain().label(),
+                second: Domain::Time.label(),
+            }),
+            None => Err(DatabaseError::InvalidRecall(name.clone())),
+        },
+    }
 }
 
 fn candidate_posits(
@@ -1413,6 +1628,7 @@ fn block_has_match(
     database: &Database,
     domains: &HashMap<String, Domain>,
     execution: &ExecutionContext,
+    effect_cache: &mut EffectCache,
 ) -> Result<bool, DatabaseError> {
     let available: HashSet<_> = outer.0.keys().map(String::as_str).collect();
     let planned = plan_patterns(database, patterns, &available)?;
@@ -1422,7 +1638,12 @@ fn block_has_match(
         for binding in &bindings {
             execution.check()?;
             joined.extend(evaluate_pattern(
-                database, pattern, binding, domains, execution,
+                database,
+                pattern,
+                binding,
+                domains,
+                execution,
+                effect_cache,
             )?);
         }
         bindings = joined;
@@ -1607,6 +1828,7 @@ mod tests {
             time: TimeSlot::Wildcard,
             cutoff: None,
             latest_matching: false,
+            effect: None,
         }
     }
 
@@ -1674,6 +1896,7 @@ mod tests {
             time: TimeSlot::Wildcard,
             cutoff: None,
             latest_matching: false,
+            effect: None,
         };
         assert!(
             indexed_candidate_identities(&database, &unconstrained, &Binding::default())
