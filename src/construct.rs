@@ -101,6 +101,28 @@ pub(crate) const BUILTIN_ROLES: [(Thing, &str); 5] = [
     (SUBCLASS_ROLE_ID, "subclass"),
 ];
 
+/// One assertion envelope to create in the same durable batch as its target.
+/// `target_index` addresses the flattened target list supplied with the command.
+#[derive(Debug)]
+pub(crate) struct LiteralAssertionSpec {
+    pub target_index: usize,
+    pub positor: Thing,
+    pub certainty: LiteralValue,
+    pub time: Time,
+}
+
+#[derive(Debug)]
+pub(crate) struct CreatedLiteralPosits {
+    pub targets: Vec<Arc<Posit<LiteralValue>>>,
+    pub assertions: Vec<Arc<Posit<LiteralValue>>>,
+}
+
+#[derive(Debug)]
+enum PendingLiteralSource {
+    Existing(Arc<Posit<LiteralValue>>),
+    New(usize),
+}
+
 pub type ThingHasher = BuildHasherDefault<SeaHasher>;
 pub type OtherHasher = BuildHasherDefault<SeaHasher>;
 
@@ -1129,48 +1151,70 @@ impl Database {
         }
         Ok((kept_posit, previously_kept))
     }
-    pub(crate) fn create_literal_posits(
+    /// Create target posits and assertion envelopes in one persistence batch.
+    ///
+    /// Assertions refer to target list positions rather than provisional Thing
+    /// identities, allowing an already-canonical target posit to be reused
+    /// without sacrificing atomicity.
+    pub(crate) fn create_literal_posits_with_assertions(
         &self,
-        posits: Vec<(Arc<AppearanceSet>, LiteralValue, Time)>,
-    ) -> Result<Vec<Arc<Posit<LiteralValue>>>, DatabaseError> {
-        enum Source {
-            Existing(Arc<Posit<LiteralValue>>),
-            New(usize),
+        targets: Vec<(Arc<AppearanceSet>, LiteralValue, Time)>,
+        assertions: Vec<LiteralAssertionSpec>,
+    ) -> Result<CreatedLiteralPosits, DatabaseError> {
+        if let Some(spec) = assertions
+            .iter()
+            .find(|spec| spec.target_index >= targets.len())
+        {
+            return Err(DatabaseError::Invariant(format!(
+                "assertion target index {} is outside {} targets",
+                spec.target_index,
+                targets.len()
+            )));
+        }
+        if let Some(spec) = assertions
+            .iter()
+            .find(|spec| spec.certainty.family() != crate::literal::LiteralFamily::Certainty)
+        {
+            return Err(DatabaseError::Execution(format!(
+                "assertion certainty must be a percent literal, found {}",
+                spec.certainty.token()
+            )));
         }
 
         let mut prepared: Vec<Arc<Posit<LiteralValue>>> = Vec::new();
-        let mut sources = Vec::with_capacity(posits.len());
-        for (appearance_set, value, time) in posits {
-            let identity = self
-                .thing_generator
+        let target_sources = self.stage_literal_posits(targets, &mut prepared)?;
+        let staged_targets = Self::resolve_pending_literal_sources(&target_sources, &prepared);
+
+        let (posit_role, ascertains_role) = {
+            let keeper = self
+                .role_keeper
                 .lock()
-                .map_err(|error| DatabaseError::Lock(error.to_string()))?
-                .generate();
-            let candidate = Arc::new(Posit::new(identity, appearance_set, value, time));
-            if let Some(existing) = self
-                .posit_keeper
-                .lock()
-                .map_err(|error| DatabaseError::Lock(error.to_string()))?
-                .existing(&candidate)
-            {
-                self.thing_generator
-                    .lock()
-                    .map_err(|error| DatabaseError::Lock(error.to_string()))?
-                    .release(identity);
-                sources.push(Source::Existing(existing));
-            } else if let Some(index) = prepared.iter().position(|existing| existing == &candidate)
-            {
-                self.thing_generator
-                    .lock()
-                    .map_err(|error| DatabaseError::Lock(error.to_string()))?
-                    .release(identity);
-                sources.push(Source::New(index));
-            } else {
-                let index = prepared.len();
-                prepared.push(candidate);
-                sources.push(Source::New(index));
-            }
+                .map_err(|error| DatabaseError::Lock(error.to_string()))?;
+            let posit = keeper
+                .lookup(&POSIT_ROLE_ID)
+                .ok_or_else(|| DatabaseError::Invariant("built-in posit role is missing".into()))?;
+            let ascertains = keeper.lookup(&ASCERTAINS_ROLE_ID).ok_or_else(|| {
+                DatabaseError::Invariant("built-in ascertains role is missing".into())
+            })?;
+            (posit, ascertains)
+        };
+        let mut assertion_posits = Vec::with_capacity(assertions.len());
+        for spec in assertions {
+            let target = staged_targets.get(spec.target_index).ok_or_else(|| {
+                DatabaseError::Invariant("validated assertion target disappeared".into())
+            })?;
+            let target_appearance = self
+                .create_appearance(target.posit(), Arc::clone(&posit_role))?
+                .0;
+            let source_appearance = self
+                .create_appearance(spec.positor, Arc::clone(&ascertains_role))?
+                .0;
+            let appearance_set = self
+                .create_appearance_set(vec![target_appearance, source_appearance])?
+                .0;
+            assertion_posits.push((appearance_set, spec.certainty, spec.time));
         }
+        let assertion_sources = self.stage_literal_posits(assertion_posits, &mut prepared)?;
 
         #[cfg(feature = "persistence")]
         if !prepared.is_empty() {
@@ -1202,13 +1246,63 @@ impl Database {
                 Ok(posit)
             })
             .collect::<Result<Vec<_>, DatabaseError>>()?;
-        Ok(sources
-            .into_iter()
+        Ok(CreatedLiteralPosits {
+            targets: Self::resolve_pending_literal_sources(&target_sources, &kept),
+            assertions: Self::resolve_pending_literal_sources(&assertion_sources, &kept),
+        })
+    }
+
+    fn stage_literal_posits(
+        &self,
+        posits: Vec<(Arc<AppearanceSet>, LiteralValue, Time)>,
+        prepared: &mut Vec<Arc<Posit<LiteralValue>>>,
+    ) -> Result<Vec<PendingLiteralSource>, DatabaseError> {
+        let mut sources = Vec::with_capacity(posits.len());
+        for (appearance_set, value, time) in posits {
+            let identity = self
+                .thing_generator
+                .lock()
+                .map_err(|error| DatabaseError::Lock(error.to_string()))?
+                .generate();
+            let candidate = Arc::new(Posit::new(identity, appearance_set, value, time));
+            if let Some(existing) = self
+                .posit_keeper
+                .lock()
+                .map_err(|error| DatabaseError::Lock(error.to_string()))?
+                .existing(&candidate)
+            {
+                self.thing_generator
+                    .lock()
+                    .map_err(|error| DatabaseError::Lock(error.to_string()))?
+                    .release(identity);
+                sources.push(PendingLiteralSource::Existing(existing));
+            } else if let Some(index) = prepared.iter().position(|existing| existing == &candidate)
+            {
+                self.thing_generator
+                    .lock()
+                    .map_err(|error| DatabaseError::Lock(error.to_string()))?
+                    .release(identity);
+                sources.push(PendingLiteralSource::New(index));
+            } else {
+                let index = prepared.len();
+                prepared.push(candidate);
+                sources.push(PendingLiteralSource::New(index));
+            }
+        }
+        Ok(sources)
+    }
+
+    fn resolve_pending_literal_sources(
+        sources: &[PendingLiteralSource],
+        prepared_or_kept: &[Arc<Posit<LiteralValue>>],
+    ) -> Vec<Arc<Posit<LiteralValue>>> {
+        sources
+            .iter()
             .map(|source| match source {
-                Source::Existing(posit) => posit,
-                Source::New(index) => Arc::clone(&kept[index]),
+                PendingLiteralSource::Existing(posit) => Arc::clone(posit),
+                PendingLiteralSource::New(index) => Arc::clone(&prepared_or_kept[*index]),
             })
-            .collect())
+            .collect()
     }
 }
 
@@ -1250,6 +1344,83 @@ mod append_store_tests {
         assert_eq!(restored.posit_keeper.lock().unwrap().len(), 2);
         drop(restored);
         let _ = std::fs::remove_dir_all(path);
+    }
+
+    #[test]
+    fn asserted_target_and_envelope_share_one_durable_batch() {
+        let path = std::env::temp_dir().join(format!(
+            "positorium-assertion-batch-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let database =
+            Database::new(PersistenceMode::File(path.to_string_lossy().into_owned())).unwrap();
+        Engine::new(&database)
+            .execute_collect(
+                "add role status; add posit [{(+case, status)}, \"open\", @NOW] \
+                 and assert by +source with 100% at @NOW;",
+            )
+            .unwrap();
+
+        let mut store = database.store.lock().unwrap();
+        let batches = store.as_mut().unwrap().committed_batches().unwrap();
+        assert_eq!(
+            batches.len(),
+            3,
+            "bootstrap, role, and compound posit command"
+        );
+        assert_eq!(batches[2].len(), 2, "target and assertion commit together");
+        drop(store);
+        drop(database);
+
+        let restored =
+            Database::new(PersistenceMode::File(path.to_string_lossy().into_owned())).unwrap();
+        assert_eq!(restored.posit_keeper.lock().unwrap().len(), 2);
+        drop(restored);
+        let _ = std::fs::remove_dir_all(path);
+    }
+
+    #[test]
+    fn failed_asserted_batch_publishes_neither_target_nor_assertion() {
+        for failure in [InjectedFailure::LogWrite, InjectedFailure::ManifestCommit] {
+            let path = std::env::temp_dir().join(format!(
+                "positorium-failed-assertion-batch-{failure:?}-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            let database =
+                Database::new(PersistenceMode::File(path.to_string_lossy().into_owned())).unwrap();
+            Engine::new(&database).execute("add role status;").unwrap();
+            database
+                .store
+                .lock()
+                .unwrap()
+                .as_mut()
+                .unwrap()
+                .inject_failure(failure);
+
+            let error = Engine::new(&database)
+                .execute(
+                    "add posit [{(+case, status)}, \"open\", @NOW] \
+                     and assert by +source with 100% at @NOW;",
+                )
+                .unwrap_err();
+            assert!(error.to_string().contains("injected"), "{error}");
+            assert_eq!(database.posit_keeper.lock().unwrap().len(), 0);
+            drop(database);
+
+            let restored =
+                Database::new(PersistenceMode::File(path.to_string_lossy().into_owned())).unwrap();
+            assert_eq!(restored.posit_keeper.lock().unwrap().len(), 0);
+            drop(restored);
+            let _ = std::fs::remove_dir_all(path);
+        }
     }
 
     #[test]

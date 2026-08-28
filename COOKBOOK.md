@@ -37,9 +37,9 @@ assertion is an ordinary posit that refers to another posit's identity:
 
 ```traqula
 add role status, source;
-add posit +claim [{(+case, status)}, "open", '2024-03-01'];
 add posit [{(+registry, source)}, "Registry A", @NOW];
-add posit [{(claim, posit), (registry, ascertains)}, 75%, @NOW];
+add posit +claim [{(+case, status)}, "open", '2024-03-01']
+  and assert by registry with 75% at @NOW;
 
 search ?claim = [{(?case, status), ...}, ?status, ?changed],
        [{(?claim, posit), (?source, ascertains)}, ?certainty, ?asserted]
@@ -53,9 +53,9 @@ assertions explicitly and still does not choose truth:
 
 ```traqula
 add role status, source;
-add posit +claim [{(+case, status)}, "open", '2024-03-01'];
 add posit [{(+registry, source)}, "Registry A", @NOW];
-add posit [{(claim, posit), (registry, ascertains)}, 75%, @NOW];
+add posit +claim [{(+case, status)}, "open", '2024-03-01']
+  and assert by registry with 75% at @NOW;
 
 search ?claim = [{(?case, status)}, ?status, ?changed]
   in effect @NOW, @NOW
@@ -93,6 +93,22 @@ also choose source, certainty, temporal, and optional subclass-traversal policy;
 the database never infers those choices from the literal text.
 
 ## External identification without identity merging
+
+When an application has a stable external key, resolve its store-local Thing
+in every script and create it only on the first execution:
+
+```traqula
+add role registry_code;
+
+search [{(?registry, registry_code), ...}, "SE-CIVIL-REGISTRY", *]
+or add posit [{(+registry, registry_code)}, "SE-CIVIL-REGISTRY", @NOW];
+```
+
+The historical `*` search intentionally reuses the same identity regardless of
+the identifying posit's original appearance time. One or many matches bind the
+complete `registry` set; only zero matches runs the fallback. Add `in effect`
+only when absence under an explicit evidence policy is intended to create a new
+identity.
 
 Store-local Things are never destructively merged. Reify a proposed
 identification and each membership so competing proposals can coexist:

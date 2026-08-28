@@ -59,6 +59,10 @@ listed in `CONTRACTS.md`.
 ## Durability, failures, and shutdown
 
 Each semicolon-delimited `add role` or `add posit` command is one atomic batch.
+An `and assert` suffix persists its target and assertion envelopes in that same
+batch. A `search ... or add posit ...` command holds the script execution owner
+across search and fallback selection; when the fallback runs, its posits and
+optional assertions form one atomic batch.
 For a persistent store, success is returned only after the records and Commit
 frame are flushed, the replacement manifest is flushed and renamed, and the
 required directory entries are synchronized. A multi-posit command is all or

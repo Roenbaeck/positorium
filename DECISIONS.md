@@ -649,6 +649,11 @@ must be migrated with this decision.
 - Reasoning: Local query scope makes each search independently understandable and
   optimizable. Ordered mutation remains possible without preserving hidden query
   result state. Existing cross-search-retention tests must be migrated.
+- Implemented extension: the later `search ... or add posit ...` compound command
+  explicitly unifies same-name Thing and Posit binders across its search and add
+  branches into a script mutation binding. This does not make ordinary search
+  variables script-global and is the concrete identity-resolution workflow for
+  which D013 reserved an explicit mechanism.
 - Accepted on: 2026-08-26
 
 ### D014: Exact And Open Appearance-Set Matching
@@ -1023,6 +1028,10 @@ Script-level transactions are a post-beta addition behind explicit syntax.
   committed before a later failure remain committed.
 - Multi-posit `add posit` atomicity: Every role, Thing reference, and posit created
   by one command commits together or none of them do.
+- Compound mutation atomicity: `and assert` stores its target and assertion
+  envelopes in one durable batch. `search ... or add posit ...` holds the script
+  execution owner across lookup and fallback choice; a selected add branch and
+  its optional assertions are one durable batch.
 - Future transaction policy: Script-level atomicity is deferred to an explicit
   transaction construct after beta; it will not silently change default command
   semantics.

@@ -794,6 +794,16 @@ mod tests {
         assert_eq!(script_counts(script).unwrap(), (2, 0));
     }
 
+    #[test]
+    fn only_searches_with_return_create_result_sets() {
+        let script = r#"
+            search [{(?thing, label), ...}, "a", *]
+            or add posit [{(+thing, label)}, "a", @NOW];
+            search [{(?thing, label), ...}, ?value, *] return ?thing, ?value;
+        "#;
+        assert_eq!(script_counts(script).unwrap(), (2, 1));
+    }
+
     #[tokio::test]
     async fn validation_errors_keep_their_http_status() {
         let state = ServerState {

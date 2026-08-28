@@ -1,6 +1,8 @@
 <img src="./positorium.svg" width="333">
 <p/>
 
+[Open the Positorium web interface on GitHub Pages](https://roenbaeck.github.io/positorium/)
+
 Positorium is an experimental database engine based on Transitional Modeling, designed to capture conflicting, unreliable, and varying information over time. It blends ideas from relational, graph, columnar, and key–value stores.
 
 - [The Philosophical Foundations of Positorium](THEORY.md)
@@ -20,7 +22,12 @@ This makes Positorium well‑suited for master data management, regulated domain
 
 ## Traqula DSL
 
-Traqula is Positorium's domain-specific language for defining roles, positing facts with time, and querying data through pattern matching. Query variables are lexical to one `search`; allocation bindings remain available only to later mutation commands in the same script.
+Traqula is Positorium's domain-specific language for defining roles, positing
+facts with time, and querying data through pattern matching. `and assert`
+records a target and its evidence envelope atomically. `search ... or add
+posit ...` resolves an existing identity or creates it when absent, then makes
+the resulting identity set available to later mutations in that script.
+Ordinary query variables remain lexical to one `search`.
 
 For the complete language reference, see [TRAQULA.md](TRAQULA.md). Worked
 patterns for correction, disagreement, assertions, external identification,

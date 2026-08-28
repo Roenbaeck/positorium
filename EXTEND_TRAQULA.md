@@ -185,13 +185,15 @@ The classification roles are bootstrapped, so a script does not add them.
 User-defined descriptive roles such as `name` remain ordinary catalog entries.
 The example values are merely one application's vocabulary.
 
-### No classification mutation sugar initially
+### Generic assertion sugar, but no classification-specific mutation
 
-Do not add `add class`, `classify`, or `add subclass` commands in the first
-implementation. Such syntax would either have to invent a lifecycle value or
-hide a policy choice. Raw `add posit` is already concise and makes the stored
-value explicit. A later client macro may require the caller to provide the value
-and still expand mechanically to `add posit`.
+Do not add `add class`, `classify`, or `add subclass` commands. Such syntax
+would either have to invent a lifecycle value or hide a policy choice. The
+generic `and assert` suffix is available because it requires the caller to
+provide the target posit's complete structure and value, plus the assertion
+source, certainty, and time. It expands mechanically into an ordinary target
+posit and ordinary `{posit, ascertains}` assertion posit in one atomic batch;
+it gives classification values no special meaning.
 
 ### Information-in-effect query operator
 

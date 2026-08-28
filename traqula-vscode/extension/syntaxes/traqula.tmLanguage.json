@@ -50,7 +50,7 @@
       "patterns": [
         {
           "name": "keyword.control.traqula",
-          "match": "\\b(add|role|posit|search|return|where|as|of|in|effect|via|limit|and|latest|union|not|exists|distinct|order|by|asc|desc)\\b"
+          "match": "\\b(add|role|posit|search|return|where|as|of|in|effect|via|limit|and|assert|or|with|at|latest|union|not|exists|distinct|order|by|asc|desc)\\b"
         }
       ]
     },

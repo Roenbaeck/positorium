@@ -46,7 +46,7 @@
 //! NOTE: The search functionality is still evolving; many captured variables
 //! are currently parsed but not yet materialized into final query outputs.
 //! Debug logging is gated behind `cfg(debug_assertions)` where appropriate.
-use crate::construct::{Database, OtherHasher, Thing};
+use crate::construct::{CreatedLiteralPosits, Database, LiteralAssertionSpec, OtherHasher, Thing};
 use crate::datatype::Time;
 use crate::error::DatabaseError;
 use crate::literal::{LiteralFamily, LiteralValue};
@@ -377,6 +377,200 @@ impl ResultSet {
     }
 }
 
+fn result_set_identities(result_set: &ResultSet) -> Result<Vec<Thing>, DatabaseError> {
+    match result_set.mode {
+        ResultSetMode::Empty => Ok(Vec::new()),
+        ResultSetMode::Thing => Ok(vec![result_set.thing.ok_or_else(|| {
+            DatabaseError::Invariant("single result set has no identity".into())
+        })?]),
+        ResultSetMode::Multi => Ok(result_set
+            .multi
+            .as_ref()
+            .ok_or_else(|| DatabaseError::Invariant("multi result set has no bitmap".into()))?
+            .iter()
+            .collect()),
+    }
+}
+
+fn bind_identity(variables: &mut Variables, name: String, identity: Thing) {
+    variables.entry(name).or_default().insert(identity);
+}
+
+fn nested_mutation_variable(component: Pair<'_, Rule>) -> Result<String, DatabaseError> {
+    let mut current = component;
+    while current.as_rule() != Rule::variable {
+        current = current.into_inner().next().ok_or_else(|| {
+            DatabaseError::Invariant("mutation binder contains no variable".into())
+        })?;
+    }
+    Ok(current.as_str().to_string())
+}
+
+fn record_allocation_domain(
+    domains: &mut HashMap<String, query::IdentityDomain, OtherHasher>,
+    name: String,
+    domain: query::IdentityDomain,
+) -> Result<(), DatabaseError> {
+    match domains.entry(name.clone()) {
+        Entry::Vacant(entry) => {
+            entry.insert(domain);
+            Ok(())
+        }
+        Entry::Occupied(entry) if *entry.get() == domain => Ok(()),
+        Entry::Occupied(entry) => Err(DatabaseError::VariableDomain {
+            name,
+            first: match entry.get() {
+                query::IdentityDomain::Thing => "Thing",
+                query::IdentityDomain::Posit => "Posit",
+            },
+            second: match domain {
+                query::IdentityDomain::Thing => "Thing",
+                query::IdentityDomain::Posit => "Posit",
+            },
+        }),
+    }
+}
+
+fn fallback_allocation_domains(
+    fallback: &Pair<'_, Rule>,
+) -> Result<HashMap<String, query::IdentityDomain, OtherHasher>, DatabaseError> {
+    let mut domains = HashMap::default();
+    for structure in fallback.clone().into_inner() {
+        match structure.as_rule() {
+            Rule::posit => {
+                for component in structure.into_inner() {
+                    match component.as_rule() {
+                        Rule::insert => record_allocation_domain(
+                            &mut domains,
+                            nested_mutation_variable(component)?,
+                            query::IdentityDomain::Posit,
+                        )?,
+                        Rule::appearance_set => {
+                            for appearance in component.into_inner() {
+                                for member in appearance.into_inner() {
+                                    if member.as_rule() == Rule::insert {
+                                        record_allocation_domain(
+                                            &mut domains,
+                                            nested_mutation_variable(member)?,
+                                            query::IdentityDomain::Thing,
+                                        )?;
+                                    }
+                                }
+                            }
+                        }
+                        Rule::appearing_value | Rule::appearance_time => {}
+                        rule => {
+                            return Err(DatabaseError::Invariant(format!(
+                                "unexpected fallback posit component {rule:?}"
+                            )));
+                        }
+                    }
+                }
+            }
+            Rule::and_assert_clause => {
+                for component in structure.into_inner() {
+                    match component.as_rule() {
+                        Rule::assertion_binding => record_allocation_domain(
+                            &mut domains,
+                            nested_mutation_variable(component)?,
+                            query::IdentityDomain::Posit,
+                        )?,
+                        Rule::assertion_source => {
+                            let source =
+                                component.clone().into_inner().next().ok_or_else(|| {
+                                    DatabaseError::Invariant("assertion source is empty".into())
+                                })?;
+                            if source.as_rule() == Rule::insert {
+                                record_allocation_domain(
+                                    &mut domains,
+                                    nested_mutation_variable(component)?,
+                                    query::IdentityDomain::Thing,
+                                )?;
+                            }
+                        }
+                        Rule::assertion_certainty | Rule::assertion_time => {}
+                        rule => {
+                            return Err(DatabaseError::Invariant(format!(
+                                "unexpected fallback assertion component {rule:?}"
+                            )));
+                        }
+                    }
+                }
+            }
+            rule => {
+                return Err(DatabaseError::Invariant(format!(
+                    "unexpected or-add component {rule:?}"
+                )));
+            }
+        }
+    }
+    Ok(domains)
+}
+
+fn emit_fallback_rows(
+    variables: &Variables,
+    domains: &HashMap<String, query::IdentityDomain, OtherHasher>,
+    columns: &[String],
+    sink: &mut dyn RowSink,
+    execution: &ExecutionContext,
+) -> Result<(), DatabaseError> {
+    let mut unique_names = Vec::<&str>::new();
+    for column in columns {
+        if !unique_names.contains(&column.as_str()) {
+            unique_names.push(column);
+        }
+    }
+    let identities = unique_names
+        .iter()
+        .map(|name| {
+            variables
+                .get(*name)
+                .ok_or_else(|| DatabaseError::UnknownVariable((*name).to_string()))
+                .and_then(result_set_identities)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if identities.iter().any(Vec::is_empty) {
+        return Err(DatabaseError::Execution(
+            "or-add fallback produced an empty returned binding".into(),
+        ));
+    }
+    let identity_slices = identities.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    let mut emit_error = None;
+    let mut stopped = false;
+    for_each_cartesian_indices(&identity_slices, |indices| {
+        if stopped || emit_error.is_some() {
+            return;
+        }
+        if let Err(error) = execution.check() {
+            emit_error = Some(error);
+            return;
+        }
+        let mut row = Vec::with_capacity(columns.len());
+        for column in columns {
+            let unique_index = unique_names
+                .iter()
+                .position(|name| *name == column)
+                .expect("return column was used to construct unique names");
+            let identity = identities[unique_index][indices[unique_index]];
+            let kind = match domains.get(column) {
+                Some(query::IdentityDomain::Thing) => ResultCellKind::Thing,
+                Some(query::IdentityDomain::Posit) => ResultCellKind::Posit,
+                None => {
+                    emit_error = Some(DatabaseError::UnknownVariable(column.clone()));
+                    return;
+                }
+            };
+            row.push(ResultCell::new(kind, identity.to_string()));
+        }
+        if let SinkFlow::Stop = sink.push(row) {
+            // The sink controls presentation only; the atomic mutation has
+            // already completed and no further rows need to be materialized.
+            stopped = true;
+        }
+    });
+    emit_error.map_or(Ok(()), Err)
+}
+
 // Operator-assign support to preserve public API used by benches
 impl std::ops::BitAndAssign<&ResultSet> for ResultSet {
     fn bitand_assign(&mut self, rhs: &ResultSet) {
@@ -600,7 +794,16 @@ struct TraqulaParser;
 
 mod query;
 
-/// Return the number of top-level commands and searches in a validated script.
+fn search_has_return(search: &Pair<'_, Rule>) -> bool {
+    search
+        .clone()
+        .into_inner()
+        .any(|clause| clause.as_rule() == Rule::return_clause)
+}
+
+/// Return the number of top-level commands and row-producing searches in a
+/// validated script. A search without `return` is an internal binding/control
+/// operation and does not create a result set.
 #[cfg(feature = "server")]
 pub(crate) fn script_counts(traqula: &str) -> Result<(usize, usize), DatabaseError> {
     let pairs = TraqulaParser::parse(Rule::traqula, traqula.trim()).map_err(|error| {
@@ -616,7 +819,7 @@ pub(crate) fn script_counts(traqula: &str) -> Result<(usize, usize), DatabaseErr
         if pair.as_rule() != Rule::EOI {
             commands += 1;
         }
-        if pair.as_rule() == Rule::search {
+        if pair.as_rule() == Rule::search && search_has_return(&pair) {
             searches += 1;
         }
     }
@@ -953,7 +1156,7 @@ impl<'en> Engine<'en> {
         };
         let search_count = pairs
             .clone()
-            .filter(|p| p.as_rule() == Rule::search)
+            .filter(|p| p.as_rule() == Rule::search && search_has_return(p))
             .count();
         if search_count != 1 {
             return Err(crate::error::DatabaseError::Execution(format!(
@@ -975,7 +1178,6 @@ impl<'en> Engine<'en> {
                     &execution,
                 )?,
                 Rule::search => {
-                    let mut search_variables: Variables = Variables::default();
                     // limit extraction
                     let mut limit = None;
                     let cloned = command.clone();
@@ -988,7 +1190,6 @@ impl<'en> Engine<'en> {
                             }
                         }
                     }
-                    let mut err = None;
                     struct CountingSink<'a, T: RowSink> {
                         inner: &'a mut T,
                         limit: Option<usize>,
@@ -1021,17 +1222,13 @@ impl<'en> Engine<'en> {
                         count: 0,
                         limited: false,
                     };
-                    self.search(
+                    self.execute_search_command(
                         command,
-                        &mut search_variables,
+                        &mut variables,
                         &mut wrapper,
                         &mut return_columns,
-                        &mut err,
                         &execution,
-                    );
-                    if let Some(e) = err {
-                        return Err(e);
-                    }
+                    )?;
                     total_rows = wrapper.count;
                     limited = wrapper.limited;
                 }
@@ -1074,6 +1271,9 @@ impl<'en> Engine<'en> {
     ) -> Result<(), DatabaseError> {
         let mut pending = Vec::new();
         let mut result_bindings = Vec::new();
+        let mut assertion_specs = Vec::new();
+        let mut assertion_bindings = Vec::new();
+        let mut last_target_range: Option<std::ops::Range<usize>> = None;
         for structure in command.into_inner() {
             execution.check()?;
             let mut variable: Option<String> = None;
@@ -1346,7 +1546,166 @@ impl<'en> Engine<'en> {
                     if end > start {
                         info!(target: "positorium::traqula", event="add_posit_queued", count=end - start, roles=%roles_ord.join(","), value_family=?value.family(), "posits queued for command commit");
                     }
-                    result_bindings.push((variable.take(), start..end));
+                    let range = start..end;
+                    last_target_range = Some(range.clone());
+                    result_bindings.push((variable.take(), range));
+                }
+                Rule::and_assert_clause => {
+                    let target_range = last_target_range.clone().ok_or_else(|| {
+                        DatabaseError::Invariant("and assert has no preceding target posit".into())
+                    })?;
+                    let mut assertion_variable = None;
+                    let mut source_variable = None;
+                    let mut source_allocates = false;
+                    let mut certainty = None;
+                    let mut assertion_time = None;
+                    for component in structure.into_inner() {
+                        match component.as_rule() {
+                            Rule::assertion_binding => {
+                                let insert = component.into_inner().next().ok_or_else(|| {
+                                    DatabaseError::Invariant(
+                                        "assertion binding contains no insertion".into(),
+                                    )
+                                })?;
+                                assertion_variable = Some(
+                                    insert
+                                        .into_inner()
+                                        .next()
+                                        .ok_or_else(|| {
+                                            DatabaseError::Invariant(
+                                                "assertion insertion has no variable".into(),
+                                            )
+                                        })?
+                                        .as_str()
+                                        .to_string(),
+                                );
+                            }
+                            Rule::assertion_source => {
+                                let source = component.into_inner().next().ok_or_else(|| {
+                                    DatabaseError::Invariant(
+                                        "assertion source contains no variable".into(),
+                                    )
+                                })?;
+                                source_allocates = source.as_rule() == Rule::insert;
+                                source_variable = Some(
+                                    source
+                                        .into_inner()
+                                        .next()
+                                        .ok_or_else(|| {
+                                            DatabaseError::Invariant(
+                                                "assertion source has no variable".into(),
+                                            )
+                                        })?
+                                        .as_str()
+                                        .to_string(),
+                                );
+                            }
+                            Rule::assertion_certainty => {
+                                let value = component.into_inner().next().ok_or_else(|| {
+                                    DatabaseError::Invariant("assertion certainty is empty".into())
+                                })?;
+                                certainty = Some(if value.as_rule() == Rule::parameter {
+                                    execution.parameter(value.as_str())?.literal()
+                                } else {
+                                    parse_lossless_literal(
+                                        value.as_rule(),
+                                        value.as_str(),
+                                        resolved_now,
+                                    )?
+                                });
+                            }
+                            Rule::assertion_time => {
+                                let time = component.into_inner().next().ok_or_else(|| {
+                                    DatabaseError::Invariant("assertion time is empty".into())
+                                })?;
+                                assertion_time = Some(match time.as_rule() {
+                                    Rule::parameter => execution
+                                        .parameter(time.as_str())?
+                                        .time()
+                                        .ok_or_else(|| {
+                                        DatabaseError::Parameter(format!(
+                                            "{} is a literal parameter, not a time parameter",
+                                            time.as_str()
+                                        ))
+                                    })?,
+                                    Rule::constant => {
+                                        parse_time_constant_with_now(time.as_str(), resolved_now)
+                                            .ok_or_else(|| {
+                                                DatabaseError::Execution(format!(
+                                                    "invalid assertion time {}",
+                                                    time.as_str()
+                                                ))
+                                            })?
+                                    }
+                                    Rule::time => parse_time_with_now(time.as_str(), resolved_now)
+                                        .ok_or_else(|| {
+                                            DatabaseError::Execution(format!(
+                                                "invalid assertion time {}",
+                                                time.as_str()
+                                            ))
+                                        })?,
+                                    rule => {
+                                        return Err(DatabaseError::Invariant(format!(
+                                            "unexpected assertion-time rule {rule:?}"
+                                        )));
+                                    }
+                                });
+                            }
+                            rule => {
+                                return Err(DatabaseError::Invariant(format!(
+                                    "unexpected and-assert component {rule:?}"
+                                )));
+                            }
+                        }
+                    }
+                    let source_variable = source_variable.ok_or_else(|| {
+                        DatabaseError::Invariant("and assert has no source variable".into())
+                    })?;
+                    if source_allocates {
+                        let source = self
+                            .database
+                            .thing_generator()
+                            .lock()
+                            .map_err(|error| DatabaseError::Lock(error.to_string()))?
+                            .generate();
+                        bind_identity(variables, source_variable.clone(), source);
+                    }
+                    let sources = variables.get(&source_variable).ok_or_else(|| {
+                        DatabaseError::InvalidRecall(format!(
+                            "assertion source '{source_variable}' is not bound"
+                        ))
+                    })?;
+                    let sources = result_set_identities(sources)?;
+                    if sources.is_empty() {
+                        return Err(DatabaseError::InvalidRecall(format!(
+                            "assertion source '{source_variable}' is empty"
+                        )));
+                    }
+                    let certainty = certainty.ok_or_else(|| {
+                        DatabaseError::Invariant("and assert has no certainty".into())
+                    })?;
+                    if certainty.family() != LiteralFamily::Certainty {
+                        return Err(DatabaseError::Execution(format!(
+                            "and assert requires a percent certainty, found {}",
+                            certainty.token()
+                        )));
+                    }
+                    let assertion_time = assertion_time.ok_or_else(|| {
+                        DatabaseError::Invariant("and assert has no assertion time".into())
+                    })?;
+                    let start = assertion_specs.len();
+                    for target_index in target_range {
+                        for source in &sources {
+                            assertion_specs.push(LiteralAssertionSpec {
+                                target_index,
+                                positor: *source,
+                                certainty: certainty.clone(),
+                                time: assertion_time.clone(),
+                            });
+                        }
+                    }
+                    let end = assertion_specs.len();
+                    assertion_bindings.push((assertion_variable, start..end));
                 }
                 rule => {
                     return Err(DatabaseError::Invariant(format!(
@@ -1355,7 +1714,12 @@ impl<'en> Engine<'en> {
                 }
             }
         }
-        let kept = self.database.create_literal_posits(pending)?;
+        let CreatedLiteralPosits {
+            targets: kept,
+            assertions: kept_assertions,
+        } = self
+            .database
+            .create_literal_posits_with_assertions(pending, assertion_specs)?;
         for (variable, range) in result_bindings {
             if let Some(variable) = variable {
                 match variables.entry(variable) {
@@ -1375,25 +1739,115 @@ impl<'en> Engine<'en> {
                 }
             }
         }
-        if !kept.is_empty() {
-            info!(target: "positorium::traqula", event="add_posit_commit", count=kept.len(), "posit command committed");
+        for (variable, range) in assertion_bindings {
+            if let Some(variable) = variable {
+                let result_set = variables.entry(variable).or_default();
+                for posit in &kept_assertions[range] {
+                    result_set.insert(posit.posit());
+                }
+            }
+        }
+        let committed = kept.len() + kept_assertions.len();
+        if committed > 0 {
+            info!(target: "positorium::traqula", event="add_posit_commit", count=committed, targets=kept.len(), assertions=kept_assertions.len(), "posit command committed");
         }
         Ok(())
     }
     fn search(
         &self,
         command: Pair<Rule>,
+        sink: &mut dyn RowSink,
+        return_columns: &mut Option<Vec<String>>,
+        execution: &ExecutionContext,
+    ) -> Result<query::SearchOutcome, DatabaseError> {
+        query::execute(self.database, command, sink, return_columns, execution)
+    }
+
+    fn execute_search_command(
+        &self,
+        command: Pair<Rule>,
         variables: &mut Variables,
         sink: &mut dyn RowSink,
         return_columns: &mut Option<Vec<String>>,
-        exec_error: &mut Option<crate::error::DatabaseError>,
         execution: &ExecutionContext,
-    ) {
-        let _ = variables;
-        if let Err(error) = query::execute(self.database, command, sink, return_columns, execution)
-        {
-            *exec_error = Some(error);
+    ) -> Result<query::SearchOutcome, DatabaseError> {
+        let fallback = command
+            .clone()
+            .into_inner()
+            .find(|clause| clause.as_rule() == Rule::or_add_clause);
+        let outcome = self.search(command, sink, return_columns, execution)?;
+        let Some(fallback) = fallback else {
+            return Ok(outcome);
+        };
+        let allocation_domains = fallback_allocation_domains(&fallback)?;
+        for (name, fallback_domain) in &allocation_domains {
+            let Some(search_domain) = outcome.identity_domains.get(name) else {
+                continue;
+            };
+            if search_domain != fallback_domain {
+                return Err(DatabaseError::VariableDomain {
+                    name: name.clone(),
+                    first: match search_domain {
+                        query::IdentityDomain::Thing => "Thing",
+                        query::IdentityDomain::Posit => "Posit",
+                    },
+                    second: match fallback_domain {
+                        query::IdentityDomain::Thing => "Thing",
+                        query::IdentityDomain::Posit => "Posit",
+                    },
+                });
+            }
         }
+        if outcome.matched_rows == 0 {
+            if outcome.has_return {
+                for column in return_columns.as_deref().unwrap_or_default() {
+                    if !allocation_domains.contains_key(column) {
+                        return Err(DatabaseError::Execution(format!(
+                            "or-add fallback cannot supply returned variable '?{column}'; bind '+{column}' in the add branch or omit return"
+                        )));
+                    }
+                }
+            }
+            self.add_posit(
+                fallback,
+                variables,
+                &execution.metadata.resolved_now,
+                execution,
+            )?;
+            if outcome.has_return {
+                emit_fallback_rows(
+                    variables,
+                    &allocation_domains,
+                    return_columns.as_deref().unwrap_or_default(),
+                    sink,
+                    execution,
+                )?;
+            }
+        } else {
+            for (name, domain) in &allocation_domains {
+                let Some(found) = outcome.identity_bindings.get(name) else {
+                    continue;
+                };
+                if found.domain != *domain {
+                    return Err(DatabaseError::VariableDomain {
+                        name: name.clone(),
+                        first: match found.domain {
+                            query::IdentityDomain::Thing => "Thing",
+                            query::IdentityDomain::Posit => "Posit",
+                        },
+                        second: match domain {
+                            query::IdentityDomain::Thing => "Thing",
+                            query::IdentityDomain::Posit => "Posit",
+                        },
+                    });
+                }
+                let values = result_set_identities(&found.values)?;
+                for identity in values {
+                    bind_identity(variables, name.clone(), identity);
+                }
+            }
+        }
+        Ok(outcome)
     }
 
     #[allow(dead_code)]
@@ -2920,8 +3374,6 @@ impl<'en> Engine<'en> {
                     self.add_posit(command, &mut variables, &metadata.resolved_now, &execution)?;
                 }
                 Rule::search => {
-                    let mut search_variables: Variables = Variables::default();
-                    search_count += 1;
                     // Extract per-search limit and install into sink (overwrite any prior; only meaningful when one search in script)
                     let limit = {
                         let mut l = None;
@@ -2938,17 +3390,15 @@ impl<'en> Engine<'en> {
                         l
                     };
                     collector.limit = execution.effective_limit(limit);
-                    let mut err = None;
-                    self.search(
+                    let outcome = self.execute_search_command(
                         command,
-                        &mut search_variables,
+                        &mut variables,
                         &mut collector,
                         &mut return_columns,
-                        &mut err,
                         &execution,
-                    );
-                    if let Some(e) = err {
-                        return Err(e);
+                    )?;
+                    if outcome.has_return {
+                        search_count += 1;
                     }
                 }
                 Rule::EOI => (),
@@ -3021,7 +3471,6 @@ impl<'en> Engine<'en> {
                     self.add_posit(command, &mut variables, &metadata.resolved_now, &execution)?;
                 }
                 Rule::search => {
-                    let mut search_variables: Variables = Variables::default();
                     struct LocalSink {
                         rows: Vec<Vec<ResultCell>>,
                         limit: Option<usize>,
@@ -3062,17 +3511,15 @@ impl<'en> Engine<'en> {
                     };
                     sink.limit = execution.effective_limit(query_limit);
                     let mut local_return_columns: Option<Vec<String>> = None;
-                    let mut err = None;
-                    self.search(
+                    let outcome = self.execute_search_command(
                         command,
-                        &mut search_variables,
+                        &mut variables,
                         &mut sink,
                         &mut local_return_columns,
-                        &mut err,
                         &execution,
-                    );
-                    if let Some(e) = err {
-                        return Err(e);
+                    )?;
+                    if !outcome.has_return {
+                        continue;
                     }
                     let cols = local_return_columns.unwrap_or_default();
                     let row_count = sink.rows.len();
@@ -3155,7 +3602,6 @@ impl<'en> Engine<'en> {
                     )?;
                 }
                 Rule::search => {
-                    let mut search_variables: Variables = Variables::default();
                     // Extract limit for this search
                     let search_text_full = command.as_str().trim().to_string();
                     let mut limit = None;
@@ -3230,17 +3676,15 @@ impl<'en> Engine<'en> {
                         limited: false,
                     };
                     let mut return_columns: Option<Vec<String>> = None; // ignored here beyond meta
-                    let mut err = None;
-                    self.search(
+                    let outcome = self.execute_search_command(
                         command,
-                        &mut search_variables,
+                        &mut variables,
                         &mut sink,
                         &mut return_columns,
-                        &mut err,
                         &execution,
-                    );
-                    if let Some(e) = err {
-                        return Err(e);
+                    )?;
+                    if !outcome.has_return {
+                        continue;
                     }
                     let finished_count = sink.count;
                     let limited_flag = sink.limited; // drop sink here
@@ -3261,7 +3705,9 @@ fn friendly_rule_name(rule: Rule) -> &'static str {
         Rule::traqula => "Traqula script",
         Rule::add_role => "add role",
         Rule::add_posit => "add posit",
+        Rule::and_assert_clause => "and assert <binding?> by <source> with <certainty> at <time>",
         Rule::search => "search",
+        Rule::or_add_clause => "or add posit",
         Rule::search_clause => "search clause",
         Rule::where_clause => "where clause",
         Rule::return_clause => "return clause",

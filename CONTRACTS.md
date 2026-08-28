@@ -33,6 +33,14 @@ classification posit's literal value or performs implicit subclass inference.
 Such interpretation belongs to an explicit consumer or presentation policy;
 ordinary query filtering remains literal and neutral.
 
+Traqula 1 includes atomic `and assert` mutation sugar and `search ... or add
+posit ...` identity resolution. The latter may omit `return`; only searches
+with a return projection create HTTP, SSE, WASM, or Rust result sets. Ordinary
+query variables remain lexical. Within the compound operation, same-name Thing
+or Posit query/allocation binders are explicitly unified into a script mutation
+binding, with zero matches executing the fallback once and one or many matches
+promoting the complete identity set.
+
 Every published store-format break must preserve logical data through a direct
 or stepwise offline migration that writes and validates a new store beside the
 source. Because store `1.0` is the first published format, there is currently no

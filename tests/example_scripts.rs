@@ -48,7 +48,7 @@ fn cookbook_traqula_blocks_execute_independently() {
         .skip(1)
         .map(|remainder| remainder.split("```").next().unwrap().trim())
         .collect::<Vec<_>>();
-    assert_eq!(blocks.len(), 7, "unexpected cookbook Traqula block count");
+    assert_eq!(blocks.len(), 8, "unexpected cookbook Traqula block count");
 
     for (index, block) in blocks.into_iter().enumerate() {
         let database = Database::new(PersistenceMode::InMemory).unwrap();

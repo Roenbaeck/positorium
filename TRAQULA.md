@@ -66,6 +66,63 @@ add posit [{(p, posit), (person, ascertains)}, 100%, @NOW];
 Each `add role` or `add posit` command commits atomically. Earlier successful
 commands remain committed if a later command fails.
 
+### Adding and asserting atomically
+
+`and assert` creates the assertion envelope together with its target posit:
+
+```traqula
+add posit +claim [
+  {(+case, status)}, "open", '2024-03-01'
+] and assert +evidence by +registry with 75% at @NOW;
+```
+
+This is syntax sugar for an ordinary target posit and an ordinary assertion
+posit with the exact `{posit, ascertains}` appearance set. `claim` and
+`evidence` bind their canonical posit identities; `registry` binds the source
+Thing. The source may instead be recalled with `by registry`. Source,
+certainty, and assertion time are mandatory and remain independent of the
+target's value and appearance time.
+
+The target and every generated assertion envelope are one command and one
+durable batch. If the target proposition already exists, its canonical posit
+identity is reused. If the source binding contains several Things, one
+assertion posit is generated for every target/source combination.
+
+### Searching or adding
+
+`search ... or add posit ...` resolves durable identities without giving
+variable names persistent meaning:
+
+```traqula
+search
+  [{(?registry, registry_code), ...}, "SE-CIVIL-REGISTRY", *]
+or add posit
+  [{(+registry, registry_code)}, "SE-CIVIL-REGISTRY", @NOW];
+
+add posit [{(+case, status)}, "open", @NOW]
+  and assert by registry with 100% at @NOW;
+```
+
+The complete search is evaluated first. With zero matching rows, the add branch
+runs once. With one or many rows, it does not run. Identity query binders and
+fallback allocation binders having the same name and domain are unified into a
+script mutation binding: here `?registry` or `+registry` both establish
+`registry` for subsequent additions. Multiple matches remain a set and later
+posit construction fans out over that set. Cardinality aggregation and
+conditions on aggregates are deliberately deferred.
+
+The search, zero-match decision, and optional fallback mutation execute under
+one script owner, so concurrent scripts cannot both observe absence and create
+the fallback. An `and assert` suffix on the fallback belongs only to that add
+branch and shares its atomic durable batch.
+
+`return` is optional. Omitting it emits no result set; it does not prevent the
+compound command from binding identities. When present, every returned
+identity must also have an allocation binder in the fallback so either branch
+can supply the same result shape. Ordinary searches still keep `?` variables
+lexical: only the explicit `search ... or add posit ...` join promotes matching
+Thing and Posit binders into mutation scope.
+
 ## Search variables and domains
 
 Search variables always start with `?` and are lexical to one `search` command.

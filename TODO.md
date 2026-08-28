@@ -197,8 +197,11 @@ this algebra.
         - Scope ordinary query variables lexically to one `search`; migrate tests that
             currently retain search bindings across commands (D013).
         - Keep allocation binders from `add` script-visible to later mutation commands,
-            but do not turn them into query variables. Defer `let`, named results, and
-            `using` until a concrete post-beta workflow requires them.
+            but do not turn them into query variables. The explicit `search ... or add
+            posit ...` compound operation may promote same-name Thing and Posit branch
+            binders for identity resolution; ordinary searches remain lexical. Defer
+            general `let`, named results, and `using` until another concrete workflow
+            requires them.
         - Keep command order meaningful for scripts without making join order part of
             declarative search semantics.
 - [x] **Distinguish exact and open appearance-set matching.**

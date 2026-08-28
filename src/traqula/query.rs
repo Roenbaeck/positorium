@@ -194,6 +194,26 @@ struct Query {
     order: Vec<OrderItem>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum IdentityDomain {
+    Thing,
+    Posit,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct IdentityBinding {
+    pub domain: IdentityDomain,
+    pub values: ResultSet,
+}
+
+#[derive(Debug)]
+pub(super) struct SearchOutcome {
+    pub matched_rows: usize,
+    pub identity_domains: HashMap<String, IdentityDomain, OtherHasher>,
+    pub identity_bindings: HashMap<String, IdentityBinding, OtherHasher>,
+    pub has_return: bool,
+}
+
 #[derive(Clone)]
 struct StructuralMatch {
     posit: Arc<Posit<LiteralValue>>,
@@ -208,10 +228,18 @@ pub(super) fn execute(
     sink: &mut dyn RowSink,
     return_columns: &mut Option<Vec<String>>,
     execution: &ExecutionContext,
-) -> Result<(), DatabaseError> {
+) -> Result<SearchOutcome, DatabaseError> {
     execution.check()?;
     let query = parse_query(command, execution)?;
     let domains = validate_domains(&query)?;
+    let identity_domains = domains
+        .iter()
+        .filter_map(|(name, domain)| match domain {
+            Domain::Thing => Some((name.clone(), IdentityDomain::Thing)),
+            Domain::Posit => Some((name.clone(), IdentityDomain::Posit)),
+            Domain::Role | Domain::AppearanceSet | Domain::Literal | Domain::Time => None,
+        })
+        .collect::<HashMap<_, _, OtherHasher>>();
     let mut effect_cache = EffectCache::new();
 
     let mut bindings = Vec::new();
@@ -268,6 +296,54 @@ pub(super) fn execute(
         bindings = selected;
     }
 
+    let matched_rows = bindings.len();
+    let mut identity_bindings: HashMap<String, IdentityBinding, OtherHasher> = HashMap::default();
+    for binding in &bindings {
+        for (name, value) in &binding.0 {
+            let (domain, identity) = match value {
+                BoundValue::Thing(identity) => (IdentityDomain::Thing, *identity),
+                BoundValue::Posit(identity) => (IdentityDomain::Posit, *identity),
+                BoundValue::Role(_)
+                | BoundValue::AppearanceSet(_)
+                | BoundValue::Literal(_)
+                | BoundValue::Time(_) => continue,
+            };
+            match identity_bindings.entry(name.clone()) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    let mut values = ResultSet::new();
+                    values.insert(identity);
+                    entry.insert(IdentityBinding { domain, values });
+                }
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    if entry.get().domain != domain {
+                        return Err(DatabaseError::VariableDomain {
+                            name: name.clone(),
+                            first: match entry.get().domain {
+                                IdentityDomain::Thing => "Thing",
+                                IdentityDomain::Posit => "Posit",
+                            },
+                            second: match domain {
+                                IdentityDomain::Thing => "Thing",
+                                IdentityDomain::Posit => "Posit",
+                            },
+                        });
+                    }
+                    entry.get_mut().values.insert(identity);
+                }
+            }
+        }
+    }
+
+    let has_return = !query.returns.is_empty();
+    if !has_return {
+        return Ok(SearchOutcome {
+            matched_rows,
+            identity_domains,
+            identity_bindings,
+            has_return,
+        });
+    }
+
     let mut projected = bindings
         .into_iter()
         .map(|binding| {
@@ -296,7 +372,12 @@ pub(super) fn execute(
     let columns = query.returns.clone();
     *return_columns = Some(columns.clone());
     if let SinkFlow::Stop = sink.on_meta(&columns) {
-        return Ok(());
+        return Ok(SearchOutcome {
+            matched_rows,
+            identity_domains,
+            identity_bindings,
+            has_return,
+        });
     }
     for (_, row) in projected {
         execution.check()?;
@@ -304,7 +385,12 @@ pub(super) fn execute(
             break;
         }
     }
-    Ok(())
+    Ok(SearchOutcome {
+        matched_rows,
+        identity_domains,
+        identity_bindings,
+        has_return,
+    })
 }
 
 fn parse_query(
@@ -392,6 +478,7 @@ fn parse_query(
                 }
             }
             Rule::limit_clause => {}
+            Rule::or_add_clause => {}
             rule => {
                 return Err(DatabaseError::Invariant(format!(
                     "unexpected query clause {rule:?}"
@@ -402,11 +489,6 @@ fn parse_query(
     if branches.first().is_none_or(Vec::is_empty) {
         return Err(DatabaseError::Execution(
             "a search requires at least one posit pattern".into(),
-        ));
-    }
-    if returns.is_empty() {
-        return Err(DatabaseError::Execution(
-            "a search requires at least one return variable".into(),
         ));
     }
     Ok(Query {
