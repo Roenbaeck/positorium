@@ -175,6 +175,40 @@ history to the maximal posit proposition or propositions for each complete
 appearance set. It does not inspect who asserted a posit, combine certainty,
 or choose a preferred source.
 
+Ask which layer the query is intended to read:
+
+- `as of t` asks which recorded posit states are latest at one appearance-time
+  cut. It reads posit history directly, independently of whether any source
+  currently asserts, previously asserted, or retracted those target posits.
+- `in effect T, t` asks which source assertions are effective at an
+  assertion-time cut `T` about target states at an appearance-time cut `t`. It
+  reads assertion-backed evidence, preserves source-local alternatives, and
+  applies retractions. This dual-cut operator is planned post-version 1 syntax
+  and is not accepted by the current parser.
+
+The target pattern can look identical because the operators answer different
+questions:
+
+```traqula
+/* Raw state: which name posits are latest by appearance time? */
+search
+  [{(?person, name)}, ?name, ?appeared] as of @NOW
+return
+  ?person, ?name, ?appeared;
+
+/* Effective evidence: which names do sources currently assert? (planned) */
+search
+  [{(?person, name)}, ?name, ?appeared] in effect @NOW, @NOW
+return
+  ?person, ?name, ?appeared;
+```
+
+The first query can return a latest name posit even if nobody asserts it. The
+second returns one binding per matching effective assertion, so two sources
+asserting the same name produce two rows unless `return distinct` is requested.
+The first `in effect` operand is assertion time and the second is target
+appearance time; the fixed arity makes the comma syntax unambiguous.
+
 Assertions are ordinary posits joined explicitly through the reserved `posit`
 and `ascertains` roles:
 
@@ -184,10 +218,11 @@ search ?claim = [{(?case, status), ...}, ?status, ?changed],
 return ?case, ?status, ?changed, ?source, ?certainty, ?asserted;
 ```
 
-Only `posit` and `ascertains` are reserved in version 1. Assertion resolution,
-source preference, certainty combination, and “information in effect” are
-explicit post-beta query or application policies. They never alter ordinary
-snapshot semantics or silently discard disagreement.
+Only `posit` and `ascertains` are reserved in version 1. Assertion resolution
+and information-in-effect selection are planned query operations. Source
+preference, certainty combination, and accepted-truth selection remain separate
+application policies. None alters ordinary snapshot semantics or silently
+discards disagreement.
 
 ## Query algebra
 

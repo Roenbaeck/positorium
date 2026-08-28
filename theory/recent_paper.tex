@@ -1,0 +1,782 @@
+\documentclass[a4paper,fleqn]{cas-sc}
+
+\usepackage[numbers]{natbib}
+\usepackage{amsmath,amssymb,mathtools,amsthm}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{graphicx}
+  \graphicspath{{./}{graphics/}}
+\usepackage{url}
+
+%%%%%%%%%%%%%%%%%%%%%%%% DEFINITIONS %%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\newcommand{\typeof}[1]{\tau(#1)}
+\newcommand{\abs}[1]{\left|#1\right|}
+\newcommand{\ie}{\mathsf{IE}}
+\newcommand{\Ret}{\mathsf{Ret}}
+\newcolumntype{Y}[1]{>{\raggedright\arraybackslash}p{#1}}
+
+\newcounter{majorcount}
+
+\newcommand{\deffy}[3]{
+	\vspace{2ex}
+	\refstepcounter{majorcount}
+	\noindent\textsc{#1} {\normalfont(\arabic{majorcount})}
+	\\\begin{small}
+	\noindent #2%
+	\label{Def:#3}
+	\end{small}
+	\vspace{2ex}
+}
+
+\newenvironment{criteria}{%
+  \begin{enumerate}
+  \renewcommand{\labelenumi}{\footnotesize\arabic{enumi}}%
+  \setlength{\itemsep}{0.3ex}%
+  \setlength{\parsep}{0pt}%
+}{%
+  \end{enumerate}
+}
+
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}
+\newtheorem{proposition}{Proposition}
+
+\theoremstyle{remark}
+\newtheorem*{remark}{Remark}
+
+\ExplSyntaxOn
+\keys_set:nn { stm / mktitle } { nologo }
+\ExplSyntaxOff
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{document}
+\let\WriteBookmarks\relax
+\def\floatpagepagefraction{1}
+\def\textpagefraction{.001}
+
+\shorttitle{Bitemporal Approximate Reasoning}
+\shortauthors{L. R\"onnb\"ack}
+
+\title[mode=title]{Source-Local Signed Assertions for Bitemporal Approximate Reasoning}
+
+\author[1]{Lars R\"onnb\"ack}[orcid=0000-0002-8810-7587]
+\cormark[1]
+\ead{lars.ronnback@anchormodeling.com}
+\affiliation[1]{organization={Department of Computer and Systems Sciences},
+                addressline={Stockholm University},
+                country={Sweden}}
+\cortext[cor1]{Corresponding author}
+
+\begin{abstract}
+Approximate reasoning systems often receive evolving source-specific assertions rather than settled facts. A source may support a claim, oppose it, withdraw an earlier commitment, or revise its position after new information appears. Reasoning over such evidence requires more than aggregation: before probability, possibility, belief-function, argumentation, or weighted-fusion policies can be applied, the system must determine which temporally qualified source commitments are in effect.
+
+This paper introduces \emph{transitional representation} as a history-preserving substrate for that prior evidence-selection problem. Its primitive is the \emph{posit}, an \(n\)-ary statement stamped with the time of the state it describes. Source commitments are stored as further posits linking a source to another posit with the commitment time and a signed certainty in \([-1,1]\). Positive certainty is source-local support, zero certainty is withdrawal or no commitment, and negative certainty is source-local opposition rather than global negation or a probability complement.
+
+The central operator, \emph{information in effect}, returns the source-local signed commitments available at two temporal cuts: one over source commitments and one over the states those commitments concern. The paper proves determinism, policy separation for downstream fusion operators, non-destructive but nonmonotonic effective revision, and non-preservation under premature fusion. A synthetic clinical evidence case and executable experiments show that the representation recovers evidence states under conflict, retraction, correction, and temporal cuts. Positorium, a functional but not yet optimized implementation, provides semantic validation and scalability checks rather than implementation-performance claims.
+\end{abstract}
+
+\begin{keywords}
+approximate reasoning \sep uncertainty \sep information fusion \sep belief revision \sep bitemporal evidence \sep provenance
+\end{keywords}
+
+\maketitle
+
+\section{Introduction}
+Approximate reasoning begins with evidence that is rarely settled, complete, or synchronized. A clinical decision-support system may receive an emergency department assertion that a patient has a drug allergy, followed by a specialist assertion against that diagnosis and a later withdrawal by the original source. A knowledge-integration system may ingest claims from documents whose extraction scores differ and whose conclusions are later corrected. A legal, financial, or intelligence system may need to reason over positive support, opposition, retraction, and revision while preserving who made each commitment and when.
+
+Many uncertainty formalisms focus on how to combine or compare evidence once the relevant evidence items have been selected. Probabilistic and probabilistic-database models attach confidence to uncertain facts \cite{BenjellounEtAl,DyllaEtAl}; fuzzy and possibilistic approaches model gradation and incomplete information \cite{Zadeh1965,DuboisPrade1988}; belief-function theory represents evidence and uncertainty without requiring a single probability measure \cite{Dempster1967,Shafer1976}; argumentation frameworks make conflict and attack explicit \cite{Dung1995}; and belief-revision work studies how commitments change \cite{AGM1985}. These lines of work are complementary to the problem studied here. They provide ways to reason with selected evidence. The missing layer addressed in this paper is a compact representation for deciding which source-local, temporally qualified commitments are in effect before any fusion or acceptance policy is applied.
+
+This paper studies the following problem:
+
+\begin{quote}
+\small
+How can an approximate-reasoning system preserve source-local support, opposition, withdrawal, and revision over \(n\)-ary statements, while still producing a deterministic evidence slice for two temporal cuts: which source commitments are available to the reasoner, and which claimed states those commitments concern?
+\end{quote}
+
+The proposed answer is \emph{transitional representation}. It treats source commitments as represented evidence rather than as administrative metadata. The representation is minimal: a \emph{posit} records a statement-like structure, a value, and the time of the state it describes; an \emph{assertion} connects a source to another posit with a signed certainty and the time of that commitment. Reconciliation is not part of storage. Different reasoners may later apply probability, possibility, belief-function, argumentation, weighted-scoring, or abstention policies, but they first receive the same deterministic source-local evidence slice.
+
+This answer is organized around seven design criteria. The representation should support (D1) \(n\)-ary claims without forcing binary edge reification, (D2) source-local support and opposition over the same claim, (D3) explicit uncertainty, contradiction, and withdrawal, (D4) non-destructive retraction and correction, (D5) separate temporal cuts for source commitments and described states, (D6) deterministic evidence selection without premature fusion, and (D7) implementation in ordinary database substrates when needed. The sections below use these criteria to separate evidence preservation from policies such as source trust, calibration, aggregation, and final acceptance.
+
+Consider the running example, which is synthetic but follows an ordinary uncertain-evidence pattern:
+\begin{quote}
+\small
+Mira is treated in an emergency department after a rash during an antibiotic course. The emergency department records the episode as a likely penicillin allergy. A specialist allergy clinic later reviews the same episode, concludes that it was a viral exanthem rather than an IgE-mediated allergy, and asserts strong negative certainty toward the original allergy claim. The emergency department then retracts its earlier assertion and records the specialist interpretation as the corrected diagnosis.
+\end{quote}
+The important point is not medical diagnosis. The point is that alternative values for the same episode can coexist, sources can supply support and opposition, and later changes in source commitments must not erase earlier evidence states. A reasoner should be able to ask what evidence was available before the specialist review, what evidence was available after the review but before the emergency department correction, and which commitments were in effect afterwards.
+
+\textsc{Contributions.} The paper makes four contributions.
+\begin{criteria}
+\item It defines a source-local signed assertion model for uncertain, contradictory, and withdrawn commitments over \(n\)-ary statements.
+\item It defines a bitemporal \emph{information in effect} operator that selects the commitments available to a reasoner at cuts over source commitments and the states those commitments concern.
+\item It proves determinism, policy separation for downstream fusion operators, non-destructive revision with nonmonotonic effective belief, and non-preservation under premature fusion.
+\item It reports a synthetic case study and executable workloads showing evidence-state recovery, policy sensitivity, and scalability sanity checks.
+\end{criteria}
+
+The scope is intentionally narrower than a full approximate-reasoning calculus. The paper does not define a universal aggregation rule, source-trust model, probability calibration procedure, or final acceptance criterion. It defines the representation and selection layer that supplies deterministic evidence states to such policies.
+
+\section{Background: Approximate Reasoning and Evidence Preservation}
+\label{Sec:background}
+The model is motivated by a gap at the intersection of approximate reasoning, information fusion, and uncertain data management.
+
+\textbf{Uncertainty calculi and fusion.}
+Fuzzy sets, possibility theory, belief functions, and probabilistic approaches provide different interpretations of uncertain or incomplete information \cite{Zadeh1965,DuboisPrade1988,Dempster1967,Shafer1976}. Information-fusion methods then specify how evidence should be combined, weighted, or discounted. Transitional representation is not a competing fusion calculus. It addresses the prior selection problem: which source-local commitments, including support, opposition, withdrawal, and revision, should be supplied to a chosen fusion policy at a temporal cut?
+
+\textbf{Belief revision and nonmonotonic effective belief.}
+Belief-revision theory studies how rational commitment sets change under new information \cite{AGM1985}. The representation here separates physical storage from effective commitment: stored histories grow by appending source-commitment records, but the information in effect can change nonmonotonically as later retractions and corrections alter which commitments should be visible to a reasoner.
+
+\textbf{Conflict and argumentation.}
+Argumentation frameworks make conflict and attack first-class relations \cite{Dung1995}. Transitional representation is lower-level: negative certainty records source-local opposition to a posit, while the choice of whether that opposition constitutes attack, defeat, discounting, or abstention belongs to a later reasoning policy.
+
+\textbf{Uncertain data.}
+Probabilistic databases and temporal-probabilistic databases attach confidence and time to data items \cite{BenjellounEtAl,DyllaEtAl}. Provenance and lineage identify where data came from and how query results depend on inputs \cite{GreenEtAl,CheneyEtAl}. Temporal databases distinguish domain time from system or transaction time \cite{Snodgrass,SQL2011}. These mechanisms are important building blocks, but they do not by themselves provide a single statement-level substrate in which source-local support, opposition, withdrawal, and source-commitment history are all primitive.
+
+\textbf{Semantic and graph encodings.}
+RDF named graphs, RDF-star, property graphs, SQL/PGQ, and GQL support annotations and graph queries \cite{CarrollEtAl,HartigChampin,RDF12,FrancisEtAl,SQLPGQ,GQL,DeutschEtAl2021}. They can encode the structures used here, but the information-in-effect semantics remains a convention or query pattern rather than the core object of study.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{Y{0.25\linewidth} Y{0.30\linewidth} Y{0.34\linewidth}}
+\toprule
+Line of work & What it contributes & Remaining gap addressed here \\
+\midrule
+Uncertainty calculi & Interpret and combine uncertain evidence & Which temporally qualified evidence items are selected before combination \\
+Belief revision & Rational change of commitments & Append-only histories with nonmonotonic effective commitments \\
+Argumentation & Conflict, attack, and acceptance & Source-local opposition before a defeat or acceptance policy is chosen \\
+Uncertain/provenance data & Confidence, lineage, and attribution & Assertions whose source commitment itself has a history \\
+Temporal/graph encodings & Time, annotation, and query substrates & A primitive bitemporal evidence slice over \(n\)-ary signed assertions \\
+\bottomrule
+\end{tabular}
+\caption{Approximate-reasoning context and the specific evidence-preservation gap targeted by transitional representation.}
+\label{Table:gap}
+\end{table}
+
+The goal is therefore not to replace these lines of work. The goal is to isolate a small representation and resolution semantics that supplies deterministic, history-preserving evidence states to whatever approximate-reasoning policy is appropriate for a domain.
+
+\section{Transitional Representation}
+\label{Sec:model}
+The notation used in the formal definitions is summarized in Table~\ref{Table:notation}; the definitions themselves follow.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{l l}
+\toprule
+Symbol & Meaning \\ \midrule
+\(\Upsilon\) & appearance set \\
+\(v\) & value \\
+\(p_{id}\) & posit identifier \\
+\(s_{id}\) & positor/source identifier \\
+\(t_{\mathrm{app}} \in \mathbb{t}\) & appearance time \\
+\(T_{\mathrm{ast}} \in \mathbb{T}\) & assertion time \\
+\(c \in [-1,1]\) & signed certainty \\
+\bottomrule
+\end{tabular}
+\caption{Core notation.}
+\label{Table:notation}
+\end{table}
+
+\subsection{Posits}
+\deffy{def. of an appearance}{%
+An \emph{appearance} is a pair \((i,r)\), where \(i\) is an opaque identifier and \(r\) is a role name.}{appearance}
+
+\deffy{def. of an appearance set}{%
+An \emph{appearance set} is a finite set \(\Upsilon=\{(i_1,r_1),\ldots,(i_n,r_n)\}\) in which no role occurs more than once.}{appearanceset}
+
+Role uniqueness makes each role a stable slot in an \(n\)-ary statement. Unary appearance sets represent properties; larger appearance sets represent relationships or events. Identifiers are deliberately opaque. A surrounding system may use keys, entity resolution, signatures, or exchange agreements to decide which identifiers co-refer, but that process is not built into the representation layer. If two sources cannot align identifiers, their claims are stored but not inferred to disagree about the same referent.
+
+\deffy{def. of a posit}{%
+A \emph{posit} is a triple \(p=[\Upsilon,v,t_{\mathrm{app}}]\), where \(\Upsilon\) is an appearance set, \(v\) is a value, and \(t_{\mathrm{app}}\in\mathbb{t}\) is an appearance time.}{posit}
+
+A posit is not yet a truth claim. It records that the appearance set can be associated with the value at the appearance time. In the running example, the same clinical episode can carry competing values:
+\begin{align*}
+p_1 &= [\Upsilon_M,\textit{IgE-mediated penicillin allergy},2026\text{-}03\text{-}03],\\
+p_2 &= [\Upsilon_M,\textit{viral exanthem after antibiotic exposure},2026\text{-}03\text{-}03],
+\end{align*}
+where \(\Upsilon_M=\{(M,\textit{patient}),(P,\textit{suspected trigger}),(E,\textit{encounter})\}\). If these were asserted by a single authoritative source, they could be read as a correction. If they are asserted by different clinical sources, they are better read as competing source-specific claims. This is why the model separates posits from assertions.
+
+\subsection{Assertions}
+\deffy{def. of an assertion}{%
+Reserve the roles \textit{posit} and \textit{ascertains}. An \emph{assertion} is a posit of the form
+\[
+\left[\{(p_{id},\textit{posit}),(s_{id},\textit{ascertains})\},c,T_{\mathrm{ast}}\right],
+\]
+where \(p_{id}\) identifies the posit being asserted, \(s_{id}\) identifies the positor or source, \(T_{\mathrm{ast}}\in\mathbb{T}\) is assertion time, and \(c\in[-1,1]\) is signed certainty.}{assertion}
+
+Thus assertions are ordinary posits over reserved roles. The value of an assertion posit is the certainty \(c\). The appearance time of the assertion posit is interpreted as assertion time. This uniformity allows assertions about assertions without adding another construct.
+
+The signed certainty scale is source-local. \(c=1\) means that the positor fully supports the target posit; \(c=0\) means no current commitment or withdrawal; \(c=-1\) means full opposition to the target posit. Intermediate values express partial commitment. A negative value is evidence against the target posit by that source; it is not a probability complement, not a globally valid negation, and not evidence that the source has selected some other value as true.
+
+The scale should be read as an abstract commitment scale rather than as a universal uncertainty calculus. By restriction or policy it can host several interpretations: non-negative calibrated values can be treated as probabilistic confidence; positive and negative values can be treated as weighted support and opposition in an information-fusion policy; the sign can be used as evidence for accept/reject relations in an argumentation-style policy; or support and opposition can be separated into a bipolar belief representation. The representation itself deliberately does not define a universal aggregation rule. Source trust, calibration, and cross-source weighting remain query-time policies.
+
+In the running example, the emergency department and the allergy clinic may assert:
+\begin{align*}
+a_1 &= [\{(p_1,\textit{posit}),(ED,\textit{ascertains})\},0.80,2026\text{-}03\text{-}04],\\
+a_2 &= [\{(p_2,\textit{posit}),(AC,\textit{ascertains})\},0.90,2026\text{-}04\text{-}10].
+\end{align*}
+Both assertions can be stored without deciding which institution is correct.
+
+\subsection{Assertion Bodies and Well-Formedness}
+\deffy{def. of a body of information}{%
+A \emph{body of information} is a finite set of posits. A body containing only assertion posits is an \emph{assertion body}.}{body}
+
+The resolution operators below assume finite inputs and totally ordered temporal domains for the queried time values. They also assume that assertion bodies are in a canonical form: complemented values are not materialized as separate values, and certainty in a complement is represented by a negative certainty on the ordinary posit.
+
+\deffy{def. of source-local exclusivity}{%
+An assertion body is \emph{source-locally exclusive} if, for a fixed target posit, source, and assertion time, it contains at most one certainty value.}{exclusive}
+
+\deffy{def. of non-contradiction}{%
+For a fixed source and appearance set in a resolved slice, let \(c_1,\ldots,c_n\) be the certainties attached to concurrent alternative values. The slice is \emph{non-contradictory} for that source and appearance set when
+\[
+|\{i\mid c_i<0\}|+\sum_{i=1}^{n}c_i\leq 1.
+\]
+}{noncontradiction}
+
+When all certainties are non-negative, this reduces to the familiar probability-budget constraint \(\sum_i c_i\leq 1\). Negative certainties consume no positive commitment for their excluded values; instead, they express source-local opposition. A source may therefore oppose several values without thereby asserting which remaining value is true.
+
+\subsection{Retractions and Corrections}
+\deffy{def. of a retraction}{%
+Let \(a=[\{(p,\textit{posit}),(s,\textit{ascertains})\},c,T]\) be an assertion with \(c\neq 0\). A later assertion
+\[
+[\{(p,\textit{posit}),(s,\textit{ascertains})\},0,T']
+\]
+with \(T<T'\) is a \emph{retraction} of \(a\).}{retraction}
+
+\deffy{def. of a correction}{%
+A \emph{correction} consists of a non-zero assertion about a posit, a later retraction of that assertion by the same source, and a later non-zero assertion by that source about a different posit intended to replace it.}{correction}
+
+Retractions and corrections are logical, not physical. They add assertions rather than deleting earlier ones. A query cut before a retraction can still recover the earlier state; a cut after the retraction excludes it from the current information in effect.
+
+\section{Information in Effect and Formal Results}
+\label{Sec:resolution}
+\subsection{Posit Resolution}
+\deffy{def. of posit resolution}{%
+Let \(\mathbb{P}\) be a finite set of posits over a totally ordered temporal domain. The \emph{resolution} of \(\mathbb{P}\) at cut point \(t_@\), written \(\rho(\mathbb{P},t_@)\), is the subset of posits \(p=[\Upsilon,v,t]\in\mathbb{P}\) such that \(t\leq t_@\) and no posit \(p'=[\Upsilon,v',t']\in\mathbb{P}\) has \(t<t'\leq t_@\). If several posits for the same appearance set share the same maximal time, all are retained.}{resolution}
+
+Posit resolution is a latest-visible-state operator over appearance time. It does not resolve disagreements among values that share the same maximal appearance time; retaining ties is what preserves indecisiveness or conflict for later policy decisions.
+
+\begin{theorem}[determinism of posit resolution]
+For every finite \(\mathbb{P}\) over a totally ordered temporal domain and every cut point \(t_@\), \(\rho(\mathbb{P},t_@)\) is uniquely determined.
+\end{theorem}
+
+\begin{proof}
+For each appearance set \(\Upsilon\), the set of candidate times \(\{t\mid[\Upsilon,v,t]\in\mathbb{P},\,t\leq t_@\}\) is finite. If it is empty, no posit for \(\Upsilon\) is returned. Otherwise, total ordering and finiteness give a unique maximal time \(t_{\max}\). The output for \(\Upsilon\) is exactly the set of candidates with time \(t_{\max}\). Since this rule is deterministic for every \(\Upsilon\), the union over all appearance sets is unique.
+\end{proof}
+
+\subsection{Assertion Resolution}
+An assertion targets a posit, and that target posit has its own appearance time. Assertion resolution therefore uses two cuts: an assertion-time cut \(T_@\) and an appearance-time cut \(t_@\).
+
+\deffy{def. of information in effect}{%
+Let \(\mathbb{A}\) be a finite assertion body whose assertions target posits \(p=[\Upsilon,v,t_{\mathrm{app}}]\). The \emph{information in effect} at \((T_@,t_@)\), written \(\ie(\mathbb{A},T_@,t_@)\), is obtained as follows:
+\begin{criteria}
+\item Keep assertions whose assertion time satisfies \(T\leq T_@\) and whose target posit satisfies \(t_{\mathrm{app}}\leq t_@\).
+\item Discard assertions with \(c=0\). Also discard any non-zero assertion for which a later retraction of the same target posit by the same source exists at some \(T_0\) with \(T<T_0\leq T_@\).
+\item For each source and target appearance set \((s,\Upsilon)\), retain only assertions whose target posit has maximal appearance time among the remaining candidates.
+\item For each source, appearance set, and value \((s,\Upsilon,v)\), retain only assertions with maximal assertion time among the remaining candidates.
+\end{criteria}}{effect}
+
+The result is a source-specific bitemporal slice. It answers: given what was asserted no later than \(T_@\), what does each source currently assert about the latest state no later than \(t_@\)?
+
+\begin{theorem}[determinism of information in effect]
+For every finite assertion body \(\mathbb{A}\), every assertion-time cut \(T_@\), and every appearance-time cut \(t_@\), \(\ie(\mathbb{A},T_@,t_@)\) is uniquely determined.
+\end{theorem}
+
+\begin{proof}
+Step 1 is a deterministic filter using only order comparisons. Step 2 is deterministic because retraction is defined by equality of source and target posit together with an ordered assertion-time interval. Step 3 partitions the remaining finite set by \((s,\Upsilon)\) and applies a grouped maximum over target appearance time; ties are retained rather than broken. Step 4 partitions the result by \((s,\Upsilon,v)\) and applies a grouped maximum over assertion time; ties are again retained. Each step maps a finite set to a unique subset, so their composition is unique.
+\end{proof}
+
+\begin{proposition}[policy separation for fusion]
+\label{Prop:policy-separation}
+Let \(F\) be any deterministic fusion or acceptance operator whose domain contains finite sets of source-specific signed assertions. Then the composition
+\[
+F(\ie(\mathbb{A},T_@,t_@))
+\]
+is uniquely determined for every finite assertion body \(\mathbb{A}\), assertion-time cut \(T_@\), and appearance-time cut \(t_@\).
+\end{proposition}
+
+\begin{proof}
+By the preceding theorem, \(\ie(\mathbb{A},T_@,t_@)\) is a unique finite set. Since \(F\) is deterministic on finite sets in its domain, applying \(F\) to that set yields a unique result. The representation therefore fixes the evidence state supplied to \(F\), while the choice of \(F\) remains external to the representation.
+\end{proof}
+
+\begin{proposition}[logical retraction is non-destructive]
+Let \(a\) be a non-zero assertion at time \(T\), and let \(r\) be its retraction at \(T'>T\). If \(a\) satisfies the other selection criteria at a cut \((T_@,t_@)\), then \(a\) can appear in \(\ie(\mathbb{A},T_@,t_@)\) for \(T\leq T_@<T'\), but it cannot appear for any \(T_@\geq T'\). Both \(a\) and \(r\) remain stored in \(\mathbb{A}\).
+\end{proposition}
+
+\begin{proof}
+For \(T_@<T'\), the retraction time is outside the interval inspected in Step 2, so \(r\) does not exclude \(a\). For \(T_@\geq T'\), Step 2 detects a retraction of the same target posit by the same source with \(T<T'\leq T_@\), so \(a\) is discarded. Neither case removes \(a\) or \(r\) from the underlying body; the difference is only in the resolved slice.
+\end{proof}
+
+\begin{proposition}[stored monotonicity and effective nonmonotonicity]
+\label{Prop:effective-nonmonotonicity}
+Let \(\mathbb{A}_{\leq T}\) denote the assertions in \(\mathbb{A}\) whose assertion time is no later than \(T\). If \(T_1\leq T_2\), then \(\mathbb{A}_{\leq T_1}\subseteq \mathbb{A}_{\leq T_2}\). However, \(\ie(\mathbb{A},T,t_@)\) is not monotone in \(T\): there exist \(\mathbb{A}\), \(T_1<T_2\), and \(t_@\) such that an assertion appears in \(\ie(\mathbb{A},T_1,t_@)\) but not in \(\ie(\mathbb{A},T_2,t_@)\).
+\end{proposition}
+
+\begin{proof}
+The first claim follows immediately from the definition of \(\mathbb{A}_{\leq T}\): increasing the cut can only include more stored assertions. For nonmonotonicity, let \(a\) be a non-zero assertion at \(T_1\) whose target appearance time is no later than \(t_@\), and let \(r\) be a later retraction of \(a\) by the same source at \(T_2\). By the retraction proposition, \(a\) can appear before the retraction cut and is excluded at or after the retraction cut. Thus storage grows monotonically while the effective evidence state changes nonmonotonically.
+\end{proof}
+
+\begin{proposition}[premature fusion is not history-preserving]
+\label{Prop:fusion-loss}
+Let \(\phi_{T_0,t_0}\) be a source- and history-forgetting fusion projection that, at a final cut \((T_0,t_0)\), stores only the fused current value or values for each appearance set and discards source identifiers, assertion times, and retracted assertions. There exist assertion bodies \(\mathbb{A}\) and \(\mathbb{B}\) such that
+\[
+\phi_{T_0,t_0}(\mathbb{A})=\phi_{T_0,t_0}(\mathbb{B})
+\]
+but for some earlier assertion-time cut \(T_1<T_0\),
+\[
+\ie(\mathbb{A},T_1,t_0)\neq\ie(\mathbb{B},T_1,t_0).
+\]
+Thus premature fusion is not information-preserving for bitemporal evidence-state queries, whereas the assertion body remains queryable at both cuts.
+\end{proposition}
+
+\begin{proof}
+Use one appearance set \(\Upsilon\) and two values \(v_A\) and \(v_B\) with the same appearance time \(t_0\). In \(\mathbb{A}\), source \(s\) asserts \([\Upsilon,v_A,t_0]\) at time \(T_1\), retracts that assertion at a later time \(T_2\), and asserts \([\Upsilon,v_B,t_0]\) before the final cut \(T_0\). In \(\mathbb{B}\), source \(s\) makes only the final assertion of \([\Upsilon,v_B,t_0]\) before \(T_0\). At the final cut, any fusion projection that stores only the current value and forgets source/history records \(v_B\) for both bodies, so the projections are equal. At the earlier cut \(T_1\), however, \(\ie(\mathbb{A},T_1,t_0)\) contains the assertion of \(v_A\), while \(\ie(\mathbb{B},T_1,t_0)\) contains no assertion by \(s\). The two histories are therefore distinguishable under transitional representation and indistinguishable after premature fusion.
+\end{proof}
+
+\begin{proposition}[evaluation cost]
+Given \(m\) temporally admissible assertion candidates after Step 1, \(\ie(\mathbb{A},T_@,t_@)\) can be computed in expected \(O(m)\) time using hash tables for the grouped maxima, or \(O(m\log m)\) time using sorting. Posit resolution \(\rho(\mathbb{P},t_@)\) satisfies the analogous bound over its temporally admissible candidates.
+\end{proposition}
+
+\begin{proof}
+For \(\rho\), a single pass over temporally admissible posits maintains the maximal time and retained tie set for each appearance set. For \(\ie\), one pass removes retracted assertions given an index or hash table over retractions by source and target posit, a second grouped pass maintains the maximal target appearance time per \((s,\Upsilon)\), and a third grouped pass maintains the maximal assertion time per \((s,\Upsilon,v)\). Hash-table grouping gives expected linear time in the number of surviving candidates under standard hashing assumptions. Sorting by the grouping keys gives the stated \(O(m\log m)\) alternative.
+\end{proof}
+
+\subsection{Stratified Query-Time Cuts}
+A query need not use one global temporal cut. One clause may resolve domain posits at \(t_1\), another may resolve assertions at \((T_2,t_2)\), and a later clause may use a time bound produced by an earlier clause. The important restriction is stratification: a cut may depend only on constants or on variables bound by previous clauses.
+
+\begin{proposition}[determinism of stratified temporal queries]
+Any finite query formed by a sequence of calls to \(\rho\) and \(\ie\), where each call's cut points are constants or variables bound by earlier calls, is deterministic once the input body is fixed.
+\end{proposition}
+
+\begin{proof}
+The first call has fixed cut points and is deterministic by the preceding theorems. Its output bindings are therefore uniquely determined. Inductively, if all earlier bindings are uniquely determined, then the next call's cut points are uniquely determined, and the call is deterministic. Since the query is finite, induction over the clause order proves the claim.
+\end{proof}
+
+\subsection{Restricted Embeddings of Existing Models}
+The model can reproduce several existing database patterns by restriction. These are embeddings of selected semantics, not translations of every feature, optimizer rule, or constraint language of the source systems.
+
+\begin{proposition}[selected conservative embeddings]
+The following patterns embed into transitional representation while preserving their ordinary visible-state behavior.
+\begin{criteria}
+\item A valid-time relation embeds by mapping each key/attribute state to a posit and applying \(\rho\).
+\item A bitemporal relation with a single institutional source embeds by representing tuple-state changes as posits and system-recorded revisions as assertions by one source with certainty \(c=1\) or \(c=0\).
+\item A probabilistic fact table with lineage embeds by representing each fact as a posit and each lineage/source confidence as a non-negative assertion certainty.
+\end{criteria}
+\end{proposition}
+
+\begin{proof}
+For valid-time relations, each key/attribute group corresponds to one appearance set, and the latest valid state at a cut is exactly the grouped maximum selected by \(\rho\). For a single-source bitemporal relation, assertion time plays the role of the database's revision or transaction axis; \(c=1\) records presence and \(c=0\) records logical withdrawal, so \(\ie\) recovers the visible tuple state for the selected valid and assertion cuts. For probabilistic facts without negative certainty or retractions, the target posit stores the fact and the assertion certainty stores the confidence. Since all certainties are non-negative and no assertion-time revisions are used, resolving the body preserves the stored confidence for each visible fact.
+\end{proof}
+
+\section{Case Study: Clinical Evidence Revision}
+\label{Sec:case}
+The clinical example is stated as a small assertion body. Let
+\[
+\Upsilon_M=\{(M,\textit{patient}),(P,\textit{suspected trigger}),(E,\textit{encounter})\}.
+\]
+Two alternative posits describe the same episode at the same appearance time. Here \textit{allergy} abbreviates IgE-mediated penicillin allergy, and \textit{viral exanthem} abbreviates viral exanthem after antibiotic exposure:
+\[
+\begin{aligned}
+p_A&=[\Upsilon_M,\textit{allergy},2026\text{-}03\text{-}03],\\
+p_V&=[\Upsilon_M,\textit{viral exanthem},2026\text{-}03\text{-}03].
+\end{aligned}
+\]
+Table~\ref{Table:case} gives a compact assertion history. The source labels are institutional: \(ED\) is the emergency department and \(AC\) is the allergy clinic.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{p{0.11\linewidth} p{0.31\linewidth} p{0.18\linewidth} p{0.28\linewidth}}
+\toprule
+Item & Stored posit & Assertion time & Interpretation \\
+\midrule
+\(a_1\) & \((ED,p_A,0.80)\) & 2026-03-04 & ED initially asserts likely allergy \\
+\(a_2\) & \((AC,p_V,0.90)\) & 2026-04-10 & Clinic asserts alternative diagnosis \\
+\(a_3\) & \((AC,p_A,-0.90)\) & 2026-04-10 & Clinic strongly rejects allergy claim \\
+\(a_4\) & \((ED,p_A,0)\) & 2026-04-12 & ED retracts its allergy assertion \\
+\(a_5\) & \((ED,p_V,0.70)\) & 2026-04-12 & ED records corrected diagnosis \\
+\bottomrule
+\end{tabular}
+\caption{Synthetic clinical correction case. Each row is an assertion posit over the reserved roles \textit{posit} and \textit{ascertains}.}
+\label{Table:case}
+\end{table}
+
+The same stored body supports several historical questions. Table~\ref{Table:case-effect} fixes the appearance-time cut at \(t_@=2026\text{-}03\text{-}03\) and varies only the assertion-time cut. The rows show the source-specific assertions returned by \(\ie\); no final diagnostic fusion is applied.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{Y{0.20\linewidth} Y{0.43\linewidth} Y{0.27\linewidth}}
+\toprule
+Assertion-time cut & Rows in \(\ie(\mathbb{A},T_@,t_@)\) & Audit reading \\
+\midrule
+2026-03-07 & \(ED:p_A:+0.80\) & Only the emergency department allergy assertion is in effect \\
+2026-04-11 & \(ED:p_A:+0.80\); \(AC:p_V:+0.90\); \(AC:p_A:-0.90\) & The specialist disagreement is visible, but the ED assertion has not yet been retracted \\
+2026-04-13 & \(AC:p_V:+0.90\); \(AC:p_A:-0.90\); \(ED:p_V:+0.70\) & The ED allergy assertion is excluded by retraction, while both sources retain auditable commitments \\
+\bottomrule
+\end{tabular}
+\caption{Evidence in effect for the synthetic clinical case at three assertion-time cuts.}
+\label{Table:case-effect}
+\end{table}
+
+The middle row is the case that premature fusion tends to hide: the later specialist review does not delete the earlier emergency department state, and the negative certainty against \(p_A\) remains source-local rather than becoming a global contradiction. The final row illustrates Proposition~\ref{Prop:fusion-loss}: a final corrected fusion result can be identical for two histories even when the earlier assertion-time slice differs.
+
+Table~\ref{Table:case-policies} applies four simple policies to the same evidence slice at \(T_@=2026\text{-}04\text{-}11\). These policies are not part of the representation; they illustrate Proposition~\ref{Prop:policy-separation}. The representation fixes the input evidence, while a domain reasoner decides how to fuse or withhold judgment.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{Y{0.30\linewidth} Y{0.28\linewidth} Y{0.31\linewidth}}
+\toprule
+Illustrative policy & Result at 2026-04-11 & Reading \\
+\midrule
+Trust ED for acute record & \(p_A\) supported & The ED's earlier support is still active before its later retraction \\
+Trust specialist clinic & \(p_V\) supported; \(p_A\) opposed & Domain-specialist source dominates the acute source \\
+Support minus opposition & \(p_V\) preferred & \(p_A\) receives \(0.80-0.90=-0.10\), while \(p_V\) receives \(0.90\) \\
+Abstain on conflict & no accepted diagnosis & Active source disagreement is preserved for later review \\
+\bottomrule
+\end{tabular}
+\caption{Policy sensitivity over one information-in-effect slice. Different approximate-reasoning policies consume the same selected evidence.}
+\label{Table:case-policies}
+\end{table}
+
+\section{Encoding Burden in Existing Data Substrates}
+\label{Sec:encodings}
+The claim is not that existing systems are unable to encode the case study. A disciplined relational, RDF, or property-graph design can represent it. The difference is where the burden sits: in transitional representation, source-specific bitemporal support, opposition, and retraction are part of the core pattern, whereas other substrates require conventions and query discipline layered on top.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{p{0.22\linewidth} p{0.34\linewidth} p{0.33\linewidth}}
+\toprule
+Encoding & Natural representation & Extra burden for the case study \\
+\midrule
+Temporal relations & Tables for posits, assertions, sources, valid time, and assertion time & Resolution needs grouped maxima over both time axes plus explicit anti-joins or aggregates for retractions \\
+RDF-star or named graphs & Triple terms or graph names annotate statements with source and time & The \(n\)-ary clinical episode needs a reified event node, and assertion-time history/retraction remain vocabulary conventions \\
+Property graph / GQL & Episode, source, and assertion nodes connected by typed edges with properties & Same-time alternatives and bitemporal source commitments require an assertion subgraph and repeated temporal query patterns \\
+Transitional representation & Posits plus assertion posits over reserved roles & The representation directly exposes the \(\ie\) operator; fusion and acceptance remain external policies \\
+\bottomrule
+\end{tabular}
+\caption{Encoding burden for the synthetic case study. The comparison concerns representational primitives and query discipline, not raw expressiveness.}
+\label{Table:encodings}
+\end{table}
+
+Table~\ref{Table:query-burden} makes the same point at the level of the information-in-effect query. Relational, RDF, and graph encodings can implement the semantics, but they must repeat the same resolution pattern as a convention. Transitional representation instead names that pattern as the \(\ie\) operator. This is the practical role of design criteria D1--D7: they define what evidence must survive before any reasoner chooses a fusion or acceptance policy.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{Y{0.28\linewidth} Y{0.27\linewidth} Y{0.34\linewidth}}
+\toprule
+Resolution need & Transitional representation & Typical encoding burden \\
+\midrule
+Source-specific commitment & Assertion posit over \textit{posit} and \textit{ascertains} & Assertion table, statement node, edge property, or named graph convention \\
+Dual temporal cuts & \(\ie(\mathbb{A},T_@,t_@)\) & Filters over assertion time and target-valid time in every query \\
+Retraction & \(c=0\) plus Definition~\ref{Def:effect} Step 2 & Anti-join, \texttt{NOT EXISTS}, or grouped retraction CTE \\
+Latest target state & Definition~\ref{Def:effect} Step 3 & Grouped maximum by source and statement identity \\
+Latest source commitment & Definition~\ref{Def:effect} Step 4 & Grouped maximum by source, statement identity, and value \\
+Fusion or acceptance & Outside the representation layer & Application-specific rule often mixed into the retrieval query \\
+\bottomrule
+\end{tabular}
+\caption{Query-burden comparison for information in effect. The right column describes the repeated conventions needed in ordinary encodings, not impossibility.}
+\label{Table:query-burden}
+\end{table}
+
+\section{Prototype}
+\label{Sec:traqula}
+The Positorium prototype \cite{Positorium} stores posits in an experimental Rust engine \cite{Matsakis}. It is a functional implementation intended to validate the representation and query semantics; it has not yet been optimized as a production database engine. Its query and mutation language, Traqula, is not a full database language, but it shows that the formal constructs can be parsed and executed.
+
+\textsc{Mutation example.}
+\begin{quote}
+\small
+\begin{verbatim}
+add role patient, suspected trigger, encounter, ascertains;
+add posit +p [{(mira, patient), (penicillin, suspected trigger),
+               (enc42, encounter)}, "IgE-mediated allergy", '2026-03-03'];
+add posit [{(p, posit), (ed, ascertains)}, 80%, '2026-03-04'];
+\end{verbatim}
+\end{quote}
+
+\textsc{Evidence query.}
+\begin{quote}
+\small
+\begin{verbatim}
+search +p [{(mira, patient), (penicillin, suspected trigger),
+            (enc42, encounter)}, +v, +t],
+          [{(p, posit), (+src, ascertains)}, +c, +T]
+where c >= 50%
+return src, v, t, T, c;
+\end{verbatim}
+\end{quote}
+
+The example query joins a domain posit pattern with an assertion posit pattern over the reserved roles \textit{posit} and \textit{ascertains}, returning source-local evidence for a reasoner. Internally, Positorium represents appearance sets using integer identifiers and set operations. The implementation uses compact bitmap-like result sets inspired by Roaring Bitmaps \cite{Chambi}. This is an implementation choice, not part of the formal semantics. The semantics above can also be implemented relationally using tables for posits, appearances, and assertions with grouped maxima over indexed time columns.
+
+\section{Prototype and Experiments}
+\label{Sec:evaluation}
+The experimental evaluation asks whether the representation preserves the evidence states needed by approximate-reasoning policies under conflict, retraction, correction, and temporal cuts. The clinical case above demonstrates evidence-state recovery at three assertion-time cuts and policy sensitivity over a single selected slice. The executable experiments add generated workloads and independent result-set checks. Runtime measurements are reported as scalability sanity checks, not as a claim of implementation-performance superiority.
+
+The evaluation has two executable components. The first measures posit-level temporal resolution in the Positorium prototype against an in-memory SQLite baseline. The second evaluates the full assertion-body \(\ie\) operator using a hash-table reference evaluator and an equivalent SQLite query over generated support, revision, retraction, and conflict histories. The experiments remain bounded: they use generated in-memory data and do not evaluate persistence, concurrent access, distribution, or optimizer behavior under mixed workloads.
+
+The experimental claim is therefore semantic rather than competitive. The prototype and reference evaluator demonstrate that the operators can be executed, that independently implemented result sets agree, and that the conventional relational expression of \(\ie\) requires a multi-stage grouped query. A mature systems study should add persistent PostgreSQL and graph-store baselines, storage measurements, update throughput, and stress sweeps over sources, conflict density, retraction density, and assertion-time revision frequency.
+
+The experiment programs were run from Positorium commit \texttt{26e38f3}. The benchmarked paths were covered by the integration test suite, which passed with \texttt{cargo test --tests} (24 tests). The benchmarks were run with Rust \texttt{1.97.0-nightly} on Darwin ARM64. The posit-resolution benchmark generated \(A\) unary appearance sets with five time-ordered values per appearance set. Positorium was populated through its Rust API and queried through Traqula:
+\begin{quote}
+\small
+\begin{verbatim}
+search [{(*, state)}, +v, +t] as of '2099' return v, t;
+\end{verbatim}
+\end{quote}
+The SQLite baseline used an in-memory \texttt{posit} table with columns for identifier, appearance signature, value, and appearance time, indexed by appearance signature and appearance time, and evaluated the equivalent grouped-maximum query. Both systems materialized the returned value/time rows. Each query should return exactly one row per appearance set: the latest visible value at the cut point. Each reported query time is the median of seven runs after one warmup query.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{r r r r r r r}
+\toprule
+Appearance sets & Changes/set & Posits & \multicolumn{2}{c}{Positorium ms} & \multicolumn{2}{c}{SQLite ms} \\
+\cmidrule(lr){4-5}\cmidrule(lr){6-7}
+ & & & Load & Query & Load & Query \\
+\midrule
+100 & 5 & 500 & 1.419 & 0.311 & 1.740 & 0.167 \\
+1,000 & 5 & 5,000 & 13.524 & 1.767 & 3.481 & 0.911 \\
+5,000 & 5 & 25,000 & 42.215 & 6.980 & 13.272 & 3.658 \\
+10,000 & 5 & 50,000 & 81.863 & 14.843 & 26.141 & 7.373 \\
+\bottomrule
+\end{tabular}
+\caption{In-memory posit-resolution experiment. Each query returned one resolved row per appearance set. Query columns report median runtime over seven measured runs.}
+\label{Table:prototype}
+\end{table}
+
+The results in Table~\ref{Table:prototype} are not presented as a general performance claim. Positorium is functional but not yet optimized, so these measurements establish that the prototype can load and resolve temporally varying posits through the query language at the scale shown, and that result cardinalities match the semantics of \(\rho\). SQLite is faster on this narrow workload, roughly by a factor of two in query time at the largest scale, and also loads faster after the smallest case. That result is unsurprising: the benchmark maps directly to a conventional indexed grouped-maximum query. The relevant claim here is executability and semantic agreement, not implementation superiority.
+
+The second experiment evaluates the full \(\ie\) operator independently of Traqula parser support for a named \texttt{effect} primitive. The generator created five temporal values for each appearance set, three asserting sources, later certainty revisions for latest assertions, retractions of every fifth latest assertion by source \(s_0\), and same-appearance-time conflicting alternatives for every tenth appearance set by source \(s_1\). The hash-table evaluator implements Definition~\ref{Def:effect}. The relational baseline used:
+\[
+\begin{array}{l}
+\texttt{posit(id, appearance\_signature, value, appearance\_time)},\\
+\texttt{assertion(id, posit\_id, source\_id, certainty, assertion\_time)}.
+\end{array}
+\]
+SQLite evaluated an equivalent CTE query with grouped retractions, latest target-appearance grouping, and latest assertion-time grouping. The full SQL query is included in the reproducibility artifacts as \texttt{sqlite\_effect\_query.sql}. Each measured run compared the complete sorted result sets from the two implementations.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{r r r r r r}
+\toprule
+Appearance sets & Posits & Assertions & Rows & Hash \(\ie\) ms & SQLite \(\ie\) ms \\
+\midrule
+100 & 510 & 1,830 & 310 & 0.500 & 8.613 \\
+250 & 1,275 & 4,575 & 775 & 0.541 & 34.962 \\
+500 & 2,550 & 9,150 & 1,550 & 1.103 & 133.357 \\
+1,000 & 5,100 & 18,300 & 3,100 & 2.240 & 533.582 \\
+\bottomrule
+\end{tabular}
+\caption{Assertion-body information-in-effect experiment. Each workload used five changes per appearance set and three sources. Query columns report median runtime over seven measured runs after one warmup query.}
+\label{Table:assertion-effect}
+\end{table}
+
+Table~\ref{Table:assertion-effect} exercises retraction, latest assertion-time revision, and retained conflict. The returned row count is \(3.1A\) for \(A\) appearance sets because each appearance set normally contributes one visible row per source, while every tenth appearance set contributes an additional same-time alternative for one source. The hash-table reference evaluator is substantially faster than the SQLite expression on this workload. That does not establish a general systems advantage; it shows that the formal operator is executable, that its output can be checked against a relational baseline, and that the relational formulation is more complex than the simple posit-resolution case. A broader evaluation should add persistent storage, update throughput, storage size, parameter sweeps over sources and conflicts, and graph-benchmark reporting practices such as those used in LDBC studies \cite{AnglesEtAl2020,QiEtAl2023}.
+
+\section{Discussion and Limitations}
+\label{Sec:discussion}
+The representation layer intentionally leaves several tasks outside its scope.
+
+\textbf{Identification.}
+The model assumes that identifiers used in an appearance set have already been chosen. Whether two source-local identifiers refer to the same entity is an entity-resolution or exchange-agreement problem. Co-reference claims can themselves be represented as posits, but traversing them during query evaluation is a consumer policy.
+
+\textbf{Certainty calibration.}
+Signed certainty preserves what a source asserted; it does not make certainty values commensurable across sources. A query may use source weights, calibration models, or credibility policies, but those policies are not part of the storage semantics.
+
+\textbf{Fusion and acceptance.}
+\(\ie\) returns the signed source commitments in effect. It does not select a single truth, probability, possibility distribution, belief function, or argumentation extension. A consumer may select the highest certainty, the most trusted source, the most recent assertion, an aggregate score, an accept/reject relation, or no value at all. This is a design feature: forcing one policy during evidence capture would discard alternatives that later reasoners may need.
+
+\textbf{Schemas and constraints.}
+Classifications, schema commitments, cardinality policies, and richer constraints can be represented as additional posits, but they are not part of the core results in this paper. They should be treated as extensions or future work unless accompanied by separate formal semantics and evaluation.
+
+\textbf{Lifecycle and legal deletion.}
+Logical retraction preserves history. Physical deletion for storage management or legal mandates is a separate operational act that may create dangling references. A practical system must define lifecycle policies in addition to the representation semantics.
+
+\section{Related Work}
+\label{Sec:related}
+\textbf{Approximate reasoning and evidence theories.}
+Fuzzy sets and possibility theory provide foundational accounts of graded and incomplete information \cite{Zadeh1965,DuboisPrade1988}. Dempster-Shafer theory represents evidential support without requiring a single additive probability distribution \cite{Dempster1967,Shafer1976}. Transitional representation does not define a competing calculus for combining evidence. Its signed certainty is an abstract source-local commitment scale that can be interpreted by a later policy. The contribution is the bitemporal evidence-selection substrate that supplies such policies with the commitments in effect.
+
+\textbf{Belief revision, nonmonotonicity, and argumentation.}
+Belief-revision theory studies rational change in belief sets under new information \cite{AGM1985}. Abstract argumentation studies acceptance under attack and conflict \cite{Dung1995}. Transitional representation is compatible with these concerns but operates below them: it records support, opposition, withdrawal, and correction as source-local assertions. Proposition~\ref{Prop:effective-nonmonotonicity} captures the relevant separation: storage is append-only, while the effective evidence state is nonmonotonic under later retractions and corrections.
+
+\textbf{Probabilistic databases, uncertain data, and provenance.}
+Probabilistic databases with lineage represent uncertain tuples and confidence \cite{BenjellounEtAl}; temporal-probabilistic databases add valid-time treatment \cite{DyllaEtAl}. Semiring provenance gives an algebraic account of how query results depend on input annotations \cite{GreenEtAl}, and database provenance surveys explain lineage, why-provenance, and where-provenance \cite{CheneyEtAl}. Transitional representation is complementary: it stores the confidence-bearing assertion as an independently timed statement by a source and preserves later withdrawal or opposition rather than folding it into a single tuple annotation.
+
+\textbf{Inconsistency, exchange, and repairs.}
+Data exchange formalizes mappings between source and target schemas and the semantics of query answering over exchanged instances \cite{FaginEtAl}. Consistent query answering studies how to answer queries despite constraint violations, often through repairs \cite{ArenasEtAl}. Transitional representation does not compute repairs by default. It preserves conflicting source assertions so that repair, acceptance, or fusion policies can be selected later.
+
+\textbf{Temporal and graph data substrates.}
+Temporal database theory distinguishes domain time from database or transaction time \cite{Snodgrass}, SQL:2011 standardized temporal features \cite{SQL2011}, and bitemporal design practice remains important in audit-heavy domains \cite{Johnston}. Named graphs attach metadata to graph names \cite{CarrollEtAl}; RDF-star and RDF 1.2 add triple terms for statement annotation \cite{HartigChampin,RDF12}. Property graphs, SQL/PGQ, and GQL make graph querying central in relational and graph database standards \cite{FrancisEtAl,SQLPGQ,GQL,DeutschEtAl2021,GheerbrantEtAl2024}. These substrates can encode source-local assertions, but the bitemporal information-in-effect operator remains a convention or query pattern rather than the represented evidence-selection semantics itself.
+
+\textbf{Temporal knowledge graphs.}
+Temporal knowledge graph embedding methods associate time with facts and learn representations for completion or prediction \cite{Lacroix2020}. This is adjacent rather than substitutive. Transitional representation defines a contested, source-specific evidence slice that a downstream temporal knowledge graph or approximate-reasoning method might consume.
+
+\section{Conclusion}
+Transitional representation addresses a representation problem that precedes approximate reasoning: preserving evolving, conflicting, source-specific commitments without forcing a fusion policy at capture time. The posit gives an \(n\)-ary statement an appearance time; the assertion treats source commitment to a posit as another posit with assertion time and signed certainty. The resulting information-in-effect operator gives deterministic bitemporal evidence slices over support, opposition, withdrawal, and correction.
+
+The main payoff is separation of concerns. Storage preserves source-local evidence histories. Information-in-effect selection determines which commitments are currently in effect. Fusion, acceptance, calibration, and trust remain policies chosen by the reasoner. The formal results show that this separation is deterministic, non-destructive, compatible with downstream fusion operators, and not recoverable after premature fusion. The case study and experiments show that evidence states can be recovered under temporal cuts and that different policies can consume the same selected evidence without changing the stored history.
+
+\section*{Declaration of generative AI and AI-assisted technologies in the manuscript preparation process}
+During the preparation of this work the author used GPT-5.4 (via GitHub Copilot), Claude Opus 4.6, and GPT-5 Codex for language editing, manuscript organization, and consistency checks. The author checked and edited all AI-assisted material and takes full responsibility for the content of the published article.
+
+\begin{thebibliography}{99}
+
+\bibitem{Zadeh1965}
+Lotfi A. Zadeh.
+\newblock Fuzzy sets.
+\newblock \emph{Information and Control}, 8(3):338--353, 1965.
+
+\bibitem{DuboisPrade1988}
+Didier Dubois and Henri Prade.
+\newblock \emph{Possibility Theory: An Approach to Computerized Processing of Uncertainty}.
+\newblock Plenum Press, 1988.
+
+\bibitem{Dempster1967}
+Arthur P. Dempster.
+\newblock Upper and lower probabilities induced by a multivalued mapping.
+\newblock \emph{The Annals of Mathematical Statistics}, 38(2):325--339, 1967.
+
+\bibitem{Shafer1976}
+Glenn Shafer.
+\newblock \emph{A Mathematical Theory of Evidence}.
+\newblock Princeton University Press, 1976.
+
+\bibitem{AGM1985}
+Carlos E. Alchourr{\'o}n, Peter G{\"a}rdenfors, and David Makinson.
+\newblock On the logic of theory change: Partial meet contraction and revision functions.
+\newblock \emph{The Journal of Symbolic Logic}, 50(2):510--530, 1985.
+
+\bibitem{Dung1995}
+Phan Minh Dung.
+\newblock On the acceptability of arguments and its fundamental role in nonmonotonic reasoning, logic programming and n-person games.
+\newblock \emph{Artificial Intelligence}, 77(2):321--357, 1995.
+
+\bibitem{Snodgrass}
+Richard Snodgrass and Ilsoo Ahn.
+\newblock A taxonomy of time databases.
+\newblock \emph{ACM SIGMOD Record}, 14(4):236--246, 1985.
+
+\bibitem{SQL2011}
+Krishna Kulkarni and Jan-Eike Michels.
+\newblock Temporal features in SQL:2011.
+\newblock \emph{ACM SIGMOD Record}, 41(3):34--43, 2012.
+
+\bibitem{GreenEtAl}
+Todd J. Green, Gregory Karvounarakis, and Val Tannen.
+\newblock Provenance semirings.
+\newblock In \emph{Proceedings of the Twenty-Sixth ACM SIGMOD-SIGACT-SIGART Symposium on Principles of Database Systems (PODS)}, pages 31--40, 2007.
+
+\bibitem{CheneyEtAl}
+James Cheney, Laura Chiticariu, and Wang-Chiew Tan.
+\newblock Provenance in databases: Why, how, and where.
+\newblock \emph{Foundations and Trends in Databases}, 1(4):379--474, 2009.
+
+\bibitem{BenjellounEtAl}
+Omar Benjelloun, Anish Das Sarma, Alon Halevy, Martin Theobald, and Jennifer Widom.
+\newblock Databases with uncertainty and lineage.
+\newblock \emph{The VLDB Journal}, 17(2):243--264, 2008.
+
+\bibitem{DyllaEtAl}
+Maximilian Dylla, Iris Miliaraki, and Martin Theobald.
+\newblock A temporal-probabilistic database model for information extraction.
+\newblock \emph{Proceedings of the VLDB Endowment}, 6(14):1810--1821, 2013.
+
+\bibitem{FaginEtAl}
+Ronald Fagin, Phokion G. Kolaitis, Ren{\'e}e J. Miller, and Lucian Popa.
+\newblock Data exchange: Semantics and query answering.
+\newblock \emph{Theoretical Computer Science}, 336(1):89--124, 2005.
+
+\bibitem{ArenasEtAl}
+Marcelo Arenas, Leopoldo Bertossi, and Jan Chomicki.
+\newblock Consistent query answers in inconsistent databases.
+\newblock In \emph{Proceedings of the Eighteenth ACM SIGMOD-SIGACT-SIGART Symposium on Principles of Database Systems (PODS)}, pages 68--79, 1999.
+
+\bibitem{CarrollEtAl}
+Jeremy J. Carroll, Christian Bizer, Pat Hayes, and Patrick Stickler.
+\newblock Named graphs, provenance and trust.
+\newblock In \emph{Proceedings of the 14th International World Wide Web Conference (WWW)}, pages 613--622, 2005.
+
+\bibitem{HartigChampin}
+Olaf Hartig and Pierre-Antoine Champin.
+\newblock RDF-star and SPARQL-star.
+\newblock W3C Community Group Final Report, 2021.
+\newblock \url{https://www.w3.org/2021/12/rdf-star.html}
+
+\bibitem{RDF12}
+World Wide Web Consortium.
+\newblock RDF 1.2 Concepts and Abstract Data Model.
+\newblock W3C Candidate Recommendation Snapshot, 7 April 2026.
+\newblock \url{https://www.w3.org/TR/rdf12-concepts/}
+
+\bibitem{FrancisEtAl}
+Nadime Francis, Alastair Green, Paolo Guagliardo, Leonid Libkin, Tobias Lindaaker, Victor Marsault, Stefan Plantikow, Mats Rydberg, Petra Selmer, and Andr{\'e}s Taylor.
+\newblock Cypher: An evolving query language for property graphs.
+\newblock In \emph{Proceedings of the 2018 International Conference on Management of Data (SIGMOD)}, pages 1433--1445, 2018.
+
+\bibitem{GQL}
+ISO/IEC JTC 1/SC 32.
+\newblock \emph{ISO/IEC 39075:2024 -- Information Technology -- Database Languages -- GQL}.
+\newblock International Organization for Standardization, 2024.
+\newblock \url{https://www.iso.org/standard/76120.html}
+
+\bibitem{SQLPGQ}
+ISO/IEC JTC 1/SC 32.
+\newblock \emph{ISO/IEC 9075-16:2023 -- Information Technology -- Database Languages SQL -- Part 16: Property Graph Queries (SQL/PGQ)}.
+\newblock International Organization for Standardization, 2023.
+\newblock \url{https://www.iso.org/standard/79473.html}
+
+\bibitem{DeutschEtAl2021}
+Alin Deutsch, Nadime Francis, Alastair Green, Keith Hare, Bei Li, Leonid Libkin, Tobias Lindaaker, Victor Marsault, Wim Martens, Jan Michels, Filip Murlak, Stefan Plantikow, Petra Selmer, Hannes Voigt, Oskar van Rest, Domagoj Vrgo\v{c}, Mingxi Wu, and Fred Zemke.
+\newblock Graph pattern matching in GQL and SQL/PGQ.
+\newblock \emph{arXiv:2112.06217}, 2021.
+
+\bibitem{GheerbrantEtAl2024}
+Am{\'e}lie Gheerbrant, Leonid Libkin, Liat Peterfreund, and Alexandra Rogova.
+\newblock GQL and SQL/PGQ: Theoretical models and expressive power.
+\newblock \emph{arXiv:2409.01102}, 2024.
+
+\bibitem{Johnston}
+Tom Johnston.
+\newblock \emph{Bitemporal Data: Theory and Practice}.
+\newblock Newnes, 2014.
+
+\bibitem{Lacroix2020}
+Timoth{\'e}e Lacroix, Guillaume Obozinski, and Nicolas Usunier.
+\newblock Tensor decompositions for temporal knowledge base completion.
+\newblock In \emph{Proceedings of the International Conference on Learning Representations (ICLR)}, 2020.
+
+\bibitem{Positorium}
+Lars R{\"o}nnb{\"a}ck.
+\newblock Positorium: An experimental database engine based on transitional modeling.
+\newblock GitHub repository, 2024.
+\newblock \url{https://github.com/Roenbaeck/positorium}
+
+\bibitem{Matsakis}
+Nicholas D. Matsakis and Felix S. Klock II.
+\newblock The Rust language.
+\newblock In \emph{Proceedings of the 2014 ACM SIGAda Annual Conference on High Integrity Language Technology}, pages 103--104, 2014.
+
+\bibitem{Chambi}
+S. Chambi, D. Lemire, O. Kaser, and R. Godin.
+\newblock Better bitmap performance with Roaring Bitmaps.
+\newblock \emph{Software: Practice and Experience}, 46(5):709--719, 2016.
+
+\bibitem{AnglesEtAl2020}
+Renzo Angles, J{\'a}nos Benjamin Antal, Alex Averbuch, Altan Birler, Peter Boncz, M{\'a}rton B{\'u}r, Orri Erling, Andrey Gubichev, Vlad Haprian, Moritz Kaufmann, Josep Llu{\'i}s Larriba-Pey, Norbert Mart{\'i}nez, J{\'o}zsef Marton, Marcus Paradies, Minh-Duc Pham, Arnau Prat-P{\'e}rez, David P{\'u}roja, Mirko Spasi{\'c}, Benjamin A. Steer, D{\'a}vid Szak{\'a}llas, G{\'a}bor Sz{\'a}rnyas, Jack Waudby, Mingxi Wu, and Yuchen Zhang.
+\newblock The LDBC Social Network Benchmark.
+\newblock \emph{arXiv:2001.02299}, 2020.
+
+\bibitem{QiEtAl2023}
+Shipeng Qi, Heng Lin, Zhihui Guo, G{\'a}bor Sz{\'a}rnyas, Bing Tong, Yan Zhou, Bin Yang, Jiansong Zhang, Zheng Wang, Youren Shen, Changyuan Wang, Parviz Peiravi, Henry Gabb, and Ben Steer.
+\newblock The LDBC Financial Benchmark.
+\newblock \emph{arXiv:2306.15975}, 2023.
+
+\end{thebibliography}
+
+\end{document}

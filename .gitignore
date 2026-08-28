@@ -43,4 +43,3 @@ Cargo.lock
 *.db-wal
 *.out
 *.pid
-*.tex

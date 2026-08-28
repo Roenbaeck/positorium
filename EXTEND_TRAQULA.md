@@ -8,20 +8,29 @@ contracts, fixtures, and implementation. Constraints are deliberately **not**
 ready for implementation; the constraint sections record the current direction
 and the questions that must be answered first.
 
-The design draws on both versions of the transitional representation paper:
+The design draws on the three paper revisions retained in this repository:
 
-- *Transitional Representation: A Formalism for Conflicting and Evolving
-  Information*, release
-  [`v0.9.0`](https://github.com/Roenbaeck/transitional/releases/tag/v0.9.0),
-  commit `12942e2c29fc3e3a79708b691a733f19a6878ef9`; and
-- the earlier representation in commit
-  `4c5b7e89cda8f5db81494c09c268b04b55754ee3`.
+- the [oldest paper](theory/oldest_paper.tex), which contains the original
+   classification and body-characteristic treatment;
+- the [older paper](theory/older_paper.tex), which generalizes bodies of
+   information to sets of posits and refines classification and temporal
+   resolution; and
+- the [recent paper](theory/recent_paper.tex), which gives the current
+   assertion-body, information-in-effect, and policy-separation terminology.
 
-The older paper is preferable where it distinguishes subclassing from class
-membership. The newer paper is preferable where classification is represented
-as ordinary temporal, disputable posits. The model below combines those
-properties without adopting the older paper's exhaustive classification or its
-assumption that every Thing has one distinguished class.
+The older revisions are informative where they distinguish subclassing from
+class membership and represent classification as ordinary temporal, disputable
+posits. The model below retains those properties without adopting exhaustive
+classification or the assumption that every Thing has one distinguished
+class. The recent paper is normative for temporal evidence selection and for
+the boundary between information in effect and downstream interpretation.
+
+For temporal resolution, use the paper's latest separation of concerns. A body
+of information is a finite set of posits, an assertion body is a body containing
+only assertion posits, and information in effect is a derived subset of an
+assertion body at two temporal cuts. It deterministically selects source-local
+evidence; it does not fuse sources, rank alternative values by certainty, or
+select an accepted truth.
 
 There are no Positorium releases or legacy stores to support. This work should
 update the unreleased contracts directly. It must not add a SQLite migration,
@@ -141,9 +150,10 @@ identity or append order.
 
 ### Subjective and temporal interpretation
 
-Classification is evaluated for one positor over one information-in-effect
-slice. It must not fuse assertions from multiple positors into a global class
-graph unless an explicit query policy requests such fusion.
+Classification is interpreted independently for each positor from one
+information-in-effect slice. It must not fuse assertions from multiple
+positors into a global class graph unless an explicit query policy requests
+such fusion.
 
 At a selected assertion-time and appearance-time cut, an interpreted
 classification can be:
@@ -152,8 +162,16 @@ classification can be:
 - inherited membership, with its subclass path as provenance;
 - explicit inactive membership;
 - unknown because no applicable classifier is present; or
-- indeterminate because effective classifier states, assertions, or temporal
-  maxima conflict.
+- indeterminate because the retained evidence admits incompatible classifier
+   interpretations.
+
+The information-in-effect slice itself remains a deterministic set when it
+contains alternative values, equal maxima, or incomparable maxima. Those rows
+are evidence, not an error in resolution. Certainty is preserved on each row
+and is never used by information-in-effect selection to choose a winner. A
+classification view may report `indeterminate` when it cannot interpret that
+evidence as one classifier state; a separate fusion or acceptance policy may
+instead rank, combine, accept, reject, or abstain.
 
 Raw posit search always remains available and returns the actual classifier
 and subclass posits. Inheritance is an explicit classification-query option,
@@ -184,8 +202,9 @@ contract text before changing code. Record at least these decisions:
 7. **Per-positor views.** Resolve classification independently for each positor
    unless a separate, explicit source-fusion policy is supplied.
 8. **Temporal comparability.** Retain equal or incomparable maxima. If they
-   change the interpretation, return `indeterminate` rather than imposing a
-   total order.
+   make the derived classification interpretation incompatible, report that
+   interpretation as `indeterminate`; do not describe the deterministic
+   evidence slice itself as indeterminate or impose a total order.
 9. **Identity parameters.** Typed parameters may carry current-store Thing and
    Posit identities. Validate the store UUID at external boundaries. Never
    resolve a class reference from its name.
@@ -268,29 +287,133 @@ does not need special class syntax.
 ### Information-in-effect query operator
 
 Classification requires the paper's explicit dual-cut assertion view. A
-possible raw query form is:
+target-only query should make the common case concise:
 
 ```traqula
-search ?assertion = [
-           {(?claim, posit), (?source, ascertains)},
-           ?certainty,
-           ?asserted
-       ] in effect ($assertion_cutoff, $appearance_cutoff),
-       ?claim = [{(?subject, thing), (?class, class)}, ?state, ?appeared]
-return ?subject, ?class, ?state, ?appeared, ?source, ?certainty, ?asserted;
+search
+   [{(*, name)}, ?namevalue, ?appeared]
+      in effect @NOW, @NOW
+return
+   ?namevalue, ?appeared;
 ```
 
-`in effect (T, t)` applies to an assertion pattern and:
+`in effect T, t` always modifies a **target posit pattern**. It never
+inspects the pattern's roles to guess whether that pattern is an assertion
+envelope. This also keeps assertions about assertions unambiguous: an attached
+pattern with the roles `posit` and `ascertains` still denotes a target posit
+being ascertained by another effective assertion.
+
+The clause has exactly two operands separated by a comma. The first operand is always the
+assertion-time cut `T`; the second is always the target appearance-time cut
+`t`. This intentionally parallels `as of t`, which has exactly one operand.
+For readability, put a following search pattern on a new line when its pattern
+separator would immediately follow the second cut.
+
+Semantically, the engine first computes the information-in-effect slice over
+the complete assertion body at `(T, t)`, then dereferences each retained
+assertion's target posit, and only then matches the attached target pattern.
+Value and target-time restrictions in that pattern must not run before
+resolution, because doing so could resurrect an older matching value after a
+newer non-matching value has taken effect. Structural target-role restrictions
+may be pushed down only as a proven-equivalent optimization.
+
+The modifier:
 
 1. retains assertions at or before assertion cut `T` whose target posit is at
    or before appearance cut `t`;
-2. resolves target states per positor and target appearance set at the
-   appearance cut; and
-3. resolves assertion versions per positor, target posit, and assertion cut.
+2. discards zero-certainty assertions and any non-zero assertion retracted by
+   the same positor for the same target posit after that assertion and no later
+   than `T`;
+3. retains assertions whose target appearance time is maximal for each
+   `(positor, target appearance set)`; and
+4. from those rows, retains assertions whose assertion time is maximal for each
+   `(positor, target appearance set, target value)`.
 
-Equal or incomparable maxima remain visible. Retraction, malformed assertions,
-and dangling target identities receive explicit semantics and diagnostics.
-Ordinary one-cut `as of` retains its current meaning.
+Equal or incomparable maxima remain visible at both reductions. In particular,
+alternative values at the same maximal appearance time all remain in effect;
+their certainties do not participate in either maximum. Retraction, malformed
+assertions, and dangling target identities receive explicit semantics and
+diagnostics. Ordinary one-cut `as of` retains its current meaning.
+
+The result is an **effective assertion slice**. Diagnostics such as decisive,
+indecisive, or non-contradictory inspect that slice. Fusion and acceptance are
+separate operators over it. For example, choosing the highest-certainty value
+would be one optional acceptance policy, not part of `in effect`.
+
+The concise form hides, but does not discard, the effective assertion's
+identity, positor, certainty, and assertion time. Query cardinality remains one
+binding per matching effective assertion. If two positors effectively assert
+the same target posit, projecting only target fields therefore returns two
+identical rows under Traqula's normal bag semantics; `return distinct` requests
+deduplication explicitly.
+
+Queries that need provenance or same-positor correlation can expose the
+assertion envelope with a `via` pattern:
+
+```traqula
+search
+   ?claim = [{(?subject, thing), (?class, class)}, ?state, ?appeared]
+      in effect $assertion_cutoff, $appearance_cutoff
+      via ?assertion = [
+         {(?claim, posit), (?source, ascertains)},
+         ?certainty,
+         ?asserted
+      ]
+return
+   ?subject, ?class, ?state, ?appeared,
+   ?assertion, ?source, ?certainty, ?asserted;
+```
+
+`via` is optional surface syntax for bindings already present in the effective
+assertion relation; it does not perform a second search or change resolution.
+Each `in effect` occurrence without `via` receives fresh hidden evidence
+variables. Consequently, multiple shorthand patterns may be supported by
+different positors. A query requiring the same positor across patterns must
+expose and reuse `?source` through `via`, rather than relying on implicit source
+fusion.
+
+### Desugaring target
+
+This separation makes a lower-level expansion precise. Let `A1` be the joined
+assertion and target rows passing both cuts. Then the effective assertion
+relation is equivalent to four ordinary relational stages:
+
+```text
+A1 = temporally eligible assertion rows
+A2 = A1 anti-join later retractions of the same (positor, target posit)
+A3 = A2 with strictly dominated target appearance times removed
+     per (positor, target appearance set)
+IE = A3 with strictly dominated assertion times removed
+     per (positor, target appearance set, target value)
+```
+
+Both dominance stages retain equal and incomparable maxima. This is a semantic
+desugaring, not permission to implement certainty-based tie-breaking.
+
+The ergonomic target modifier then lowers to a join from `IE` to its target
+posit followed by the attached target-pattern match. An explicit `via` pattern
+binds columns from `IE`; without it, those columns remain fresh hidden
+variables. This lowering fixes target matching after resolution and preserves
+source-local bag multiplicity without giving `in effect` a second meaning.
+
+Current Traqula does not yet have enough composable query algebra to spell this
+expansion faithfully. Its correlated `not exists` block has no local `where`
+predicate or nested/named intermediate relation, while pattern-local `as of`
+cannot perform grouped maxima over the joined assertion/target rows. Extending
+anti-join blocks with local predicates is useful, but retraction filtering must
+also be reusable as the input to both grouped reductions. The implementation
+should therefore first define a general lower-level representation for:
+
+- a named or nested relation produced by joins, filters, and anti-joins; and
+- nondominated reduction partitioned by explicit grouping variables and
+  ordered by a selected time variable.
+
+`in effect` can then lower to the four-stage plan above, and the executor may
+optimize that recognized plan with a shared Rust resolver. Until those general
+operations exist, implementing only an opaque `in effect` AST node is
+acceptable as an executable reference, but it is not yet a true desugaring to
+the current language. The expansion must be tested for invariance under query
+planning, pattern order, append order, unrelated data, and identity allocation.
 
 The Rust resolver must be implemented once and shared by query execution and
 classification so their temporal semantics cannot drift.
@@ -302,7 +425,7 @@ the interpreted view:
 
 ```traqula
 search classifications of $archie
-       in effect ($assertion_cutoff, $appearance_cutoff)
+   in effect $assertion_cutoff, $appearance_cutoff
        include subclasses
 return ?class, ?mode, ?path, ?source, ?certainty, ?since;
 ```
@@ -365,6 +488,64 @@ the web console examples and autocomplete in `positorium.html`.
 Do **not** implement constraint roles, policy decoding, cardinality validation,
 constraint mutation syntax, or write-time enforcement as part of the
 classification extension.
+
+### Body characteristics, diagnostics, and enforcement
+
+Decisiveness, indecisiveness, and non-contradiction describe retained evidence;
+they do not alter what `in effect` returns. Their natural default is a query or
+audit diagnostic over an explicit assertion body, positor scope, and temporal
+cut. Useful results include the characteristic verdict, the affected
+`(positor, appearance set)` groups, the effective assertion witnesses, and
+summary counts. Calling them statistics is reasonable for the aggregates, but
+the underlying result is a formally defined property or diagnostic.
+
+An entire body being decisive or non-contradictory is much stronger than one
+selected slice having that property: the paper's body-level definitions
+quantify over every information-in-effect slice. Because logical storage is
+append-only, a later correction cannot make a historically indecisive slice
+disappear. Backdated assertions can also change diagnostics at earlier
+appearance-time cuts. Whole-body enforcement is therefore costly and, once
+violated, cannot be repaired merely by appending another assertion.
+
+Use three distinct levels:
+
+1. **Representation invariants** are always enforced. Examples include valid
+   identities, exact built-in assertion shape where built-in interpretation is
+   requested, bounded decoding, and certainty within its admitted range.
+2. **Evidence diagnostics** are computed from actual data by default. These
+   include decisiveness and the non-contradiction budget for each positor and
+   appearance set in an effective slice.
+3. **Declared integrity profiles** may later require selected diagnostics for
+   a named scope and explicit cuts, with modes such as report, validate, or
+   reject. Such a profile is a versioned constraint policy; it never authorizes
+   `in effect` to discard alternatives or manufacture a winner.
+
+Source-local exclusivity for the exact same target posit, source, and assertion
+time is local enough to be offered as an optional write-time integrity rule.
+Decisiveness is usually a poor global default because it deliberately forbids
+the competing alternatives transitional representation is designed to retain.
+Non-contradiction is often useful as a validation rule, but rejecting violations
+should be an explicit database or input-scope profile rather than universal
+storage semantics. Applications needing relational-style single-valued state
+can opt into a decisive profile; evidence-oriented databases should normally
+retain the rows and report the diagnostic.
+
+Do not expose one undifferentiated `comprehensive = true` database switch. The
+other paper characteristics require different treatment:
+
+- canonical form can be a normalization rule only for value domains with
+   declared complement semantics;
+- symmetry and boundedness can be checked only when those complements are
+   known, so they belong to a domain profile rather than every `DataType`;
+- source-local exclusivity is directly observable and locally enforceable;
+- universality is chiefly an identity-alignment and shared-meaning assumption,
+   not a property that can be inferred from equal stored identifiers alone; and
+- decisiveness and non-contradiction are temporal properties of effective
+   slices, with whole-body forms quantified over all cuts.
+
+A future audit may report a named collection of these diagnostics as a
+comprehensive profile, but it should retain each verdict, scope, assumptions,
+and witnesses separately.
 
 The earlier plan gave cardinality policies too much responsibility. A general
 constraint can depend on arbitrary relationships, temporal classifications,
@@ -610,7 +791,18 @@ At minimum, add tests for:
 - both temporal cuts, reassertion, restatement, retraction, correction, equal
   maxima, incomparable times, and dangling target posits;
 - malformed assertion and classifier posits;
+- same-time alternative values remaining in effect regardless of their
+   relative certainties, followed by separately tested diagnostic and
+   acceptance policies;
+- target value and time restrictions being applied after effect resolution so
+   an older matching target cannot be resurrected;
+- two positors asserting the same target producing two shorthand rows, with
+   `return distinct` producing one projected row;
+- `via` bindings exposing the same evidence as the shorthand hides, including
+   same-positor correlation across multiple effective target patterns;
 - raw posit spelling versus sugar expansion equivalence;
+- semantic equivalence between the reference information-in-effect resolver
+   and its eventual lower-level four-stage expansion;
 - restart, logical export/import, WASM, HTTP, SSE, cancellation, and limits; and
 - invariance under append order, query-plan order, unrelated data, and Thing
   identity ordering.
