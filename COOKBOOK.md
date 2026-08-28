@@ -31,8 +31,9 @@ That decision belongs to an explicit application or assertion-resolution policy.
 
 ## Assertions, sources, and certainty
 
-`posit` and `ascertains` are the only reserved roles. An assertion is an ordinary
-posit that refers to another posit's identity:
+`posit`, `ascertains`, `thing`, `class`, and `subclass` have fixed reserved Role
+identities. Only `posit` and `ascertains` define the built-in assertion shape. An
+assertion is an ordinary posit that refers to another posit's identity:
 
 ```traqula
 add role status, source;
@@ -47,8 +48,30 @@ return ?case, ?status, ?changed, ?source, ?certainty, ?asserted;
 
 This is a manual assertion join. Ordinary `as of` never follows assertion
 posits implicitly, chooses a preferred source, combines certainty, or treats a
-negative certainty as deletion. Information-in-effect and assertion resolution
-are post-beta policies.
+negative certainty as deletion. The planned `in effect T, t` operator selects
+source-local effective assertions explicitly and still does not choose truth.
+
+## Classification without hidden lifecycle semantics
+
+The reserved classification Roles make raw patterns interoperable without
+turning Positorium into an ontology engine:
+
+```traqula
+add posit [{(+person_class, class)}, "declared", @NOW];
+add posit [{(+ada, thing), (person_class, class)}, "included", @NOW];
+
+search ?classification = [
+  {(?member, thing), (?class, class)},
+  ?state,
+  ?time
+]
+return ?classification, ?member, ?class, ?state, ?time;
+```
+
+`"declared"` and `"included"` are application values, not reserved lifecycle
+states. A UI may instead choose `"active"` as its display convention. It must
+also choose source, certainty, temporal, and optional subclass-traversal policy;
+the database never infers those choices from the literal text.
 
 ## External identification without identity merging
 
@@ -106,7 +129,9 @@ Literal values remain recorded exactly as entered. If one context requires a
 unit, range, scale, or allowed vocabulary, record or configure that constraint
 outside the value's physical codec and evaluate conformance explicitly. A
 nonconforming posit remains part of history; it is not silently coerced or
-discarded.
+discarded. The general constraint model is still research: the current direction
+is a deterministic versioned program evaluated over an immutable effective
+snapshot with explicit findings and provenance, not built-in cardinality roles.
 
 ## Backup, restore, and native transfer
 

@@ -41,11 +41,11 @@ never depend on locale or formatted display text.
 Every identity in an export is the pair `(source_store_uuid, local)`. Import
 creates a new store UUID and constructs one complete collision-free remap table
 before writing records. Every non-built-in foreign identity receives a different
-local number, even when its old number happens to be unused. The reserved Roles
-`posit` and `ascertains` are the sole exception: D006 fixes them at local
-identities 1 and 2 in every store, so import maps those semantic catalog entries
-to destination identities 1 and 2. All references are rewritten through the
-same table, and the table includes these two explicit mappings.
+local number, even when its old number happens to be unused. The five fixed
+built-in Roles are the exception: D006 fixes `posit` = 1, `ascertains` = 2,
+`thing` = 3, `class` = 4, and `subclass` = 5 in every store. Import maps those
+catalog entries to the same destination identities. All references are rewritten
+through the same table, which includes those five explicit mappings.
 
 Import accepts only a destination path that does not exist. It writes and
 durably flushes a new store, replays and compares every transformed logical

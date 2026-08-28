@@ -251,12 +251,20 @@ Let `A(p)` be posit `p`'s exact appearance set and `T(p)` its stored `Time`.
 Terrain is value-independent: literal values and codecs do not affect structural
 membership.
 
+Classification shading is not part of the Terrain 1 report. A future browser
+overlay may combine this structural geometry with ordinary `{thing, class}`
+query results, but the client must select the lifecycle value, evidence source,
+certainty treatment, and temporal cut explicitly. The backend must not treat a
+literal such as `"active"` as class membership or perform implicit subclass
+closure. A client-only overlay does not require a Terrain contract version bump
+because it leaves every report field and count unchanged.
+
 ### Immutable database totals
 
 `database` describes the complete captured database, independent of the selected
 Terrain frame:
 
-- `roles`: all catalog Roles, including `posit` and `ascertains`;
+- `roles`: all catalog Roles, including all five fixed D006 Roles;
 - `appearances`: all canonical Appearances;
 - `appearance_sets`: all canonical AppearanceSets;
 - `posits`: all canonical Posits;
@@ -604,6 +612,12 @@ boundary.
     query-derived Terrain.
 12. Rename source status from `Query data` to `Database snapshot` (HTTP) or
     `Browser database snapshot` (WASM).
+
+A future selected-class overlay is additive client work, not a Terrain 1
+completion requirement. Keep it outside the Terrain report adapter. When added,
+allow one selected direct class, render its translucent regions behind
+structural marks, and show the client-side value/source/certainty policy. Do not
+make Terrain geometry imply database-level classification semantics.
 
 ## Golden Fixture
 

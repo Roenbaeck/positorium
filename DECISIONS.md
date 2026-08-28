@@ -219,9 +219,10 @@ ids are never preserved verbatim.
 - Collision/remapping policy: Import always creates an explicit remap table and
   rewrites every internal reference. Foreign local identifiers are never retained
   verbatim.
-- D006 compatibility clarification: The fixed built-in Roles `posit` and
-  `ascertains` map to the same fixed destination identities 1 and 2. Every other
-  foreign local identity is remapped and receives a different local number.
+- D006 compatibility clarification: The five fixed built-in Roles map to the
+  same destination identities in every store: `posit` = 1, `ascertains` = 2,
+  `thing` = 3, `class` = 4, and `subclass` = 5. Every other foreign local
+  identity is remapped and receives a different local number.
 - Reasoning: Compact local identities suit the in-memory engine, while composite
   external identities prevent accidental cross-store collisions and make import
   semantics explicit.
@@ -312,49 +313,32 @@ the rule is a public contract (see TODO.md).
 
 **Blocks:** Initial role catalog, assertions, classification examples
 
-The implementation and theory currently disagree about names such as `class` and
-`classification`.
-
-**Candidate roles:**
-
-- `posit`
-- `ascertains`
-- `thing`
-- `class` or `classification`
-- `named`
-- `subclass`
-- `superclass`
-
-**Options:**
-
-- A. Reserve only the minimal assertion roles for beta: `posit` and
-  `ascertains`. Treat classification roles as ordinary user roles until their
-  semantics are specified.
-- B. Freeze the complete candidate vocabulary now.
-- C. Do not reserve names; identify built-ins only by fixed role identities.
-- D. Another rule described in the response.
-
-**Recommendation:** A, while still assigning stable catalog identities to those
-minimal built-ins. Avoid freezing an unfinished class model.
-
-**Suggestion:** A — reserve only `posit` and `ascertains`, with fixed catalog
-identities persisted as compatibility data. The engine today also reserves
-`thing` and `classification` in `Database::new` while the theory says `class`;
-drop both from the reserved set for beta rather than freezing a name the theory
-disagrees with. Reintroduce class vocabulary with the post-beta class layer.
-
 **Response:**
 
-- Choice: A.
-- Exact beta vocabulary: Reserve only `posit` and `ascertains`. `thing`, `class`,
-  `classification`, `named`, `subclass`, and `superclass` are ordinary roles
-  until a class model is specified.
-- Fixed identity policy: The two reserved roles have fixed identities and names
-  recorded as persisted compatibility data.
-- Reasoning: Assertions need a minimal stable vocabulary; freezing the currently
-  inconsistent classification vocabulary would turn an unfinished model into a
-  compatibility obligation.
-- Accepted on: 2026-08-26
+- Exact vocabulary: Reserve five Roles with fixed identities and names:
+  `posit` (`1`), `ascertains` (`2`), `thing` (`3`), `class` (`4`), and
+  `subclass` (`5`). Do not reserve `classification`, `named`, `superclass`, or
+  constraint-specific roles.
+- Assertion semantics: `posit` and `ascertains` define the exact assertion shape
+  used by assertion-aware operators such as `in effect`.
+- Classification boundary: `thing`, `class`, and `subclass` are stable vocabulary
+  for interchange, raw queries, and presentation conventions. Reserving them does
+  not make the core interpret a posit's value, validate classifier shapes, derive
+  membership, traverse subclass relationships, or reject a write.
+- Conventional shapes: Consumers may treat unary `{class}` as a class
+  declaration, binary `{thing, class}` as direct classification, and binary
+  `{subclass, class}` as a subclass statement. A consumer must state its value,
+  source, certainty, temporal, and inheritance policies explicitly.
+- Value neutrality: Strings such as `"active"` and `"inactive"` are ordinary
+  literal values. They have no database-defined classification meaning.
+- Descriptions: Names, labels, and descriptions use ordinary application Roles.
+  Class identity is the Thing identity, never a current display name.
+- Compatibility: No Positorium release predates this vocabulary. Update the
+  unreleased store bootstrap and contracts directly; do not add a migration.
+- Reasoning: Stable Role identities make classification posits portable and
+  discoverable without turning Positorium into an ontology engine or assigning
+  hidden truth semantics to application values.
+- Revised and accepted on: 2026-08-28
 
 ---
 
@@ -876,8 +860,9 @@ The current evaluator's `f64` conversion and `1e-9` epsilon must be removed.
   insignificant whitespace are ignored, array order is significant, and numbers
   compare by exact numeric value. Duplicate object keys are rejected. Exact
   identity remains presentation-sensitive under D002.
-- Constraint/interpretation interaction: Constraints report conformance only in
-  beta and do not refine nominal or possible-value interpretations.
+- Constraint/interpretation interaction: A future constraint evaluator may
+  report conformance but must not refine nominal or possible-value
+  interpretations. The beta defines no general constraint engine.
 - Unsupported-comparison behavior: Fail the query with a typed comparison error,
   including when a heterogeneous role produces an unsupported operand pair. Do
   not silently return false or convert to strings.
@@ -1492,7 +1477,7 @@ Update this table as decisions are accepted.
 | D003 | Thing identity scope and import | Accepted | Local `u64`; external store UUID pair |
 | D004 | Identity equivalence and merging | Accepted | Ordinary posits; no destructive merge |
 | D005 | Appearance-set cardinality and slots | Accepted | Partial function `Role -> Thing` |
-| D006 | Reserved role vocabulary | Accepted | `posit` and `ascertains` only |
+| D006 | Reserved role vocabulary | Accepted | Five fixed roles; classification values remain neutral |
 | D007 | Meaning of imprecise time | Accepted | Half-open UTC intervals |
 | D008 | Temporal comparison vocabulary | Accepted | Definite ordering plus interval predicates |
 | D009 | Snapshot maxima and conflicts | Accepted | Return every maximal applicable posit |

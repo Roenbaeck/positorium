@@ -249,7 +249,13 @@ Planned/next:
 These are aspirational features that align with the full vision of Transitional Modeling, extending Positorium beyond its current experimental state:
 
 * **Advanced Query Capabilities**: Implement all theoretical query types from Transitional Modeling, including probabilistic searches (e.g., "find facts with at least 75% certainty"), audit trails (e.g., "show all corrections between dates"), and log-like queries (e.g., "all model changes by a specific identity").
-* **Constraint and Schema Management**: Add support for subjective, evolving constraints and classifications that can be applied late, enabling "eventual conformance" for data integrity without rigid upfront schemas.
+* **Classification Presentation**: Use the reserved `thing`, `class`, and
+  `subclass` vocabulary in explicit query and visualization policies while
+  keeping lifecycle values neutral in storage. Terrain will initially shade one
+  selected direct class at a time.
+* **Constraint Research**: Define reproducible, versioned constraint programs
+  over immutable effective snapshots before adding enforcement or specialized
+  cardinality syntax.
 * **Multi-tenant and Collaborative Features**: Enhance multi-tenant support for disagreements and consensus tracking, allowing collaborative modeling where different observers can maintain concurrent, conflicting models.
 * **Uncertainty Theory Integration**: Extend certainty handling to full uncertainty theory, supporting complex logical consistency checks across collections of opinions.
 * **Performance and Scalability**: Optimize for large-scale deployments with distributed persistence, advanced indexing, and parallel query execution.

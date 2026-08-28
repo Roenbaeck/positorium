@@ -1,12 +1,12 @@
-# Extending Traqula with Classification
+# Information in Effect and Neutral Classification Presentation
 
 ## Status and sources
 
-This document is an implementation plan for classification and a research note
-for constraints. Classification is sufficiently defined to proceed through
-contracts, fixtures, and implementation. Constraints are deliberately **not**
-ready for implementation; the constraint sections record the current direction
-and the questions that must be answered first.
+This document is an implementation plan for information in effect, five-role
+vocabulary bootstrap, neutral classification queries, and a selected-class
+Terrain overlay. Constraints are deliberately **not** ready for implementation;
+the constraint sections record the current direction and the questions that
+must be answered first.
 
 The design draws on the three paper revisions retained in this repository:
 
@@ -22,8 +22,11 @@ The older revisions are informative where they distinguish subclassing from
 class membership and represent classification as ordinary temporal, disputable
 posits. The model below retains those properties without adopting exhaustive
 classification or the assumption that every Thing has one distinguished
-class. The recent paper is normative for temporal evidence selection and for
-the boundary between information in effect and downstream interpretation.
+class. The recent paper is normative for temporal evidence selection when the
+relevant times are comparable and for the boundary between information in
+effect and downstream interpretation. Positorium generalizes each grouped
+maximum to maximal-element selection under its interval-based partial order,
+retaining every incomparable maximum.
 
 For temporal resolution, use the paper's latest separation of concerns. A body
 of information is a finite set of posits, an assertion body is a body containing
@@ -37,23 +40,22 @@ update the unreleased contracts directly. It must not add a SQLite migration,
 an old append-log reader, deprecated syntax, or a compatibility mode for
 development data.
 
-## Classification model
+## Neutral classification vocabulary
 
-Classification introduces no new storage primitive. Class declarations,
-memberships, and subclass relationships are ordinary posits. Beliefs about
-them are ordinary assertion posits and are resolved through the same
-information-in-effect semantics as other information.
+Classification introduces no storage primitive and no database truth semantics.
+Class declarations, direct classification statements, and subclass statements
+are ordinary posits. Assertions about them are ordinary assertion posits and can
+be selected with the same information-in-effect operator as other evidence.
 
 ### Reserved roles
 
-Reserve exactly three additional roles for classification:
+Reserve exactly three additional Roles for stable interchange and raw queries:
 
 - `thing`
 - `class`
 - `subclass`
 
-Together with the existing `posit` and `ascertains` roles, this produces five
-reserved roles in total. The proposed fixed identities are:
+Together with `posit` and `ascertains`, this produces five reserved Roles:
 
 | Identity | Role |
 | ---: | --- |
@@ -64,156 +66,75 @@ reserved roles in total. The proposed fixed identities are:
 | 5 | `subclass` |
 
 Do not reserve `named`, `classification`, `superclass`, `policy`,
-`posit class`, `lower bound`, or `upper bound`.
+`posit class`, `lower bound`, or `upper bound`. Names, labels, descriptions, and
+external identifiers use ordinary application Roles. Class identity and joins
+use the class Thing, never a possibly changing or non-unique display name.
 
-The role `class` consistently marks a participant as a class. In a membership
-posit it is the target class; in a subclass posit it is the parent class; and
-in the unary form it explicitly declares a class. A separate `superclass` role
-would repeat information already conveyed by the `class` role.
+Reservation guarantees only catalog identity and availability. The database
+does not decode classifier shapes, interpret their values, infer membership, or
+traverse subclasses.
 
-Names, labels, descriptions, and external identifiers are application data.
-They can use ordinary user-defined roles such as `name`, but none has built-in
-classification semantics. Class identity and joins always use the class Thing,
-never a possibly non-unique or changing name.
+### Structural conventions
 
-### Class declaration
-
-An active unary classifier declares a class even when it has no members and no
-parent class:
+Consumers may use three compact structural conventions:
 
 ```text
-[{(C, class)}, "active", t]
+[{(C, class)}, state, t]
+[{(x, thing), (C, class)}, state, t]
+[{(S, subclass), (C, class)}, state, t]
 ```
 
-This form is useful for discovery, documentation, and empty classes. A Thing
-appearing in the `class` or `subclass` position of either binary form is also
-known structurally to be a class, so a declaration need not precede first use.
-The unary declaration does not give the class a globally preferred name.
+They respectively provide evidence that a Thing is being presented as a class,
+that `x` is being classified under `C`, and that `S` is being related to `C` as
+a subclass. The separate `subclass` form avoids conflating an instance-of
+statement about a class Thing with a subclass statement.
 
-### Direct class membership
+The value `state` is opaque. `"active"`, `"inactive"`, `"included"`, booleans,
+and domain-specific values are all ordinary literals. The core does not define
+which means membership, exclusion, declaration, retirement, or anything else.
+Negative certainty is likewise retained as source-local opposition and is not
+converted into an opposite lifecycle value.
 
-Direct membership is represented by:
+A consumer or presentation policy may choose:
 
-```text
-[{(x, thing), (C, class)}, lifecycle, t]
-```
+- which structural forms it recognizes;
+- which values it displays as included;
+- which positors and certainty signs it accepts;
+- which assertion-time and appearance-time cuts it uses;
+- whether several sources are shown separately or fused; and
+- whether and how subclass statements are traversed.
 
-Initially, `lifecycle` has two recognized exact string values:
+Those choices must remain visible to the user. Absence of a matching posit is
+absence of evidence under the selected query, not database-defined
+non-membership. Ordinary search always returns the recorded structures and
+values without applying a classification policy.
 
-- `"active"` states that `x` is a direct member of `C`;
-- `"inactive"` states that the direct membership is inactive.
+## Accepted implementation boundary
 
-Other values remain valid stored information but make the built-in membership
-interpretation indeterminate. A negative or conflicting assertion about a
-classifier posit is not silently converted into the opposite lifecycle state.
+The classification extension follows these decisions:
 
-The Thing `x` may be any Thing, including a role identity, class identity, or
-posit identity. In particular:
-
-```text
-[{(C, thing), (M, class)}, "active", t]
-```
-
-means that class `C` is an instance of metaclass `M`. It does **not** mean that
-`C` is a subclass of `M`.
-
-Membership is deliberately non-exhaustive and non-functional. A Thing may
-belong to zero, one, or many classes, and absence of a membership posit is not
-evidence of non-membership.
-
-### Subclass relationships
-
-Subset semantics is represented separately:
-
-```text
-[{(S, subclass), (C, class)}, lifecycle, t]
-```
-
-An active posit means that every member of `S` is also an inherited member of
-`C` at the selected information cut. An inactive posit removes that direct
-subclass edge; it does not retract other paths from `S` to `C`.
-
-This form has several advantages over treating a class as an ordinary member
-of another class:
-
-- it states actual subset semantics;
-- it distinguishes subclassing from metaclass membership;
-- it supports multiple inheritance without assigning one privileged class;
-- it makes direct edges separately queryable from inherited membership; and
-- it keeps the entire relationship temporal, disputable, and posit-native.
-
-Subclass traversal is transitive and cycle-safe. A cycle denotes mutual subset
-reachability and therefore extensionally equivalent membership for the classes
-in that cycle; it should also be exposed as a diagnostic because it may be an
-unintended taxonomy error. Traversal must never choose a winner by Thing
-identity or append order.
-
-### Subjective and temporal interpretation
-
-Classification is interpreted independently for each positor from one
-information-in-effect slice. It must not fuse assertions from multiple
-positors into a global class graph unless an explicit query policy requests
-such fusion.
-
-At a selected assertion-time and appearance-time cut, an interpreted
-classification can be:
-
-- direct membership;
-- inherited membership, with its subclass path as provenance;
-- explicit inactive membership;
-- unknown because no applicable classifier is present; or
-- indeterminate because the retained evidence admits incompatible classifier
-   interpretations.
-
-The information-in-effect slice itself remains a deterministic set when it
-contains alternative values, equal maxima, or incomparable maxima. Those rows
-are evidence, not an error in resolution. Certainty is preserved on each row
-and is never used by information-in-effect selection to choose a winner. A
-classification view may report `indeterminate` when it cannot interpret that
-evidence as one classifier state; a separate fusion or acceptance policy may
-instead rank, combine, accept, reject, or abstain.
-
-Raw posit search always remains available and returns the actual classifier
-and subclass posits. Inheritance is an explicit classification-query option,
-not hidden behavior added to ordinary `search`.
-
-## Decisions required before classification implementation
-
-Revise D006 in `DECISIONS.md` and the corresponding normative model and
-contract text before changing code. Record at least these decisions:
-
-1. **Reserved vocabulary.** Retain `posit` and `ascertains` at identities `1`
-   and `2`; reserve `thing`, `class`, and `subclass` at identities `3` through
-   `5`. No constraint roles are reserved.
-2. **No legacy path.** Bootstrap fresh stores with the five-role vocabulary and
-   reject incompatible development stores. Do not write a migration.
-3. **Classifier shapes.** Interpret only the exact unary `{class}`, binary
-   `{thing, class}`, and binary `{subclass, class}` role sets as built-in
-   classification forms. A posit with additional appearances is ordinary
-   application data and is not silently decoded as a classifier.
-4. **Lifecycle profile.** Initially recognize exact string values `"active"`
-   and `"inactive"`. Preserve all other values but report their built-in
-   interpretation as indeterminate.
-5. **Open-world membership.** Missing membership is `unknown`, not
-   non-membership. Multiple direct classes are valid.
-6. **Direct versus inherited membership.** Ordinary patterns and direct queries
-   return recorded classifiers. Transitive subclass traversal is explicit,
-   cycle-safe, and provenance-preserving.
-7. **Per-positor views.** Resolve classification independently for each positor
-   unless a separate, explicit source-fusion policy is supplied.
-8. **Temporal comparability.** Retain equal or incomparable maxima. If they
-   make the derived classification interpretation incompatible, report that
-   interpretation as `indeterminate`; do not describe the deterministic
-   evidence slice itself as indeterminate or impose a total order.
-9. **Identity parameters.** Typed parameters may carry current-store Thing and
-   Posit identities. Validate the store UUID at external boundaries. Never
-   resolve a class reference from its name.
+1. **Fixed vocabulary.** Bootstrap the five D006 Roles above. No constraint
+   Roles are reserved.
+2. **No legacy path.** Update fresh unreleased stores and reject incompatible
+   development stores. Do not write a migration.
+3. **Value neutrality.** No Rust, Traqula, HTTP, WASM, or Terrain core type
+   recognizes built-in classification lifecycle values.
+4. **Structural access.** Unary `{class}`, binary `{thing, class}`, and binary
+   `{subclass, class}` are ordinary queryable patterns, not write invariants.
+   Posits with extra appearances remain equally valid data.
+5. **No implicit closure.** Ordinary search and `in effect` do not traverse
+   subclass statements or fuse evidence sources.
+6. **Presentation policy.** The first interpreted class view belongs to Terrain
+   and displays one selected direct class under an explicit client policy.
+7. **Identity references.** Future typed parameters may carry current-store
+   Thing and Posit identities. External references validate the store UUID.
+   Display names never substitute for class identity.
 
 ## Proposed Traqula surface
 
-Raw posit spelling remains normative and sufficient. Convenience syntax should
-be small sugar expanded by the parser/AST into existing `add posit` operations,
-not a second mutation path.
+Raw posit spelling remains normative and sufficient. Any future convenience
+syntax must be small sugar expanded by the parser/AST into existing `add posit`
+operations, not a second mutation path or a hidden value policy.
 
 ### Raw representation
 
@@ -222,7 +143,7 @@ add role name;
 
 add posit +person_class_decl [
     {(+person_class, class)},
-    "active",
+    "declared",
     '2024-03-01'
 ];
 
@@ -234,13 +155,13 @@ add posit +person_name [
 
 add posit +membership [
     {(+archie, thing), (person_class, class)},
-    "active",
+    "included",
     '1972-08-20'
 ];
 
 add posit +mormon_is_christian [
     {(+mormon, subclass), (+christian, class)},
-    "active",
+    "included",
     '2024-03-01'
 ];
 
@@ -261,33 +182,20 @@ add posit [
 
 The classification roles are bootstrapped, so a script does not add them.
 User-defined descriptive roles such as `name` remain ordinary catalog entries.
+The example values are merely one application's vocabulary.
 
-### Classification mutation sugar
+### No classification mutation sugar initially
 
-Possible convenience forms are:
-
-```traqula
-add class +person_class at '2024-03-01';
-classify +archie as person_class active at '1972-08-20';
-add subclass +mormon of +christian active at '2024-03-01';
-```
-
-They expand respectively to:
-
-```traqula
-add posit [{(+person_class, class)}, "active", '2024-03-01'];
-add posit [{(+archie, thing), (person_class, class)}, "active", '1972-08-20'];
-add posit [{(+mormon, subclass), (+christian, class)}, "active", '2024-03-01'];
-```
-
-These forms are provisional until the raw representation, typed identities,
-and classification queries are working. Naming remains an ordinary posit and
-does not need special class syntax.
+Do not add `add class`, `classify`, or `add subclass` commands in the first
+implementation. Such syntax would either have to invent a lifecycle value or
+hide a policy choice. Raw `add posit` is already concise and makes the stored
+value explicit. A later client macro may require the caller to provide the value
+and still expand mechanically to `add posit`.
 
 ### Information-in-effect query operator
 
-Classification requires the paper's explicit dual-cut assertion view. A
-target-only query should make the common case concise:
+Assertion-backed classification display uses the paper's explicit dual-cut
+assertion view. A target-only query should make the common case concise:
 
 ```traqula
 search
@@ -380,7 +288,8 @@ relation is equivalent to four ordinary relational stages:
 
 ```text
 A1 = temporally eligible assertion rows
-A2 = A1 anti-join later retractions of the same (positor, target posit)
+A2 = non-zero A1 rows anti-join later retractions of the same
+     (positor, target posit)
 A3 = A2 with strictly dominated target appearance times removed
      per (positor, target appearance set)
 IE = A3 with strictly dominated assertion times removed
@@ -416,25 +325,35 @@ the current language. The expansion must be tested for invariance under query
 planning, pattern order, append order, unrelated data, and identity allocation.
 
 The Rust resolver must be implemented once and shared by query execution and
-classification so their temporal semantics cannot drift.
+all assertion-aware consumers so their temporal semantics cannot drift.
 
-### Classification queries
+### Neutral classification queries
 
-Direct classification remains an ordinary pattern. Optional sugar can expose
-the interpreted view:
+Direct classification evidence remains an ordinary target pattern:
 
 ```traqula
-search classifications of $archie
-   in effect $assertion_cutoff, $appearance_cutoff
-       include subclasses
-return ?class, ?mode, ?path, ?source, ?certainty, ?since;
+search
+   ?classification = [
+      {(?member, thing), (?class, class)},
+      ?state,
+      ?appeared
+   ] in effect $assertion_cutoff, $appearance_cutoff
+      via ?assertion = [
+         {(?classification, posit), (?source, ascertains)},
+         ?certainty,
+         ?asserted
+      ]
+return
+   ?classification, ?member, ?class, ?state, ?appeared,
+   ?source, ?certainty, ?asserted;
 ```
 
-`?mode` distinguishes direct and inherited membership. `?path` carries the
-subclass posit identities used for an inherited result. Names are joined only
-when explicitly requested and all effective matching names remain visible.
+This query returns evidence, not a membership verdict. The client selects one
+class identity and applies its visible display policy. Subclass evidence uses an
+ordinary `{(?child, subclass), (?parent, class)}` target pattern. No implicit
+closure or name resolution is added to Traqula.
 
-## Classification implementation
+## Implementation
 
 ### 1. Information in effect
 
@@ -453,35 +372,42 @@ result types and an internal resolver. It should:
 Cache a resolved slice for identical dual cuts during one command. Add counters
 before considering durable materialization or persisted indexes.
 
-### 2. Effective classification view
+### 2. Vocabulary bootstrap and neutral access
 
-Add `src/classification.rs` over an information-in-effect slice. Build ephemeral
-indexes keyed by positor and cut:
+Bootstrap and verify the five fixed Roles. Do not add `src/classification.rs`, a
+classification decoder, lifecycle diagnostics, materialized member indexes, or
+subclass inference. Existing exact/open appearance matching and the shared
+information-in-effect resolver provide the required data access.
 
-```text
-(positor, class) -> direct member Things and classifier posit identities
-(positor, thing) -> direct class Things and classifier posit identities
-(positor, child class) -> direct parent classes and subclass posit identities
-```
+Expose high-level assertion types such as `EffectCut` and
+`EffectiveAssertion`; do not expose `ClassificationView`, `MembershipMode`, or
+other types that imply a database verdict. Typed Thing/Posit parameters remain
+useful for selecting identities but do not change this boundary.
 
-Keep direct and inherited membership separate. Transitive traversal must be
-iterative, cycle-safe, retain every supporting path required for provenance,
-and never cross positor boundaries by default.
+### 3. Terrain selected-class overlay
 
-Class declarations and classifier values that are malformed, conflicting, or
-temporally incomparable remain visible and produce typed diagnostics. They are
-never collapsed into an arbitrary graph.
+Terrain 1 remains an authoritative, value-independent structural report. The
+browser combines its geometry with a separate neutral classification query.
+The first overlay:
 
-### 3. Public and client boundaries
+- allows exactly one selected class;
+- begins with direct `{thing, class}` evidence only;
+- shows the selected lifecycle value, positor/source treatment, certainty rule,
+  and temporal cuts as presentation settings;
+- may default to exact value `"active"`, but only in the UI;
+- uses an ordinary descriptive posit for the selector label when available and
+  otherwise shows the class Thing identity;
+- draws translucent shading behind isopleth strokes, connections, and labels;
+- reuses an isopleth interior when it already represents the classified Thing;
+- creates padded regions around other visible member geometry;
+- merges overlapping regions while retaining disconnected islands; and
+- leaves Terrain report counts, identities, layout, and version unchanged.
 
-Expose high-level types such as `EffectCut`, `EffectiveAssertion`,
-`ClassificationView`, `MembershipMode`, and `ClassificationDiagnostic`. Keep
-keepers and posting lists private. Extend execution parameters and result cells
-with opaque current-store identity handles.
+Subclass expansion is deferred. When added, it remains an explicit client
+option parameterized by the same value, evidence, and temporal policy.
 
-Once Traqula returns these rows through the existing result contract, HTTP,
-SSE, and WASM should inherit the same semantics. Add boundary tests and update
-the web console examples and autocomplete in `positorium.html`.
+HTTP, SSE, and WASM continue returning neutral rows. No transport should add a
+classification verdict that Traqula did not return.
 
 ## Constraints: research direction only
 
@@ -646,7 +572,8 @@ Consider the hypothetical rule that Christians are monogamous while Mormons
 may be polygamous. A constraint program could:
 
 1. enumerate people from an explicit subject scope;
-2. resolve their effective classification, including subclass provenance;
+2. apply its declared value, source, certainty, temporal, and optional subclass
+   policy to effective classification evidence;
 3. select the applicable limit or exception;
 4. resolve effective marriage posits at the same declared cuts;
 5. count distinct current spouses; and
@@ -658,10 +585,10 @@ For satisfaction, those identities are not enough: the evaluation must also
 retain the complete scoped-result digest that establishes no additional
 marriage was present.
 
-Whether exceptions are encoded in program logic, supplied as policy posits, or
-represented by a reusable declarative layer remains an open design question.
-No specificity or override behavior should be frozen until overlapping and
-disputed classifications have precise semantics.
+Whether classification policy and exceptions are encoded in program logic,
+supplied as policy posits, or represented by a reusable declarative layer
+remains an open design question. No specificity, fusion, or override behavior
+should be frozen as database classification semantics.
 
 ### Questions that block constraint implementation
 
@@ -697,49 +624,51 @@ conditional cardinality, overlapping exceptions, disputed membership,
 classification changes over time, incomparable temporal maxima, execution
 failure, backdated information, and constraints over evaluation results.
 
-## Repository change map for classification
+## Repository change map
 
 Expected files and responsibilities:
 
-- `DECISIONS.md`, `MODEL.md`, `CONTRACTS.md`, and `TODO.md`: accept and schedule
-  the classification semantics, while marking constraints as research-only.
+- `DECISIONS.md`, `MODEL.md`, `CONTRACTS.md`, and `TODO.md`: record the fixed
+  vocabulary and neutral interpretation boundary while keeping constraints
+  research-only.
 - `src/construct.rs`: bootstrap and verify the five fixed roles.
 - `src/storage.rs` and `src/maintenance.rs`: update fresh-store bootstrap,
   logical export/import validation, and built-in identity checks; no migration.
 - `src/effect.rs`: dual-cut assertion resolution.
-- `src/classification.rs`: direct and inherited effective class views.
-- `src/traqula.pest`: typed identity positions, `in effect`, and eventual small
-  classification convenience commands.
+- `src/traqula.pest`: `in effect`, `via`, and eventual typed identity positions;
+  no classification commands.
 - `src/traqula.rs` and `src/traqula/query.rs`: AST/desugaring, execution, and
   structured results. New query work belongs in `src/traqula/query.rs`; do not
   extend the retained `search_legacy` evaluator.
-- `src/error.rs`: stable classification and indeterminate diagnostic codes.
+- `src/error.rs`: stable assertion-resolution and resource diagnostics.
 - `src/interface.rs`, `src/server.rs`, and `src/wasm.rs`: identity parameters,
   result fields, limits, and boundary serialization.
 - both `traqula.tmLanguage.json` files: syntax highlighting kept in lockstep.
-- `TRAQULA.md`, examples, and `positorium.html`: raw and sugar examples,
-  dual-cut semantics, and open-world warnings.
+- `positorium-terrain.js`, `positorium-terrain.css`, `positorium.html`, and
+  `tests/terrain_client.test.js`: selected-class controls and shaded overlay.
+- `TRAQULA.md`, `TERRAIN.md`, examples, and the cookbook: neutral raw patterns,
+  dual-cut semantics, and visible presentation-policy warnings.
 
-No physical posit-record change is required. Classification data fits the
-existing appearance-set/value/time representation.
+No physical posit-record or Terrain report change is required. Classification
+data fits the existing appearance-set/value/time representation, and its
+shading is browser geometry.
 
 ## Delivery sequence
 
 ### Phase 0: contracts and golden fixtures
 
-- Record the classification decisions above and revise D006.
-- Add raw golden fixtures for class declaration, membership, metaclass
-  membership, subclassing, multiple inheritance, and disputed classifiers.
-- Specify exact information-in-effect slices and classification query results
-  before coding.
+- Record the neutral classification boundary and revise D006.
+- Add raw fixtures for unary class, `{thing, class}`, and `{subclass, class}`
+  structures using several unrelated literal values.
+- Specify exact information-in-effect slices before coding.
 - Mark all constraint syntax and implementation work as deferred.
 
 ### Phase 1: vocabulary and raw representation
 
 - Bootstrap the five fixed roles in fresh stores.
 - Update replay, logical transfer, role-count, and catalog-integrity tests.
-- Demonstrate that every classification example can be inserted and retrieved
-  using ordinary posits and existing search patterns.
+- Demonstrate that every structural convention can be inserted and retrieved
+  without value interpretation.
 
 ### Phase 2: information in effect
 
@@ -747,18 +676,17 @@ existing appearance-set/value/time representation.
 - Add the dual-cut assertion-pattern operator.
 - Keep existing `as of` behavior unchanged.
 
-### Phase 3: classification
+### Phase 3: selected-class presentation
 
-- Implement effective class declarations, direct membership, and subclass
-  edges.
-- Add typed identity parameters.
-- Implement explicit inherited membership with cycle and provenance reporting.
-- Add classification sugar only after raw behavior and query results are stable.
+- Add a one-class selector and explicit display-policy controls to Terrain.
+- Fetch direct classification evidence through neutral Traqula results.
+- Render shaded regions without changing structural geometry or report counts.
+- Do not implement subclass closure or classification mutation sugar.
 
 ### Phase 4: interfaces, documentation, and performance
 
-- Carry classification results through Rust, HTTP, SSE, and WASM.
-- Update the web console and editor grammars.
+- Carry `in effect` results and provenance through Rust, HTTP, SSE, and WASM.
+- Update the web console and editor grammars for `in effect` and `via`.
 - Add benchmarks and optimize only from profiles.
 - Update crate and contract version declarations immediately before the first
   Positorium release; do not create legacy shims for unreleased behavior.
@@ -771,26 +699,24 @@ existing appearance-set/value/time representation.
 - Do not schedule parser, storage, evaluator, or UI implementation until that
   model is accepted.
 
-## Classification test matrix
+## Test matrix
 
 At minimum, add tests for:
 
-- unary class declaration and a declared class with no members;
+- fixed identities and names for all five reserved Roles;
+- unary class statements and a class with no direct classification statements;
 - names as ordinary posits, renaming over time, non-unique names, and conflicting
   names without any effect on class identity;
-- active/inactive membership and positive, negative, zero, and competing
-  classifier assertions;
-- unknown versus explicit inactive versus indeterminate membership;
-- multiple direct classes and a Thing with no known class;
-- classifying role, class, and posit identities;
-- metaclass membership remaining distinct from subclassing;
-- active/inactive subclass transitions and alternative inheritance paths;
-- deep chains, diamonds, cycles, and multiple inheritance;
-- direct versus inherited membership with complete path provenance;
-- independent class frameworks from two positors;
+- arbitrary string, boolean, numeric, and JSON values on all three structural
+  conventions, returned without classification decoding;
+- the literals `"active"` and `"inactive"` receiving no special core behavior;
+- multiple `{thing, class}` statements and absence of implicit exclusivity;
+- role, class, and posit identities appearing in the `thing` position;
+- `{thing, class}` remaining structurally distinct from `{subclass, class}`;
+- no implicit subclass traversal, source fusion, or display-name lookup;
 - both temporal cuts, reassertion, restatement, retraction, correction, equal
   maxima, incomparable times, and dangling target posits;
-- malformed assertion and classifier posits;
+- malformed assertion posits while arbitrary non-assertion shapes remain data;
 - same-time alternative values remaining in effect regardless of their
    relative certainties, followed by separately tested diagnostic and
    acceptance policies;
@@ -800,39 +726,42 @@ At minimum, add tests for:
    `return distinct` producing one projected row;
 - `via` bindings exposing the same evidence as the shorthand hides, including
    same-positor correlation across multiple effective target patterns;
-- raw posit spelling versus sugar expansion equivalence;
 - semantic equivalence between the reference information-in-effect resolver
    and its eventual lower-level four-stage expansion;
+- one selected Terrain class at a time and a visible display policy;
+- exact reuse of an isopleth interior, padded non-isopleth regions, merged
+  overlaps, preserved disconnected islands, and legible foreground marks;
+- unchanged Terrain report identity, counts, and layout with the overlay toggled;
 - restart, logical export/import, WASM, HTTP, SSE, cancellation, and limits; and
 - invariance under append order, query-plan order, unrelated data, and Thing
   identity ordering.
 
-Add Criterion cases for information-in-effect resolution, direct class lookup,
-and subclass traversal at 10,000 and 100,000 posits. Measure assertions scanned,
-classifier posits decoded, graph edges traversed, paths retained, and peak result
-size. Avoid a persistent materialized class index until measurements show it is
-needed.
+Add Criterion cases for information-in-effect resolution at 10,000 and 100,000
+posits. Measure assertions scanned, retractions examined, temporal comparisons,
+effective rows, and peak result size. Use browser performance tests for overlay
+geometry. Do not add a materialized class index.
 
-## Classification definition of done
+## Definition of done
 
-The classification extension is complete when:
+This extension is complete when:
 
-1. declarations, memberships, metaclass memberships, and subclass relationships
-   are reproducible as raw Traqula golden fixtures;
-2. raw posits and every accepted convenience form produce identical stored
-   propositions;
-3. direct and inherited membership remain distinguishable with provenance;
-4. disagreement remains visible per positor and temporal cut;
-5. unknown and indeterminate cases are not silently converted to false;
-6. ordinary history and `as of` queries retain their current semantics;
+1. the five reserved Roles have fixed verified identities in fresh stores;
+2. classification structures and values round-trip without interpretation;
+3. `in effect` returns deterministic source-local evidence with provenance;
+4. ordinary history and `as of` queries retain their current semantics;
+5. Terrain shades one selected direct class under a visible client policy while
+   its structural report and layout remain unchanged;
+6. no lifecycle truth table, implicit subclass closure, or source fusion exists
+   in the core;
 7. Rust, native-store, HTTP/SSE, WASM, editor, and browser tests pass;
 8. no constraint implementation has been smuggled into the classification
-   layer; and
+   presentation; and
 9. no SQLite, old-store, or unpublished-syntax migration path has been added.
 
 ## Deferred work
 
-Constraints, write-time enforcement, closed-world inference, automatic source
-fusion, global class-name uniqueness, class equivalence sugar, disjointness,
-and automatic schema selection remain deferred. Constraint research must not
-reserve vocabulary or impose storage behavior until its semantics are accepted.
+Constraints, write-time enforcement, classification verdicts, subclass closure,
+closed-world inference, automatic source fusion, global class-name uniqueness,
+class equivalence sugar, disjointness, and automatic schema selection remain
+deferred. Constraint research must not reserve vocabulary or impose storage
+behavior until its semantics are accepted.

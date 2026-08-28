@@ -40,6 +40,10 @@ canonical Appearances, AppearanceSets, Posits, and retained referenced Things.
 Frame statistics count only active endpoint Things, Roles, appearance sets,
 posits, and incidences.
 
+In this document, **active** means retained in the selected History or Current
+frame. It does not refer to a classification literal named `"active"`; Terrain
+assigns no special meaning to that or any other posit value.
+
 ## Role projection, profiles, and isopleths
 
 A Role is an attribute candidate when it occurs in an active singleton
@@ -172,3 +176,33 @@ hierarchy from the union of History and Current isopleths: shared Roles form a
 core, Roles introduced by supersets fan into separate branches, smooth hulls
 follow those branches, and relationship allocations connect below the Role
 topology. Scope changes and support filtering do not move Role positions.
+
+## Planned selected-class overlay
+
+Terrain 1's authoritative report remains structural and value-independent. A
+class overlay is a separate browser presentation over ordinary classification
+query results; it does not change Rust counts, profile identities, isopleth
+identities, or the Terrain report contract.
+
+The first overlay should allow exactly one selected class. The browser obtains
+direct `{thing, class}` posit evidence at explicit temporal cuts, then applies a
+visible display policy for lifecycle value, positor/source, and certainty. A
+default such as exact value `"active"` belongs to the UI and is never database
+truth. Start with direct classification only. Optional traversal of
+`{subclass, class}` posits can be added later under an equally explicit policy.
+
+Render the selected class as translucent shaded areas behind existing isopleth
+lines and text:
+
+- when a classified Thing already corresponds to an isopleth region, reuse that
+  interior exactly;
+- otherwise form a padded region around the Thing's rendered geometry;
+- merge overlapping regions but retain disconnected islands instead of drawing
+  a bridge that implies a relationship; and
+- keep labels, isopleth strokes, connections, selection, and inspection legible
+  above the fill.
+
+The class selector should use an ordinary descriptive posit when one is
+available and fall back to the class Thing identity. The selected class and
+display policy must remain visible so shading cannot be mistaken for an
+inference made by Positorium.

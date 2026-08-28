@@ -47,8 +47,10 @@ finalized before beta.
 
 If a model needs to require a particular kind of value, precision, unit, range,
 or cardinality, that requirement is a **constraint**, not a datatype declaration.
-Constraints can be subjective and temporal like other modeled information; the
-underlying posit remains faithfully recorded even when it does not conform.
+The underlying posit remains faithfully recorded even when it does not conform.
+The general constraint representation is not yet settled; current research
+treats a constraint as a versioned deterministic program evaluated over an
+immutable effective snapshot, with its findings and provenance recorded.
 
 ## What Can Be Disagreed Upon
 
@@ -56,9 +58,17 @@ Even if you understand what a posit is saying, it doesn’t mean you believe it.
 
 To avoid confusion, we reserve specific roles for this purpose, such as `posit` and `ascertains`. An **assertion** is a meta-posit, exemplified by `[{(P1, posit), (J42, ascertains)}, 80%, '2019-04-05']`. This means Jennifer (J42) expresses an 80% confidence that her relationship with B43 was official since 2019. In contrast, `[{(P1, posit), (B43, ascertains)}, -100%, '2019-04-05']` reveals a conflict.
 
-Certainty values fall within the `[-100%, 100%]` interval. A positive value indicates belief in the stated fact, while a negative value indicates belief in its opposite. A certainty of `-100%` means complete certainty in the contrary. For example, the boyfriend is completely certain of the posit `[{(J42, girlfriend), (B43, boyfriend)}, "anything but official", '2019']`. A certainty of `0%` signifies complete uncertainty.
+Certainty values fall within the `[-100%, 100%]` interval. A positive value is
+source-local support for the target posit, while a negative value is source-local
+opposition. Negative certainty is not a probability complement and does not
+assert a particular alternative value as globally true. A later `0%` assertion
+by the same source about the same target posit is a withdrawal or retraction for
+information-in-effect selection.
 
-This introduces a powerful asymmetry. While you can be 100% certain of only a single posit for a given appearance set at a specific time, you can be -100% certain of an infinite number of posits without contradicting yourself. Being -100% certain that the value is "official" is not a contradiction to being -100% certain that the value is "a secret", as both simply affirm that the value is *something else*. For certainties between the extremes, it becomes computationally possible to determine whether a collection of opinions is logically consistent or contradictory.
+Several alternative values and their signed certainties may remain visible at
+the same cut. Decisiveness, consistency, source preference, fusion, and accepted
+truth are explicit diagnostics or policies over that evidence; storage does not
+choose among the alternatives.
 
 ## What Will Change and What Will Remain
 
@@ -80,11 +90,35 @@ The transcript is not yet exhaustive. We have presumed that J42 is a female huma
 
 An unrelated utterance in the discussion reveals the answer: “Haha, but I wonder what Jen (J42) feels about being hit by Jen (S44)? That storm is about to hit shores tomorrow.” There is a person, J42, and a storm, S44, both nicknamed Jen.
 
-To define what things are, we can reserve roles like `thing` and `class`. We can then create posits to classify our identities: `[{(J42, thing), (C1, class)}, "active", '1980-02-13']` and `[{(S44, thing), (C2, class)}, "active", '2019-08-10']`. The classes themselves can be described with more posits, such as `[{(C1, named)}, "Female Child", '2019-08-20']` and `[{(C2, named)}, "Storm", '2019-08-20']`.
+Positorium reserves `thing`, `class`, and `subclass` as stable vocabulary. A
+unary posit can introduce a class Thing, and ordinary descriptive Roles can
+give it a display name:
 
-Things can change class over time. If Jennifer (J42) becomes an adult at 18, we can add `[{(J42, thing), (C3, class)}, "active", '1998-02-13']`, where `C3` is the class for "Female Adult". This is another example of change, as the appearance set is the same, but the value (the class) and time are different.
+```text
+[{(C1, class)}, "declared", '1980-02-13']
+[{(C1, name)}, "Female Child", '1980-02-13']
+```
 
-Different observers can also have different models. A third party might prefer a more generic classification, like `[{(J42, thing), (C4, class)}, "active", '1980-02-13']`, where `C4` is "Person". These concurrent models can coexist. Furthermore, classes can be related hierarchically, for example: `[{(C1, subclass), (C4, superclass)}, "active", '2019-08-20']`.
+Direct classification and subclass statements use distinct structural forms:
+
+```text
+[{(J42, thing), (C1, class)}, "included", '1980-02-13']
+[{(C1, subclass), (C4, class)}, "included", '1980-02-13']
+```
+
+The literal values are intentionally ordinary data. An application may use
+`"active"` and `"inactive"`, `true` and `false`, or a richer vocabulary, but the
+database assigns none of those values membership semantics. Likewise, it does
+not infer that J42 belongs to C4. A consumer such as the Terrain presentation
+chooses the accepted values, evidence sources, certainties, temporal cut, and
+whether to traverse subclass statements. Ordinary queries merely return or
+filter the recorded literal fields.
+
+Classifications under C1 and C3 have different appearance sets because the
+class Thing participates in the appearance set. If an application wants a
+lifecycle transition, it records values and times for each exact membership
+appearance set according to its own convention. Different observers may assert
+different classification posits without the database fusing their models.
 
 ## Rethinking the Database
 
@@ -92,13 +126,17 @@ Transitional Modeling provides a theoretical framework for representing the subj
 
 NoSQL databases flourished by offering near-zero conformance, allowing users to dump any data they wished. However, this simply shifted the burden of ensuring consistency to every read operation.
 
-The way forward lies between these two extremes. A transitional database aims to minimize conformance requirements on write while still providing the mechanics for schemas, constraints, and classifications. These constructs are subjective, evolving, and can be applied late, leading to a concept of “eventual conformance.”
+The way forward lies between these two extremes. A transitional database aims
+to minimize conformance requirements on write while preserving enough structure
+and evidence for explicit schema, classification, and constraint policies to be
+applied later. Those policies remain visible choices rather than hidden storage
+semantics.
 
 With a transitional database built on posits, we can run a wide variety of queries:
 -   **NVP-like search**: Search anywhere for a unique identifier.
 -   **Graph-like search**: Search for everything that has a specific role or every time an identity played a role.
--   **Relational-like search**: Search for everything with a certain property or all instances of a class.
--   **Hierarchical-like search**: Search for all subclasses of a given class.
+-   **Relational-like search**: Search structural classification statements and apply an explicit membership policy.
+-   **Hierarchical-like search**: Traverse subclass statements under an explicit value and evidence policy.
 -   **Temporal-like search**: Search as it was on a given date.
 -   **Bi-Temporal-like search**: Search given what we knew on a given date.
 -   **Multi-tenant-like search**: Search for disagreements between identities.

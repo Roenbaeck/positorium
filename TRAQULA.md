@@ -58,7 +58,7 @@ Mutation variables are scoped to the script being executed:
 - An optional leading `+p` binds the identity assigned to a newly added posit.
 
 ```traqula
-add role name, posit, ascertains;
+add role name;
 add posit +p [{(+person, name)}, "Alice", @NOW];
 add posit [{(p, posit), (person, ascertains)}, 100%, @NOW];
 ```
@@ -218,11 +218,31 @@ search ?claim = [{(?case, status), ...}, ?status, ?changed],
 return ?case, ?status, ?changed, ?source, ?certainty, ?asserted;
 ```
 
-Only `posit` and `ascertains` are reserved in version 1. Assertion resolution
-and information-in-effect selection are planned query operations. Source
-preference, certainty combination, and accepted-truth selection remain separate
-application policies. None alters ordinary snapshot semantics or silently
-discards disagreement.
+Five Roles have fixed identities in the accepted version 1 model: `posit`,
+`ascertains`, `thing`, `class`, and `subclass`. Only `posit` and `ascertains`
+participate in built-in assertion resolution. Information-in-effect selection is
+a planned query operation. Source preference, certainty combination, and
+accepted-truth selection remain separate application policies. None alters
+ordinary snapshot semantics or silently discards disagreement.
+
+The three classification Roles are stable vocabulary, not an inference engine.
+Traqula treats their values as ordinary literals and does not give `"active"`,
+`"inactive"`, or any other value hidden meaning. Direct classification evidence
+can be explored with an ordinary pattern:
+
+```traqula
+search ?classification = [
+  {(?member, thing), (?class, class)},
+  ?state,
+  ?appeared
+]
+return ?classification, ?member, ?class, ?state, ?appeared;
+```
+
+A consumer may select a class and decide which states, positors, certainties,
+and temporal cuts to display. Subclass closure is likewise an explicit consumer
+policy over `{(?child, subclass), (?parent, class)}` posits; ordinary search does
+not traverse it implicitly.
 
 ## Query algebra
 

@@ -121,8 +121,8 @@ The accepted decisions now define the required fixes.
             outside the token, and do not normalize literal Unicode (D002).
         - Require `render(decode(encode(literal))) = literal` for every codec and
             exclude codec choice, integer width, and compression from posit identity.
-        - Keep user-facing datatypes and casts out of the core model. Use constraints
-            to express contextual conformance requirements.
+        - Keep user-facing datatypes and casts out of the core model. A future
+            explicit constraint policy may express contextual conformance requirements.
         - Separate exact literal identity, nominal equality (`=`), and compatible
             possible-value overlap (`?=`).
 - [x] **Formalize temporal precision and ordering.**
@@ -160,11 +160,12 @@ The accepted decisions now define the required fixes.
         - Return typed errors for unknown variables, incompatible variable domains,
             invalid recalls, and unsupported comparisons.
 - [x] **Freeze the reserved role vocabulary.**
-        - Reserve only `posit` and `ascertains` for beta, with fixed identities and
-            names persisted as compatibility data (D006).
-        - Treat `thing`, `class`, `classification`, `named`, `subclass`, and
-            `superclass` as ordinary roles until a class model is specified.
-        - Dedicated keyword syntax is not required for beta.
+        - Reserve `posit`, `ascertains`, `thing`, `class`, and `subclass`, with
+            fixed identities and names persisted as compatibility data (D006).
+        - Keep classification value-neutral: the core does not interpret
+            `"active"`, `"inactive"`, or any other lifecycle vocabulary.
+        - Keep `classification`, `named`, `superclass`, and constraint-specific
+            names ordinary. Dedicated classification syntax is not required.
 - [x] **Document external identification.**
         - Explain that identification is a modeling/query concern built from posits,
             not a second mutable key system inside the engine.
@@ -233,7 +234,8 @@ this algebra.
             insignificant whitespace, preserve array order, compare numbers exactly,
             and reject duplicate object keys. Keep exact identity
             presentation-sensitive.
-        - Keep constraints conformance-only in beta. Fail unsupported operand pairs,
+        - Keep any future constraint evaluation conformance-only. The beta has no
+            general constraint engine. Fail unsupported comparison operand pairs,
             including heterogeneous-role pairs, with a typed comparison error.
 - [x] **Specify result cardinality and ordering.**
         - Give joins bag semantics and require explicit `DISTINCT` for duplicate
@@ -491,7 +493,7 @@ posit replay.
             identity binding, script versus search scope, open-world negation, and
             result cardinality/order.
         - Explain the WYSIWYG value model, hidden physical codecs, exact retrieval,
-            nominal `=`, compatible `?=`, and constraints as the conformance mechanism.
+            nominal `=`, compatible `?=`, and the deferred constraint boundary.
         - Correct examples that use a four-slot posit pattern, describe identity
             unions as role unions, or confuse a leading posit binder with an appearing
             Thing binder.
@@ -505,17 +507,29 @@ posit replay.
 ## Post-Beta Formalism And Ecosystem
 
 - [ ] **Information in Effect and assertion resolution.**
-        - Specify this as an explicit query/library policy with separate appearance
-            and assertion cutoffs, selected positors, signed certainty semantics, and
-            deterministic conflict/tie handling.
-        - Keep manual assertion joins possible and do not redefine ordinary `as of`.
-- [ ] **Class layer.**
-        - Specify a class model before reserving any vocabulary, then consider
-            `named`/`thing`/`class` roles and optional subclass transitive closure.
-            Those names remain ordinary roles in beta (D006).
+        - Implement the target-pattern `in effect T, t` operator with separate
+            assertion and appearance cutoffs, retraction handling, source-local bag
+            semantics, optional `via` provenance, and partial-order maxima.
+        - Resolve the complete effective assertion slice before applying target
+            value/time predicates. Keep manual assertion joins possible and do not
+            redefine ordinary `as of`.
+        - Test the shared Rust resolver against its four-stage relational semantics.
+- [ ] **Neutral classification vocabulary and presentation.**
+        - Bootstrap the five D006 Roles in fresh stores and update integrity,
+            transfer, restart, and interface tests. No migration is required.
+        - Retrieve unary `{class}`, binary `{thing, class}`, and binary
+            `{subclass, class}` posits through ordinary patterns and `in effect`.
+            Do not add a database lifecycle truth table or classification evaluator.
+        - Add a Terrain client overlay for one selected class. The client chooses
+            lifecycle values, evidence sources, certainty handling, and temporal cut.
+            Start with direct classifications; keep subclass closure an explicit,
+            later presentation option.
 - [ ] **Constraint layer.**
-        - Implement subjective cardinality policies and "Decisive Fulfillment" after
-            core query and assertion semantics are stable.
+        - Research a deterministic, versioned constraint-program interface over an
+            immutable effective snapshot, with findings, witnesses, complete-scope
+            digests, and reproducible evaluation records.
+        - Do not implement constraint roles, cardinality syntax, policy decoding, or
+            write-time enforcement until that semantics is accepted.
 - [ ] **Richer Traqula operations.**
         - Add convenience OR syntax, BETWEEN, IN, richer aggregates, subqueries, and
             structured returns as orthogonal features with explicit desugarings where
@@ -524,8 +538,9 @@ posit replay.
         - Add snapshots, compaction, incremental indexes, and backup tooling when
             replay measurements demonstrate the need.
 - [ ] **Tooling and visualization.**
-        - Add role/class completion, an LSP, and assertion-aware temporal
-            visualization after those semantics are stable.
+        - Add Role completion and an LSP independently.
+        - Add assertion-aware class shading as client presentation policy without
+            changing Terrain 1's value-independent structural report.
 - [ ] **Optional container image.**
         - Add an OCI/Docker image only when users need that deployment path. It is a
             packaging convenience, not a beta-readiness requirement.

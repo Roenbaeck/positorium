@@ -20,9 +20,18 @@ case-sensitive and NFC-normalized at parser and catalog boundaries. Literal
 values are not Unicode-normalized. A role cannot be renamed; a changed name
 creates a new Role.
 
-Only `posit` (identity `1`) and `ascertains` (identity `2`) are reserved in the
-beta. `thing`, `class`, `classification`, `named`, `subclass`, and `superclass`
-have no built-in meaning and remain ordinary user-defined roles.
+Five Roles have fixed identities and names: `posit` (`1`), `ascertains` (`2`),
+`thing` (`3`), `class` (`4`), and `subclass` (`5`). `classification`, `named`,
+`superclass`, and constraint-specific names are ordinary user-defined Roles.
+
+The classification Roles are reserved vocabulary, not hidden inference. The
+core stores and queries posits containing them exactly like other posits. It
+does not assign meaning to values such as `"active"`, validate classifier
+shapes, infer membership, or traverse subclass relationships. A client or
+presentation policy may interpret unary `{class}`, binary `{thing, class}`, and
+binary `{subclass, class}` patterns, but must choose its value, source,
+certainty, temporal, and inheritance policies explicitly. Ordinary queries may
+match their literal fields without producing a membership verdict.
 
 An **Appearance** is the ordered pair `(Role, Thing)`. Its logical identity,
 equality, hashing, and ordering use that pair.
@@ -72,6 +81,8 @@ These are query policies, not write-time truth constraints:
 - which assertion or positor is preferred;
 - whether conflicting values can be reconciled;
 - whether two Things identify the same external entity;
+- which classification values count as membership and whether subclass
+  statements are traversed;
 - which value constraints apply in a particular modeling context; and
 - which maximal posit(s) form a snapshot at a cutoff.
 

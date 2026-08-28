@@ -25,6 +25,14 @@ documented break; where practical, published syntax and APIs receive one minor
 release of warnings and mechanical rewrite guidance. Security, corruption, and
 never-published behavior may be corrected immediately with release notes.
 
+Store `1.0` bootstraps five fixed Role mappings: `posit` (`1`), `ascertains`
+(`2`), `thing` (`3`), `class` (`4`), and `subclass` (`5`). The first two support
+the assertion contract. The latter three are stable classification vocabulary
+only: no store, Traqula, HTTP, WASM, or Terrain contract assigns semantics to a
+classification posit's literal value or performs implicit subclass inference.
+Such interpretation belongs to an explicit consumer or presentation policy;
+ordinary query filtering remains literal and neutral.
+
 Every published store-format break must preserve logical data through a direct
 or stepwise offline migration that writes and validates a new store beside the
 source. Because store `1.0` is the first published format, there is currently no
