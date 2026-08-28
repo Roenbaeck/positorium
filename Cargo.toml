@@ -1,9 +1,12 @@
 [package]
 name = "positorium"
-version = "0.1.4"
+version = "0.1.4-beta.1"
 edition = "2024"
 authors = ["Lars Rönnbäck <lars@positorium.com>"]
 license = "MIT OR Apache-2.0"
+description = "Experimental transitional database for conflicting and evolving information"
+repository = "https://github.com/Roenbaeck/positorium"
+readme = "README.md"
 autobenches = false
 
 [lib]

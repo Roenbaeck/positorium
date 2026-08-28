@@ -41,8 +41,9 @@ fn add_and_search_examples_execute_together() {
 
 #[test]
 fn cookbook_traqula_blocks_execute_independently() {
-    let cookbook = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("COOKBOOK.md"))
-        .expect("read COOKBOOK.md");
+    let cookbook =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/guides/COOKBOOK.md"))
+            .expect("read docs/guides/COOKBOOK.md");
     let blocks = cookbook
         .split("```traqula")
         .skip(1)

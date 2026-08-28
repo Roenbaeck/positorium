@@ -49,7 +49,7 @@ Traqula recipe.
 
 ## Versioning
 
-Add an independent contract to `CONTRACTS.md`:
+Add an independent contract to `../reference/CONTRACTS.md`:
 
 | Contract | Current version | Where it is carried |
 | --- | ---: | --- |
@@ -735,5 +735,5 @@ Terrain is complete when:
 6. the frontend contains no query-row aggregation fallback;
 7. the existing visual and geometric interaction tests pass against the backend
    report;
-8. `TERRAIN.md`, `README.md`, and `CONTRACTS.md` describe the authoritative
+8. `../reference/TERRAIN.md`, `../../README.md`, and `../reference/CONTRACTS.md` describe the authoritative
    implementation rather than a paste-to-populate workflow.

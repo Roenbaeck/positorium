@@ -850,6 +850,90 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn invalid_or_add_http_requests_publish_nothing_in_either_data_state() {
+        const INVALID_SCRIPT: &str = r#"
+            search [{(?registry, registry_code), ...}, ?code, *]
+            return ?registry, ?code
+            or add posit [{(+registry, registry_code)}, "CODE", @NOW];
+        "#;
+
+        for matched in [false, true] {
+            let database = Arc::new(Database::new(PersistenceMode::InMemory).unwrap());
+            let engine = crate::traqula::Engine::new(&database);
+            engine.execute("add role registry_code;").unwrap();
+            if matched {
+                engine
+                    .execute("add posit [{(+existing, registry_code)}, \"CODE\", '2024-01-01'];")
+                    .unwrap();
+            }
+            let before = engine
+                .execute_collect(
+                    "search [{(?registry, registry_code), ...}, *, *] return ?registry;",
+                )
+                .unwrap()
+                .row_count;
+            let state = ServerState {
+                interface: Arc::new(QueryInterface::new(Arc::clone(&database))),
+                config: ServerConfig::default(),
+            };
+
+            let buffered = query(
+                State(state.clone()),
+                Ok(Json(QueryRequest {
+                    traqula_version: TRAQULA_VERSION,
+                    script: INVALID_SCRIPT.into(),
+                    stream: false,
+                    timeout_ms: None,
+                    parameters: std::collections::HashMap::new(),
+                })),
+            )
+            .await;
+            assert_eq!(buffered.status(), StatusCode::BAD_REQUEST);
+            let body = json_body(buffered).await;
+            assert_eq!(body["status"], "error");
+            assert!(body.get("rows").is_none() || body["rows"].is_null());
+            assert!(
+                body["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("fallback cannot supply")
+            );
+
+            let streamed = query(
+                State(state),
+                Ok(Json(QueryRequest {
+                    traqula_version: TRAQULA_VERSION,
+                    script: INVALID_SCRIPT.into(),
+                    stream: true,
+                    timeout_ms: None,
+                    parameters: std::collections::HashMap::new(),
+                })),
+            )
+            .await;
+            assert_eq!(streamed.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(streamed.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let events = String::from_utf8(bytes.to_vec()).unwrap();
+            assert!(events.contains(r#""event":"error""#), "{events}");
+            assert!(!events.contains(r#""event":"meta""#), "{events}");
+            assert!(!events.contains(r#""event":"row""#), "{events}");
+            assert!(
+                !events.contains(r#""event":"result_set_start""#),
+                "{events}"
+            );
+
+            let after = crate::traqula::Engine::new(&database)
+                .execute_collect(
+                    "search [{(?registry, registry_code), ...}, *, *] return ?registry;",
+                )
+                .unwrap()
+                .row_count;
+            assert_eq!(after, before);
+        }
+    }
+
+    #[tokio::test]
     async fn information_in_effect_is_identical_in_buffered_and_sse_queries() {
         let database = Arc::new(Database::new(PersistenceMode::InMemory).unwrap());
         crate::traqula::Engine::new(&database)

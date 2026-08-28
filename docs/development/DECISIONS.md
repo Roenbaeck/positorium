@@ -113,7 +113,7 @@ allows names to be treated as catalog metadata rather than hidden identity.
 roles are immutable, so "rename" creates a new role and aliases are deferred to
 ordinary posits after beta. Note that the current implementation is internally
 inconsistent either way: `Role::PartialEq` compares the name case-sensitively
-while `Hash` uppercases the name and mixes in `reserved` (see TODO.md), so
+while `Hash` uppercases the name and mixes in `reserved` (see ROADMAP.md), so
 accepting A requires reworking `Eq`/`Hash`/`Ord` to identity-based equality.
 
 **Response:**
@@ -164,7 +164,7 @@ types. Decide separately whether non-precision spelling such as `10`, `010`, and
 `+10`, or structurally equivalent JSON spellings, is also identity-bearing. A
 duplicate literal returns the canonical posit and is otherwise invisible.
 Accepting A also requires fixing `Posit`'s derived `Ord`, which currently includes
-the identity field that `PartialEq` excludes (see TODO.md).
+the identity field that `PartialEq` excludes (see ROADMAP.md).
 
 **Response:**
 
@@ -293,7 +293,7 @@ each member gets its own appearance set and timeline. Repeated participants: a
 reified relation Thing plus one posit per participant role. The invariant is
 already enforced by `AppearanceSet::new`, but `Database::create_appearance_set`
 unwraps its result and panics on violation — that must become an error before
-the rule is a public contract (see TODO.md).
+the rule is a public contract (see ROADMAP.md).
 
 **Response:**
 
@@ -380,7 +380,7 @@ them); clients convert local time before submission. `@BOT`/`@EOT` are unbounded
 endpoints below/above everything. Interval semantics also cleanly fixes today's
 law violation where `TimeType::partial_cmp` answers `Equal` for a Year and a
 Date inside it while `PartialEq` says they differ, and where the derived `Ord`
-disagrees with the manual `PartialOrd` entirely (see TODO.md).
+disagrees with the manual `PartialOrd` entirely (see ROADMAP.md).
 
 **Response:**
 
@@ -542,7 +542,7 @@ tests. Precision: full datetime, as `Time::new()` produces today. Note the
 current engine evaluates `@NOW` independently at every occurrence
 (`parse_time_constant` constructs `Time::new()` per parse site in traqula.rs),
 so two `@NOW`s in one script already differ — a change is required regardless
-of the option chosen (see TODO.md).
+of the option chosen (see ROADMAP.md).
 
 **Response:**
 
@@ -1199,7 +1199,7 @@ to committed history fails startup with a precise error naming the offset and
 record. Ship option C later as a separate read-only salvage tool. The current
 SQLite restore does the opposite — it silently skips unknown value types and
 merely warns on restore failures — so this policy is a behavior change, not just
-a format change (see TODO.md).
+a format change (see ROADMAP.md).
 
 **Response:**
 
@@ -1362,7 +1362,7 @@ but the server must not imply safe Internet exposure.
 But close the gaps before beta: CORS is currently `allow_origin(Any)` and the
 advertised `timeout_ms` request field is ignored (`let _timeout` in server.rs).
 Tighten CORS to the local console origin, implement or remove the timeout, and
-add request-size, runtime, and result-count limits (see TODO.md).
+add request-size, runtime, and result-count limits (see ROADMAP.md).
 
 **Response:**
 

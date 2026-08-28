@@ -1,5 +1,27 @@
 use positorium::construct::{Database, PersistenceMode};
-use positorium::traqula::{Engine, ResultCellKind};
+use positorium::traqula::{Engine, ResultCell, ResultCellKind, RowSink, SinkFlow};
+
+const INVALID_OR_ADD_RETURN: &str = r#"
+    search [{(?registry, registry_code), ...}, ?code, *]
+    return ?registry, ?code
+    or add posit [{(+registry, registry_code)}, "CODE", @NOW];
+"#;
+
+fn registry_code_count(engine: &Engine<'_>) -> usize {
+    engine
+        .execute_collect("search [{(?registry, registry_code), ...}, *, *] return ?registry;")
+        .unwrap()
+        .row_count
+}
+
+fn prepare_registry_state(engine: &Engine<'_>, matched: bool) {
+    engine.execute("add role registry_code;").unwrap();
+    if matched {
+        engine
+            .execute("add posit [{(+existing, registry_code)}, \"CODE\", '2024-01-01'];")
+            .unwrap();
+    }
+}
 
 #[test]
 fn and_assert_creates_and_binds_an_assertion_envelope() {
@@ -313,6 +335,110 @@ fn search_or_add_rejects_branch_domain_mismatches_before_adding() {
         .execute_collect("search [{(?thing, registry_code), ...}, \"CODE\", *] return ?thing;")
         .unwrap();
     assert_eq!(result.row_count, 0);
+}
+
+#[test]
+fn invalid_or_add_return_shape_is_data_independent_and_never_mutates() {
+    for matched in [false, true] {
+        let database = Database::new(PersistenceMode::InMemory).unwrap();
+        let engine = Engine::new(&database);
+        prepare_registry_state(&engine, matched);
+        let before = registry_code_count(&engine);
+
+        let error = engine.execute_collect(INVALID_OR_ADD_RETURN).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("fallback cannot supply returned variable '?code'"),
+            "{error}"
+        );
+        assert_eq!(registry_code_count(&engine), before);
+    }
+}
+
+#[test]
+fn invalid_or_add_stream_emits_no_metadata_or_rows_in_either_data_state() {
+    #[derive(Default)]
+    struct RecordingSink {
+        metadata_calls: usize,
+        rows: usize,
+    }
+
+    impl RowSink for RecordingSink {
+        fn on_meta(&mut self, _columns: &[String]) -> SinkFlow {
+            self.metadata_calls += 1;
+            SinkFlow::Continue
+        }
+
+        fn push(&mut self, _row: Vec<ResultCell>) -> SinkFlow {
+            self.rows += 1;
+            SinkFlow::Continue
+        }
+    }
+
+    for matched in [false, true] {
+        let database = Database::new(PersistenceMode::InMemory).unwrap();
+        let engine = Engine::new(&database);
+        prepare_registry_state(&engine, matched);
+        let before = registry_code_count(&engine);
+        let mut sink = RecordingSink::default();
+
+        let error = engine
+            .execute_stream_single(INVALID_OR_ADD_RETURN, &mut sink)
+            .unwrap_err();
+        assert!(error.to_string().contains("fallback cannot supply"));
+        assert_eq!(sink.metadata_calls, 0);
+        assert_eq!(sink.rows, 0);
+        assert_eq!(registry_code_count(&engine), before);
+    }
+}
+
+#[test]
+fn valid_or_add_fallback_honors_modifiers_and_metadata_stop() {
+    struct StopAtMetadata {
+        metadata_calls: usize,
+        rows: usize,
+    }
+
+    impl RowSink for StopAtMetadata {
+        fn on_meta(&mut self, columns: &[String]) -> SinkFlow {
+            self.metadata_calls += 1;
+            assert_eq!(columns, ["registry"]);
+            SinkFlow::Stop
+        }
+
+        fn push(&mut self, _row: Vec<ResultCell>) -> SinkFlow {
+            self.rows += 1;
+            SinkFlow::Continue
+        }
+    }
+
+    let database = Database::new(PersistenceMode::InMemory).unwrap();
+    let engine = Engine::new(&database);
+    prepare_registry_state(&engine, false);
+    let mut sink = StopAtMetadata {
+        metadata_calls: 0,
+        rows: 0,
+    };
+    let (columns, limited, row_count) = engine
+        .execute_stream_single(
+            r#"
+            search [{(?registry, registry_code), ...}, "CODE", *]
+            return distinct ?registry
+            order by ?registry
+            limit 1
+            or add posit [{(+registry, registry_code)}, "CODE", @NOW];
+            "#,
+            &mut sink,
+        )
+        .unwrap();
+
+    assert_eq!(columns, ["registry"]);
+    assert!(!limited);
+    assert_eq!(row_count, 0);
+    assert_eq!(sink.metadata_calls, 1);
+    assert_eq!(sink.rows, 0);
+    assert_eq!(registry_code_count(&engine), 1);
 }
 
 #[test]

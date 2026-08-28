@@ -1,5 +1,9 @@
 # Positorium Beta Operations
 
+For installation and a first verified query, start with
+[Getting started](../GETTING_STARTED.md). This document covers the operational
+contract after the server is running.
+
 ## Configuration
 
 Copy `positorium.json` beside the native `positorium` binary. The default binds
@@ -45,7 +49,7 @@ positorium-store import export.jsonl restored.store identity-remap.json
 
 Import never writes into an existing destination and never preserves foreign
 non-built-in local identifiers. The exact formats and built-in identity exception
-are specified in `TRANSFER.md`.
+are specified in [TRANSFER.md](../reference/TRANSFER.md).
 
 ## Migration and compatibility
 
@@ -54,7 +58,7 @@ prototype migration exists because no release used SQLite (D031). Future breakin
 store migrations must write and validate a new store beside the source, retain the
 old store for rollback, and provide the direct or stepwise logical-data path in
 the release notes. Independent API/language/wire versions and the 0.x policy are
-listed in `CONTRACTS.md`.
+listed in [CONTRACTS.md](../reference/CONTRACTS.md).
 
 ## Durability, failures, and shutdown
 
@@ -105,7 +109,11 @@ durable commit.
 Tags matching `vMAJOR.MINOR.PATCH` (including prerelease suffixes) build stable
 Rust binaries for Linux x86-64, macOS Apple Silicon, and Windows x86-64. GitHub
 Releases contain generated change notes, an archive per platform, and a SHA-256
-file for each archive. Verify the checksum before unpacking.
+file for each archive. Each archive contains the two native binaries, the
+default configuration, its empty Traqula startup script, licenses, and this
+documentation tree. CI starts and queries the exact archive before publishing
+it. Verify the checksum before unpacking.
 
-The modeling and maintenance recipes in `COOKBOOK.md` complement these
-procedures; normative transfer details remain in `TRANSFER.md`.
+The modeling and maintenance recipes in [COOKBOOK.md](COOKBOOK.md) complement
+these procedures; normative transfer details remain in
+[TRANSFER.md](../reference/TRANSFER.md).

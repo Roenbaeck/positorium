@@ -40,10 +40,10 @@ Different questions require different relations between values:
 	This is deliberate uncertainty reasoning, not an arbitrary floating-point
 	tolerance.
 
-Traqula's intended beta semantics use `=` for nominal equality and `?=` for
-compatibility. Exact literal-identity syntax and the boundary of lexical fidelity
-(for example, treatment of leading zeros and JSON whitespace) remain to be
-finalized before beta.
+Traqula 1 uses `===` for exact literal identity, `=` for nominal equality, and
+`?=` for compatibility. Literal identity preserves the complete entered token,
+including leading zeros, explicit signs, string escapes, JSON whitespace, key
+order, number spelling, and escape choices.
 
 If a model needs to require a particular kind of value, precision, unit, range,
 or cardinality, that requirement is a **constraint**, not a datatype declaration.

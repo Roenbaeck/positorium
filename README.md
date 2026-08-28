@@ -1,284 +1,121 @@
-<img src="./positorium.svg" width="333">
-<p/>
+<img src="./positorium.svg" width="333" alt="Positorium">
 
-[Open the Positorium web interface on GitHub Pages](https://roenbaeck.github.io/positorium/)
+# Positorium
 
-Positorium is an experimental database engine based on Transitional Modeling, designed to capture conflicting, unreliable, and varying information over time. It blends ideas from relational, graph, columnar, and key–value stores.
+Positorium is an experimental database engine for information that can
+conflict, vary over time, and carry source-specific certainty. It combines an
+immutable posit model, the Traqula query language, an append-only native store,
+a trusted-local HTTP service, and an in-browser WASM testbed.
 
-- [The Philosophical Foundations of Positorium](THEORY.md)
-- [Paper: Modeling Conflicting, Unreliable, and Varying Information](https://www.researchgate.net/publication/329352497_Modeling_Conflicting_Unreliable_and_Varying_Information)
+The current release line is `0.1.4-beta.1`. Beta means the documented language,
+storage, transfer, and interface versions have explicit compatibility rules; it
+does not mean an Internet-facing or production-ready service.
+
+[Try the browser testbed](https://roenbaeck.github.io/positorium/) ·
+[Get started](docs/GETTING_STARTED.md) ·
+[Browse all documentation](docs/README.md)
 
 ## Why Positorium?
 
-Most databases assume a single, consistent truth. In reality, facts are messy: they conflict across sources, change over time, and sometimes carry uncertainty. Positorium treats this as a first‑class concern:
+Most databases converge on one current value. Positorium preserves evidence:
 
-- Contradictions are preserved, not overwritten (assertions can be affirmed or negated with certainty).
-- Time is built into every posit, so “what was true when” is natural to ask.
-- Set‑based evaluation with roaring bitmaps keeps pattern matching fast without exploding joins.
+- contradictory posits remain available instead of overwriting each other;
+- expressed time precision is part of the stored fact;
+- assertions record who ascertained a posit, with signed certainty and time;
+- snapshots and `in effect` queries make resolution policy explicit; and
+- exact entered literals survive native storage, HTTP, SSE, and WASM results.
 
-This makes Positorium well‑suited for master data management, regulated domains, investigations/intel, and any workflow where evidence accumulates and is revised.
+This is useful for exploring master data, regulated records, investigations,
+and other domains where evidence accumulates and is revised.
 
-<br/>
+## Five-minute source checkout
 
-## Traqula DSL
-
-Traqula is Positorium's domain-specific language for defining roles, positing
-facts with time, and querying data through pattern matching. `and assert`
-records a target and its evidence envelope atomically. `search ... or add
-posit ...` resolves an existing identity or creates it when absent, then makes
-the resulting identity set available to later mutations in that script.
-Ordinary query variables remain lexical to one `search`.
-
-For the complete language reference, see [TRAQULA.md](TRAQULA.md). Worked
-patterns for correction, disagreement, assertions, external identification,
-multi-valued attributes, repeated participants, backup, and transfer are in
-[COOKBOOK.md](COOKBOOK.md).
-
-The normative design for the append-only beta store is in [STORAGE.md](STORAGE.md).
-File-backed mode uses that framed, checksummed, append-only format. The
-unpublished SQLite prototype and its dependency have been removed; the first
-append-only beta format begins the compatibility window.
-
-The storage- and language-independent identity, value-slot, temporal, snapshot,
-and external-identification contract is in [MODEL.md](MODEL.md).
-
-## Build and run
-
-Prerequisite: rustup. The repository selects the stable Rust
-toolchain declared in `rust-toolchain.toml`.
-
-Build:
+Install [rustup](https://rustup.rs/), then build and start the trusted-local
+server from the repository root:
 
 ```sh
-cargo build
+cargo build --release --locked
+./target/release/positorium
 ```
 
-Run the binary; it reads `positorium.json` and executes its configured Traqula
-startup script:
+In another terminal, resolve or create one identity:
 
 ```sh
-target/debug/positorium
+curl --fail-with-body --silent --show-error \
+  http://127.0.0.1:8080/v1/query \
+  -H 'content-type: application/json' \
+  --data '{"traqula_version":1,"script":"add role name; search [{(?person, name), ...}, \"Ada\", *] return ?person or add posit [{(+person, name)}, \"Ada\", @NOW];","stream":false}'
 ```
 
-Config (positorium.json):
+The response should have `"status":"ok"` and one `thing` result cell. Stop the
+server with Ctrl-C. The default creates `positorium.store` and reopens it on the
+next start.
 
-```json
-{
-	"listen_interface": "127.0.0.1",
-	"listen_port": 8080,
-	"database_file_and_path": "positorium.store",
-	"enable_persistence": true,
-	"recreate_database_on_startup": false,
-	"traqula_file_to_run_on_startup": "traqula/adds.traqula"
-}
+For release archives, checksum verification, Windows commands, persistence
+checks, backup, Query Studio setup, and troubleshooting, follow
+[Getting started](docs/GETTING_STARTED.md).
+
+## Beta boundaries
+
+- The native server binds to `127.0.0.1` by default and has no authentication.
+  Never expose it to an untrusted network.
+- One process owns a store and executes scripts serially.
+- The append-only store detects committed corruption but is not a tamper-proof
+  audit log.
+- Authentication, replication, distributed execution, and container packaging
+  are outside the current beta.
+- Independent contract versions are listed in
+  [Contracts](docs/reference/CONTRACTS.md).
+
+## Current capabilities
+
+- Immutable Things, Roles, appearance sets, posits, and assertion envelopes
+- Lossless literal tokens and precision-aware temporal relations
+- Traqula joins, union, safe `not exists`, snapshots, typed predicates,
+  `in effect`, parameters, distinctness, ordering, and limits
+- Atomic durable mutation batches with deterministic replay and recovery
+- Inspection, physical backup, logical export/import, and identity remapping
+- Structured Rust, buffered HTTP, SSE, and WASM results
+- Query Studio and authoritative Terrain structural reports
+
+## Documentation
+
+| Start here | Purpose |
+| --- | --- |
+| [Getting started](docs/GETTING_STARTED.md) | Install, run, query, restart, back up, and troubleshoot |
+| [Traqula](docs/reference/TRAQULA.md) | Language and query reference |
+| [Cookbook](docs/guides/COOKBOOK.md) | Worked modeling and maintenance recipes |
+| [Operations](docs/guides/OPERATIONS.md) | Durability, recovery, limits, and deployment posture |
+| [Core model](docs/reference/MODEL.md) | Identity, literal, temporal, and snapshot semantics |
+| [Storage](docs/reference/STORAGE.md) | Append-only format contract |
+| [Transfer](docs/reference/TRANSFER.md) | Backup, export, import, and identity remapping |
+| [Terrain](docs/reference/TERRAIN.md) | Structural report and visualization contract |
+| [Theory](docs/design/THEORY.md) | Philosophical foundations |
+| [Roadmap](docs/development/ROADMAP.md) | Remaining and post-beta work |
+
+The [documentation index](docs/README.md) also links compatibility decisions,
+benchmarks, and maintainer specifications. The original paper,
+[Modeling Conflicting, Unreliable, and Varying Information](https://www.researchgate.net/publication/329352497_Modeling_Conflicting_Unreliable_and_Varying_Information),
+provides additional background.
+
+## Development checks
+
+The repository pins the stable Rust toolchain and runs native checks on Linux,
+macOS, and Windows plus a browser WASM suite.
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-targets --all-features --no-fail-fast
+cargo test --all-targets --no-default-features --no-fail-fast
+node tests/terrain_client.test.js
 ```
 
-## Initialization Modes
-
-The engine uses an explicit persistence mode enum:
-
-```rust
-use positorium::{Database, PersistenceMode};
-
-// Ephemeral: nothing is written, all data lost when process exits
-let db = Database::new(PersistenceMode::InMemory);
-
-// File-backed persistence (creates or reuses an append-only store directory)
-let db = Database::new(PersistenceMode::File("positorium.store".to_string()));
-
-// Derive from config style flags
-let enable = true; // imagine read from config
-let mode = PersistenceMode::from_config(enable, "positorium.store");
-let db2 = Database::new(mode);
-```
-
-When running the provided binary, the `enable_persistence` flag in `positorium.json` selects between these modes internally.
-
-## Store integrity
-
-File-backed stores frame every record with CRC32C, monotonic sequence numbers,
-atomic commit frames, and a manifest-recorded committed length. Startup rejects
-committed corruption and writable recovery truncates only an uncommitted tail.
-This detects corruption; it is not a tamper-proof audit mechanism.
-
-## Store inspection, backup, and logical transfer
-
-The native maintenance binary validates stores under a read lock and prints JSON
-reports:
-
-```bash
-cargo run --bin positorium-store -- inspect positorium.store
-cargo run --bin positorium-store -- backup positorium.store backup.store
-cargo run --bin positorium-store -- dump positorium.store export.jsonl
-cargo run --bin positorium-store -- import export.jsonl imported.store remap.json
-```
-
-Physical backup excludes uncommitted tail bytes without changing the source.
-Logical import creates a new store UUID and emits the complete identity remap.
-The versioned formats and failure rules are specified in [TRANSFER.md](TRANSFER.md).
-Independent beta boundary versions are listed in [CONTRACTS.md](CONTRACTS.md).
-Operational startup, durability, recovery, and resource-limit procedures are in
-[OPERATIONS.md](OPERATIONS.md).
-The repeatable architecture benchmark and current indicative baseline are in
-[BENCHMARKS.md](BENCHMARKS.md).
-
-## Client / Server Architecture
-
-Positorium can run as a library or an HTTP server. The server layer (Axum + Tokio) exposes a JSON endpoint:
-
-`POST /v1/query`
-
-Request body:
-```jsonc
-{ "traqula_version": 1, "script": "search [{(*, name), ...}, ?n, *] return ?n;", "stream": false, "timeout_ms": 5000 }
-```
-
-Response (single result set):
-```jsonc
-{
-	"api_version": "v1",
-	"traqula_version": 1,
-	"id": 0,
-	"status": "ok",
-	"elapsed_ms": 1.23,
-	"columns": ["n"],
-	"row_count": 2,
-	"limited": false,
-	"rows": [
-		[{"kind":"literal","text":"\"Alice\""}],
-		[{"kind":"literal","text":"\"Bob\""}]
-	]
-}
-```
-
-If the script contains multiple `search` commands, the response omits top-level `columns/rows` and instead returns `result_sets` (array of result set objects) with cumulative `row_count`.
-
-The beta HTTP service is a trusted local interface, not an Internet-facing API.
-It binds to `127.0.0.1` by default, permits no cross-origin browser access by
-default, and only accepts explicitly configured exact loopback CORS origins.
-Binding to a non-loopback address does not add authentication or make the
-service safe for public exposure.
-
-Requests default to a 1 MiB body limit and a five-second execution deadline.
-Configuration may raise those limits only as far as the 16 MiB and 30-second
-hard caps. A request's `timeout_ms` can lower, but cannot raise, the configured
-deadline. Scripts are limited to 1,000 commands and each search to 100,000 rows;
-buffered responses and versioned SSE completion events report whether rows were
-actually truncated. Scripts submitted through the HTTP interface execute
-serially against one database owner.
-
-### Starting the server
-
-You can run the server directly with the binary or use the convenience scripts provided for different platforms.
-
-Windows (PowerShell):
-```powershell
-. .\scripts\positorium.ps1                  # dot-source to load functions
-Start-Positorium -LogProfile normal -Tail   # run and stream logs live
-Stop-Positorium                             # stop
-Restart-Positorium -LogProfile verbose      # restart with different profile
-```
-
-macOS / Linux (bash):
-```bash
-chmod +x scripts/positorium.sh            # first time
-./scripts/positorium.sh start --profile normal --tail   # foreground (logs to console)
-./scripts/positorium.sh stop
-./scripts/positorium.sh restart --profile verbose --force-rebuild
-./scripts/positorium.sh start --log 'warn,positorium=info'  # custom RUST_LOG filter
-./scripts/positorium.sh tail               # follow log file if started in background
-```
-
-Both scripts support a common set of logging profiles mapped to `RUST_LOG`:
-
-LogProfile | RUST_LOG
-:--|:--
-quiet | `error`
-normal | `info`
-verbose | `debug,positorium=info`
-trace | `trace`
-
-You can override the profile with an explicit `--log` / `-Log` argument (EnvFilter syntax) such as `warn,axum=info,positorium=debug`.
-
-The bash script maintains a PID file at `.positorium.pid` and writes background logs to `positorium.out`; use `--tail` (bash) or `-Tail` (PowerShell) to stream logs directly instead.
-
-Logging uses `tracing` with `RUST_LOG` filtering.
-
-### Web UI (positorium.html)
-
-A focused static query studio (`positorium.html`) supports composing Traqula scripts, submitting them to the server or local WASM engine, and inspecting table, JSON, and activity views. Query/Results and Terrain are alternate workspaces, while the endpoint and Local WASM execution mode live under the header settings button. Both settings persist in browser `localStorage`. Open the studio in a browser or host it, then point the endpoint setting to your server's `/v1/query` URL; Terrain derives the sibling `/v1/terrain` endpoint automatically.
-
-The repository does not contain generated `pkg/` artifacts. On a loopback development
-server such as VS Code Live Preview, Local WASM prefers a workspace `pkg/` build and
-falls back to the compatible package published on GitHub Pages. To test local Rust
-changes instead, generate the workspace package before starting the preview:
-
-```text
-wasm-pack build --release --target web --out-dir pkg . --no-default-features --features wasm
-```
-
-Query Studio has an independent beta SemVer in the `studioVersion` element in
-`positorium.html`. Increment it when the console's behavior or published assets
-change. The version is visible in the header; the browser remembers the last-seen
-version for that origin and reports upgrades in the Activity view.
-
-The Terrain tab automatically requests an authoritative structural report from
-Rust—through `POST /v1/terrain` or `WasmEngine.terrain(...)`—so it requires no
-preparatory Traqula query and is not affected by query row limits or streaming.
-History and Current share one Role projection and relationship catalog; the
-browser retains ownership of SVG layout, filtering, selection, and prepared
-queries. Refresh, stale, and error states are explicit, and a failed refresh
-keeps the previous complete snapshot visible. The versioned report contract,
-semantics, limits, interfaces, and golden backend fixture are documented in
-[TERRAIN.md](TERRAIN.md).
-
-In the Current view, Terrain also obtains assertion-backed direct
-`{thing, class}` evidence with Traqula's dual-cut `in effect` operator. One
-selected class can be shaded at a time. The exact literal value, evidence
-source treatment, certainty rule, and resolved temporal cut remain visible UI
-policy; the structural Terrain report and database remain value-neutral.
-
-## Updated Status and Roadmap
-
-Implemented:
-* Immutable core constructs, exact literal tokens, and precision-aware time
-* Framed append-only persistence with atomic durable command batches, hidden
-  lossless codecs, deterministic replay, recovery, backup, and logical transfer
-* Declarative Traqula joins, union, safe `not exists`, snapshots, typed
-  comparisons and parameters, `in effect` with optional provenance, `distinct`,
-  ordering, and limits
-* Structured native, HTTP/SSE, and WASM results with cooperative limits and cancellation
-* Trusted/local Axum service, browser testbed, lifecycle scripts, and synchronized editor grammar
-* Five fixed neutral classification Roles and a one-class Terrain presentation
-
-Planned/next:
-* WHERE enhancements: OR, grouping, BETWEEN, IN
-* Aggregations and tuple-shaped / structured returns
-* Projection type annotations stabilization (avoid dynamic probing)
-* Authentication / access control for a future non-local server posture
-* Optimization: caching value extraction during predicate evaluation
-* Optional CSV-oriented export helpers beyond the stable JSONL logical transfer
-
-## Long-term Goals
-
-These are aspirational features that align with the full vision of Transitional Modeling, extending Positorium beyond its current experimental state:
-
-* **Advanced Query Capabilities**: Implement all theoretical query types from Transitional Modeling, including probabilistic searches (e.g., "find facts with at least 75% certainty"), audit trails (e.g., "show all corrections between dates"), and log-like queries (e.g., "all model changes by a specific identity").
-* **Classification Expansion**: Explore explicit, optional subclass traversal,
-  descriptive class labels, and richer comparison views without moving
-  lifecycle or source-fusion policy into storage.
-* **Constraint Research**: Define reproducible, versioned constraint programs
-  over immutable effective snapshots before adding enforcement or specialized
-  cardinality syntax.
-* **Multi-tenant and Collaborative Features**: Enhance multi-tenant support for disagreements and consensus tracking, allowing collaborative modeling where different observers can maintain concurrent, conflicting models.
-* **Uncertainty Theory Integration**: Extend certainty handling to full uncertainty theory, supporting complex logical consistency checks across collections of opinions.
-* **Performance and Scalability**: Optimize for large-scale deployments with distributed persistence, advanced indexing, and parallel query execution.
-* **Ecosystem Expansion**: Develop integrations with other databases, visualization tools, and APIs; add more data types (e.g., geospatial, multimedia); and build a plugin system for custom extensions.
-* **Production Readiness**: Extend the existing backup/restore tools with
-  replication, monitoring, and compliance workflows.
+See [Extending Traqula](docs/development/EXTEND_TRAQULA.md) before changing the
+language or synchronized editor grammar.
 
 ## License
 
-This work is dual-licensed under Apache 2.0 and MIT. You can choose between one of them if you use this work.
+Dual-licensed under Apache 2.0 or MIT, at your option.
 
 SPDX-License-Identifier: Apache-2.0 OR MIT

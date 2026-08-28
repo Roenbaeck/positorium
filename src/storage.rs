@@ -1,7 +1,7 @@
 //! Versioned append-only storage primitives for the beta store format.
 //!
 //! This module is private storage machinery. Its byte contract is specified in
-//! `STORAGE.md`.
+//! `docs/reference/STORAGE.md`.
 
 #![allow(dead_code)] // Includes reserved backup/inspection hooks not yet public.
 

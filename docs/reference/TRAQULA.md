@@ -123,6 +123,13 @@ can supply the same result shape. Ordinary searches still keep `?` variables
 lexical: only the explicit `search ... or add posit ...` join promotes matching
 Thing and Posit binders into mutation scope.
 
+Both branch domains and the complete return shape are validated before the
+search reads data or calls a result sink. Invalid compounds therefore emit no
+metadata or rows and execute no fallback mutation, whether the current search
+would have zero or many matches. `distinct`, `order by`, and `limit` apply to
+rows from either branch. A sink that stops at metadata suppresses fallback row
+presentation but does not cancel an otherwise valid atomic fallback mutation.
+
 ## Search variables and domains
 
 Search variables always start with `?` and are lexical to one `search` command.
@@ -384,5 +391,5 @@ reinterpret source.
 
 For complete API and compatibility boundaries, see [CONTRACTS.md](CONTRACTS.md).
 For startup, backup, validation, and recovery procedures, see
-[OPERATIONS.md](OPERATIONS.md). Worked modeling and transfer recipes are in
-[COOKBOOK.md](COOKBOOK.md).
+[OPERATIONS.md](../guides/OPERATIONS.md). Worked modeling and transfer recipes are in
+[COOKBOOK.md](../guides/COOKBOOK.md).

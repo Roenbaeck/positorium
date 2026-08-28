@@ -11,12 +11,12 @@ answered first.
 
 The design draws on the three paper revisions retained in this repository:
 
-- the [oldest paper](theory/oldest_paper.tex), which contains the original
+- the [oldest paper](../../theory/oldest_paper.tex), which contains the original
    classification and body-characteristic treatment;
-- the [older paper](theory/older_paper.tex), which generalizes bodies of
+- the [older paper](../../theory/older_paper.tex), which generalizes bodies of
    information to sets of posits and refines classification and temporal
    resolution; and
-- the [recent paper](theory/recent_paper.tex), which gives the current
+- the [recent paper](../../theory/recent_paper.tex), which gives the current
    assertion-body, information-in-effect, and policy-separation terminology.
 
 The older revisions are informative where they distinguish subclassing from
@@ -631,7 +631,8 @@ failure, backdated information, and constraints over evaluation results.
 
 Expected files and responsibilities:
 
-- `DECISIONS.md`, `MODEL.md`, `CONTRACTS.md`, and `TODO.md`: record the fixed
+- `DECISIONS.md`, `../reference/MODEL.md`, `../reference/CONTRACTS.md`, and
+  `ROADMAP.md`: record the fixed
   vocabulary and neutral interpretation boundary while keeping constraints
   research-only.
 - `src/construct.rs`: bootstrap and verify the five fixed roles.
@@ -648,7 +649,8 @@ Expected files and responsibilities:
 - both `traqula.tmLanguage.json` files: syntax highlighting kept in lockstep.
 - `positorium-terrain.js`, `positorium-terrain.css`, `positorium.html`, and
   `tests/terrain_client.test.js`: selected-class controls and shaded overlay.
-- `TRAQULA.md`, `TERRAIN.md`, examples, and the cookbook: neutral raw patterns,
+- `../reference/TRAQULA.md`, `../reference/TERRAIN.md`, examples, and the cookbook:
+  neutral raw patterns,
   dual-cut semantics, and visible presentation-policy warnings.
 
 No physical posit-record or Terrain report change is required. Classification

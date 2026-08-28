@@ -7,14 +7,14 @@ SQLite prototype is deliberately excluded by D031.
 | Contract | Current version | Where it is carried |
 | --- | ---: | --- |
 | Crate API | `0.1` | Cargo package version; 0.x minor releases may contain documented beta breaks |
-| Store | `1.0` | Manifest and every log-segment header; specified by `STORAGE.md` |
+| Store | `1.0` | Manifest and every log-segment header; specified by [STORAGE.md](STORAGE.md) |
 | Traqula | `1` | Execution metadata, required HTTP request field, HTTP response, and WASM response |
 | HTTP | `v1` | `/v1/query` and every buffered response |
 | SSE | `1` | `version` in every stream event |
 | WASM | `1` | `interface_version` in every returned JavaScript object |
 | Terrain | `1` | Rust report, `/v1/terrain`, and WASM Terrain response |
-| Logical export | `1` | JSONL header; specified by `TRANSFER.md` |
-| Identity remap | `1` | JSON remap artifact; specified by `TRANSFER.md` |
+| Logical export | `1` | JSONL header; specified by [TRANSFER.md](TRANSFER.md) |
+| Identity remap | `1` | JSON remap artifact; specified by [TRANSFER.md](TRANSFER.md) |
 
 Storage, Traqula, HTTP, SSE, WASM, Terrain, logical export, and identity remapping
 evolve independently. A change to one does not silently change another. Adding

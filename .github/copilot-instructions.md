@@ -12,23 +12,23 @@ Positorium is a database engine implementing Transitional Modeling concepts for 
 All constructs follow a keeper pattern for canonical storage and deduplication using Arc-wrapped instances.
 
 ## Modules and Key Components
-- `lib.rs`: Crate-level docs and module wiring.
-- `construct.rs`: Core data structures and keepers (`Database`, `RoleKeeper`, `AppearanceKeeper`, `AppearanceSetKeeper`, `PositKeeper`), lookups, identity generator.
-- `datatype.rs`: `DataType` trait and built-ins: `String`, `i64`, `Decimal`, `JSON`, `Time`, `Certainty`.
-- `storage.rs`: Private append-only framing, commit, replay, locking, and recovery machinery.
-- `maintenance.rs`: Validated inspection, physical backup, and versioned logical transfer.
-- `traqula.rs`: Pest-based parser and execution engine for the Traqula DSL.
-- `traqula.pest`: Grammar definition for the query language.
-- `interface.rs`: Minimal thread-per-query interface with cooperative cancellation and optional streaming of results.
-- `error.rs`: Domain-specific error types (`DatabaseError`) and conversions.
-- `server.rs`: HTTP server implementation using Axum for REST API and web console.
+- `src/lib.rs`: Crate-level docs and module wiring.
+- `src/construct.rs`: Core data structures and keepers (`Database`, `RoleKeeper`, `AppearanceKeeper`, `AppearanceSetKeeper`, `PositKeeper`), lookups, identity generator.
+- `src/datatype.rs`: `DataType` trait and built-ins: `String`, `i64`, `Decimal`, `JSON`, `Time`, `Certainty`.
+- `src/storage.rs`: Private append-only framing, commit, replay, locking, and recovery machinery.
+- `src/maintenance.rs`: Validated inspection, physical backup, and versioned logical transfer.
+- `src/traqula.rs` and `src/traqula/query.rs`: Pest-based parser and execution engine for the Traqula DSL.
+- `src/traqula.pest`: Grammar definition for the query language.
+- `src/interface.rs`: Serialized query interface with cooperative cancellation and optional streaming of results.
+- `src/error.rs`: Domain-specific error types (`DatabaseError`) and conversions.
+- `src/server.rs`: Trusted-local HTTP and SSE service implemented with Axum.
 - `benches/benchmark.rs`: Criterion-based performance benchmarks.
 - `traqula-vscode/`: Syntax highlighting extension for Traqula (keep grammar in sync with `traqula.pest`).
-- `positorium.html` & `positorium.css`: Web-based query console for interactive Traqula execution.
+- `positorium.html`, `positorium.css`, and `positorium-terrain.*`: Static Query Studio and Terrain client; these are deployed separately from the native HTTP service.
 
 ## Development Workflow
 - Build: use `cargo build` (Rust edition 2024).
-- Run: prefer `cargo run` (binary reads `positorium.json` and starts an HTTP server on the configured interface and port, serving the web console and REST API).
+- Run: prefer `cargo run` (the binary reads `positorium.json` and starts the HTTP service on the configured interface and port; it does not serve the static Query Studio).
 - Config (`positorium.json`):
 	- `database_file_and_path`: append-only store directory (created if missing).
 	- `enable_persistence`: optional `true|false`; false selects an ephemeral in-memory engine.
@@ -48,18 +48,18 @@ All constructs follow a keeper pattern for canonical storage and deduplication u
 - Hasher choice: use `SeaHasher` (`BuildHasherDefault`) for hash maps/sets of non-Thing keys to keep hashing consistent with existing lookups.
 
 ## Traqula DSL Notes
-- Variable binding: `+var` declares new, `var` recalls existing, `*` is wildcard.
-- Union in roles: `(w|h, name)` matches either recalled wife or husband identities.
-- Pattern matching: search patterns mirror posit insertion structure.
-- WHERE clauses: time-only comparisons supported with `AND` conjunctions (e.g., `t <= '1999-12-31'`).
-- Result sets: engine uses tri-state `ResultSetMode` (Empty/Thing/Multi) backed by roaring bitmaps for efficient set algebra.
+- `+var` allocates during mutation, bare `var` recalls a mutation binding, and `?var` is lexical to one search. `*` consumes one anonymous field and `...` opens an appearance-set pattern.
+- Pattern matching is declarative and mirrors posit insertion structure; source pattern order must not change natural-join meaning.
+- Typed predicates support exact literal identity (`===`), nominal equality (`=`), compatible overlap (`?=`), and the documented numeric, certainty, string, JSON, and temporal relations.
+- `search ... or add posit ...` is the only compound that promotes matching identities into mutation scope. Validate both branches and the return shape before evaluation or sink callbacks.
+- Result sets use tri-state `ResultSetMode` (Empty/Thing/Multi) backed by roaring bitmaps for efficient set algebra.
 
 ## Persistence Contract
-- The first published backend is the versioned append-only store specified in `STORAGE.md`.
+- The first published backend is the versioned append-only store specified in `docs/reference/STORAGE.md`.
 - A store directory contains `manifest.pmf`, `store.lock`, and framed `.ptl` log segments.
 - Each mutation command is one logical batch terminated by a Commit record. The manifest exposes only the flushed committed prefix.
 - Replay validates headers, checksums, sequence numbers, batches, canonical encodings, identity invariants, and resource bounds before rebuilding in-memory indexes.
-- Physical codecs are private. Logical transfer preserves lossless literal tokens through the versioned JSONL contract in `TRANSFER.md`.
+- Physical codecs are private. Logical transfer preserves lossless literal tokens through the versioned JSONL contract in `docs/reference/TRANSFER.md`.
 - There is no SQLite compatibility boundary, importer, dependency, or migration path: no Positorium release used the prototype backend (D031).
 
 ### Operational persistence behavior
@@ -80,7 +80,7 @@ When adding a literal family or representation:
 - Avoid premature allocation by relying on `ResultSetMode` and in-place roaring operations.
 
 ## Concurrency and Interface
-`interface.rs` provides a query interface with bounded execution-lock waiting, cooperative cancellation, and optional streaming via channels. `server.rs` implements an Axum HTTP/SSE boundary and the web console. All frontends sharing a `Database` use its execution owner, so separately created interfaces cannot bypass serialization.
+`src/interface.rs` provides a query interface with bounded execution-lock waiting, cooperative cancellation, and optional streaming. `src/server.rs` implements an Axum HTTP/SSE boundary. All frontends sharing a `Database` use its execution owner, so separately created interfaces cannot bypass serialization.
 	- File-backed and in-memory modes have the same logical execution semantics.
 	- Cancellation is cooperative and must be checked at bounded points in parsing, command execution, result production, and execution-lock waiting.
 	- Shutdown stops intake, finishes or cancels active work according to the boundary contract, and flushes the owned store.
@@ -89,18 +89,18 @@ When adding a literal family or representation:
 Domain-specific errors (`DatabaseError`) are defined in `error.rs` with variants for config, persistence, data corruption, parse, execution, invariant, and lock errors. Propagate or extend this type for new boundary failures.
 
 ## Testing and Benchmarks
-- Doctests exist in several modules (run with `cargo test`).
-- Use Criterion benchmarks in `benches/benchmark.rs` (`cargo bench`) for set operation performance.
-- Test with various result set sizes (empty, single element, large sets).
+- Match CI with `cargo test --all-targets --all-features --no-fail-fast` and `cargo test --all-targets --no-default-features --no-fail-fast`.
+- Run both Clippy feature matrices with `-D warnings`, formatting checks, the Terrain JavaScript test, and the browser WASM suite for boundary changes.
+- Use Criterion benchmarks in `benches/benchmark.rs` (`cargo bench`) for architectural performance measurements.
 
 ## Contributor PR Checklist
 - Builds cleanly: `cargo build` (and optionally `cargo clippy`, `cargo fmt`).
 - Doctests pass: `cargo test`.
 - If grammar changed: update `traqula.pest` and keep `traqula-vscode/` syntax in sync.
 - If changing literal behavior: update lossless transfer, comparison, result, and malformed-input tests.
-- If touching persistence: follow `STORAGE.md`; preserve atomic batches, fail-closed replay, and bounded decoding. Do not add SQLite compatibility work.
+- If touching persistence: follow `docs/reference/STORAGE.md`; preserve atomic batches, fail-closed replay, and bounded decoding. Do not add SQLite compatibility work.
 - Keepers & lookups: keep construction internal and update canonical keepers plus every dependent lookup atomically.
-- Add minimal examples in docs or `traqula/example.traqula` when introducing new syntax or behavior.
+- Add minimal examples in `docs/` or an appropriate `traqula/*.traqula` fixture when introducing new syntax or behavior.
 
 ## License
 Dual licensed under Apache-2.0 and MIT (see `LICENSE.*`).

@@ -507,25 +507,135 @@ fn fallback_allocation_domains(
     Ok(domains)
 }
 
+#[derive(Debug)]
+struct FallbackOrder {
+    unique_index: usize,
+    descending: bool,
+}
+
+#[derive(Debug)]
+struct FallbackPlan {
+    allocation_domains: HashMap<String, query::IdentityDomain, OtherHasher>,
+    unique_names: Vec<String>,
+    projection: Vec<usize>,
+    column_kinds: Vec<ResultCellKind>,
+    distinct: bool,
+    order: Vec<FallbackOrder>,
+}
+
+fn identity_domain_label(domain: query::IdentityDomain) -> &'static str {
+    match domain {
+        query::IdentityDomain::Thing => "Thing",
+        query::IdentityDomain::Posit => "Posit",
+    }
+}
+
+fn prepare_fallback(
+    prepared: &query::PreparedQuery,
+    fallback: &Pair<'_, Rule>,
+) -> Result<FallbackPlan, DatabaseError> {
+    let allocation_domains = fallback_allocation_domains(fallback)?;
+    for (name, fallback_domain) in &allocation_domains {
+        let Some(search_domain) = prepared.domains().get(name) else {
+            continue;
+        };
+        let fallback_label = identity_domain_label(*fallback_domain);
+        if search_domain.label() != fallback_label {
+            return Err(DatabaseError::VariableDomain {
+                name: name.clone(),
+                first: search_domain.label(),
+                second: fallback_label,
+            });
+        }
+    }
+
+    let columns = prepared.returns().to_vec();
+    for column in &columns {
+        let Some(fallback_domain) = allocation_domains.get(column) else {
+            return Err(DatabaseError::Execution(format!(
+                "or-add fallback cannot supply returned variable '?{column}'; bind '+{column}' in the add branch or omit return"
+            )));
+        };
+        let search_domain = prepared.domains().get(column).ok_or_else(|| {
+            DatabaseError::Invariant(format!(
+                "validated return variable '{column}' has no search domain"
+            ))
+        })?;
+        let fallback_label = identity_domain_label(*fallback_domain);
+        if search_domain.label() != fallback_label {
+            return Err(DatabaseError::VariableDomain {
+                name: column.clone(),
+                first: search_domain.label(),
+                second: fallback_label,
+            });
+        }
+    }
+
+    let mut unique_names = Vec::new();
+    let mut projection = Vec::with_capacity(columns.len());
+    let mut column_kinds = Vec::with_capacity(columns.len());
+    for column in &columns {
+        let unique_index = match unique_names.iter().position(|name| name == column) {
+            Some(index) => index,
+            None => {
+                unique_names.push(column.clone());
+                unique_names.len() - 1
+            }
+        };
+        projection.push(unique_index);
+        column_kinds.push(match allocation_domains.get(column) {
+            Some(query::IdentityDomain::Thing) => ResultCellKind::Thing,
+            Some(query::IdentityDomain::Posit) => ResultCellKind::Posit,
+            None => {
+                return Err(DatabaseError::Invariant(format!(
+                    "validated fallback return variable '{column}' has no allocation domain"
+                )));
+            }
+        });
+    }
+    let order = prepared
+        .order()
+        .iter()
+        .map(|item| {
+            let unique_index = unique_names
+                .iter()
+                .position(|name| name == &item.variable)
+                .ok_or_else(|| {
+                    DatabaseError::Invariant(format!(
+                        "validated ORDER BY variable '{}' is not projected",
+                        item.variable
+                    ))
+                })?;
+            Ok(FallbackOrder {
+                unique_index,
+                descending: item.descending,
+            })
+        })
+        .collect::<Result<Vec<_>, DatabaseError>>()?;
+
+    Ok(FallbackPlan {
+        allocation_domains,
+        unique_names,
+        projection,
+        column_kinds,
+        distinct: prepared.distinct(),
+        order,
+    })
+}
+
 fn emit_fallback_rows(
     variables: &Variables,
-    domains: &HashMap<String, query::IdentityDomain, OtherHasher>,
-    columns: &[String],
+    plan: &FallbackPlan,
     sink: &mut dyn RowSink,
     execution: &ExecutionContext,
 ) -> Result<(), DatabaseError> {
-    let mut unique_names = Vec::<&str>::new();
-    for column in columns {
-        if !unique_names.contains(&column.as_str()) {
-            unique_names.push(column);
-        }
-    }
-    let identities = unique_names
+    let identities = plan
+        .unique_names
         .iter()
         .map(|name| {
             variables
-                .get(*name)
-                .ok_or_else(|| DatabaseError::UnknownVariable((*name).to_string()))
+                .get(name)
+                .ok_or_else(|| DatabaseError::UnknownVariable(name.clone()))
                 .and_then(result_set_identities)
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -536,39 +646,56 @@ fn emit_fallback_rows(
     }
     let identity_slices = identities.iter().map(Vec::as_slice).collect::<Vec<_>>();
     let mut emit_error = None;
-    let mut stopped = false;
+    let mut rows = Vec::new();
     for_each_cartesian_indices(&identity_slices, |indices| {
-        if stopped || emit_error.is_some() {
+        if emit_error.is_some() {
             return;
         }
         if let Err(error) = execution.check() {
             emit_error = Some(error);
             return;
         }
-        let mut row = Vec::with_capacity(columns.len());
-        for column in columns {
-            let unique_index = unique_names
-                .iter()
-                .position(|name| *name == column)
-                .expect("return column was used to construct unique names");
-            let identity = identities[unique_index][indices[unique_index]];
-            let kind = match domains.get(column) {
-                Some(query::IdentityDomain::Thing) => ResultCellKind::Thing,
-                Some(query::IdentityDomain::Posit) => ResultCellKind::Posit,
-                None => {
-                    emit_error = Some(DatabaseError::UnknownVariable(column.clone()));
-                    return;
-                }
-            };
-            row.push(ResultCell::new(kind, identity.to_string()));
-        }
-        if let SinkFlow::Stop = sink.push(row) {
-            // The sink controls presentation only; the atomic mutation has
-            // already completed and no further rows need to be materialized.
-            stopped = true;
-        }
+        let selected = indices
+            .iter()
+            .enumerate()
+            .map(|(unique_index, selected_index)| identities[unique_index][*selected_index])
+            .collect::<Vec<_>>();
+        let row = plan
+            .projection
+            .iter()
+            .zip(&plan.column_kinds)
+            .map(|(unique_index, kind)| ResultCell::new(*kind, selected[*unique_index].to_string()))
+            .collect::<Vec<_>>();
+        rows.push((selected, row));
     });
-    emit_error.map_or(Ok(()), Err)
+    if let Some(error) = emit_error {
+        return Err(error);
+    }
+    if plan.distinct {
+        let mut seen = std::collections::BTreeSet::new();
+        rows.retain(|(_, row)| seen.insert(row.clone()));
+    }
+    if !plan.order.is_empty() {
+        rows.sort_by(|(left, _), (right, _)| {
+            for item in &plan.order {
+                let mut ordering = left[item.unique_index].cmp(&right[item.unique_index]);
+                if item.descending {
+                    ordering = ordering.reverse();
+                }
+                if !ordering.is_eq() {
+                    return ordering;
+                }
+            }
+            std::cmp::Ordering::Equal
+        });
+    }
+    for (_, row) in rows {
+        execution.check()?;
+        if let SinkFlow::Stop = sink.push(row) {
+            break;
+        }
+    }
+    Ok(())
 }
 
 // Operator-assign support to preserve public API used by benches
@@ -1775,72 +1902,28 @@ impl<'en> Engine<'en> {
             .clone()
             .into_inner()
             .find(|clause| clause.as_rule() == Rule::or_add_clause);
-        let outcome = self.search(command, sink, return_columns, execution)?;
         let Some(fallback) = fallback else {
-            return Ok(outcome);
+            return self.search(command, sink, return_columns, execution);
         };
-        let allocation_domains = fallback_allocation_domains(&fallback)?;
-        for (name, fallback_domain) in &allocation_domains {
-            let Some(search_domain) = outcome.identity_domains.get(name) else {
-                continue;
-            };
-            if search_domain != fallback_domain {
-                return Err(DatabaseError::VariableDomain {
-                    name: name.clone(),
-                    first: match search_domain {
-                        query::IdentityDomain::Thing => "Thing",
-                        query::IdentityDomain::Posit => "Posit",
-                    },
-                    second: match fallback_domain {
-                        query::IdentityDomain::Thing => "Thing",
-                        query::IdentityDomain::Posit => "Posit",
-                    },
-                });
-            }
-        }
+        let prepared = query::prepare(command, execution)?;
+        let fallback_plan = prepare_fallback(&prepared, &fallback)?;
+        let outcome =
+            query::execute_prepared(self.database, prepared, sink, return_columns, execution)?;
         if outcome.matched_rows == 0 {
-            if outcome.has_return {
-                for column in return_columns.as_deref().unwrap_or_default() {
-                    if !allocation_domains.contains_key(column) {
-                        return Err(DatabaseError::Execution(format!(
-                            "or-add fallback cannot supply returned variable '?{column}'; bind '+{column}' in the add branch or omit return"
-                        )));
-                    }
-                }
-            }
             self.add_posit(
                 fallback,
                 variables,
                 &execution.metadata.resolved_now,
                 execution,
             )?;
-            if outcome.has_return {
-                emit_fallback_rows(
-                    variables,
-                    &allocation_domains,
-                    return_columns.as_deref().unwrap_or_default(),
-                    sink,
-                    execution,
-                )?;
+            if outcome.has_return && !outcome.sink_stopped {
+                emit_fallback_rows(variables, &fallback_plan, sink, execution)?;
             }
         } else {
-            for (name, domain) in &allocation_domains {
+            for name in fallback_plan.allocation_domains.keys() {
                 let Some(found) = outcome.identity_bindings.get(name) else {
                     continue;
                 };
-                if found.domain != *domain {
-                    return Err(DatabaseError::VariableDomain {
-                        name: name.clone(),
-                        first: match found.domain {
-                            query::IdentityDomain::Thing => "Thing",
-                            query::IdentityDomain::Posit => "Posit",
-                        },
-                        second: match domain {
-                            query::IdentityDomain::Thing => "Thing",
-                            query::IdentityDomain::Posit => "Posit",
-                        },
-                    });
-                }
                 let values = result_set_identities(&found.values)?;
                 for identity in values {
                     bind_identity(variables, name.clone(), identity);

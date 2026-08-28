@@ -2,8 +2,8 @@
 
 This document is the normative, storage- and Traqula-independent model contract
 for the Positorium beta. The words **must**, **must not**, **should**, and **may**
-are used in their usual requirements sense. `DECISIONS.md` records why these
-rules were chosen; this document states the resulting behavior.
+are used in their usual requirements sense. [DECISIONS.md](../development/DECISIONS.md)
+records why these rules were chosen; this document states the resulting behavior.
 
 ## Constructs and identity
 

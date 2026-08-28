@@ -8,7 +8,7 @@ use std::sync::Arc;
 use unicode_normalization::UnicodeNormalization;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Domain {
+pub(super) enum Domain {
     Thing,
     Role,
     Posit,
@@ -18,7 +18,7 @@ enum Domain {
 }
 
 impl Domain {
-    fn label(self) -> &'static str {
+    pub(super) fn label(self) -> &'static str {
         match self {
             Self::Thing => "Thing",
             Self::Role => "Role",
@@ -179,9 +179,9 @@ struct Predicate {
 }
 
 #[derive(Debug, Clone)]
-struct OrderItem {
-    variable: String,
-    descending: bool,
+pub(super) struct OrderItem {
+    pub variable: String,
+    pub descending: bool,
 }
 
 #[derive(Debug)]
@@ -192,6 +192,30 @@ struct Query {
     returns: Vec<String>,
     distinct: bool,
     order: Vec<OrderItem>,
+}
+
+#[derive(Debug)]
+pub(super) struct PreparedQuery {
+    query: Query,
+    domains: HashMap<String, Domain>,
+}
+
+impl PreparedQuery {
+    pub(super) fn domains(&self) -> &HashMap<String, Domain> {
+        &self.domains
+    }
+
+    pub(super) fn returns(&self) -> &[String] {
+        &self.query.returns
+    }
+
+    pub(super) fn distinct(&self) -> bool {
+        self.query.distinct
+    }
+
+    pub(super) fn order(&self) -> &[OrderItem] {
+        &self.query.order
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -209,9 +233,9 @@ pub(super) struct IdentityBinding {
 #[derive(Debug)]
 pub(super) struct SearchOutcome {
     pub matched_rows: usize,
-    pub identity_domains: HashMap<String, IdentityDomain, OtherHasher>,
     pub identity_bindings: HashMap<String, IdentityBinding, OtherHasher>,
     pub has_return: bool,
+    pub sink_stopped: bool,
 }
 
 #[derive(Clone)]
@@ -229,17 +253,29 @@ pub(super) fn execute(
     return_columns: &mut Option<Vec<String>>,
     execution: &ExecutionContext,
 ) -> Result<SearchOutcome, DatabaseError> {
+    let prepared = prepare(command, execution)?;
+    execute_prepared(database, prepared, sink, return_columns, execution)
+}
+
+pub(super) fn prepare(
+    command: Pair<'_, Rule>,
+    execution: &ExecutionContext,
+) -> Result<PreparedQuery, DatabaseError> {
     execution.check()?;
     let query = parse_query(command, execution)?;
     let domains = validate_domains(&query)?;
-    let identity_domains = domains
-        .iter()
-        .filter_map(|(name, domain)| match domain {
-            Domain::Thing => Some((name.clone(), IdentityDomain::Thing)),
-            Domain::Posit => Some((name.clone(), IdentityDomain::Posit)),
-            Domain::Role | Domain::AppearanceSet | Domain::Literal | Domain::Time => None,
-        })
-        .collect::<HashMap<_, _, OtherHasher>>();
+    Ok(PreparedQuery { query, domains })
+}
+
+pub(super) fn execute_prepared(
+    database: &Database,
+    prepared: PreparedQuery,
+    sink: &mut dyn RowSink,
+    return_columns: &mut Option<Vec<String>>,
+    execution: &ExecutionContext,
+) -> Result<SearchOutcome, DatabaseError> {
+    execution.check()?;
+    let PreparedQuery { query, domains } = prepared;
     let mut effect_cache = EffectCache::new();
 
     let mut bindings = Vec::new();
@@ -338,9 +374,9 @@ pub(super) fn execute(
     if !has_return {
         return Ok(SearchOutcome {
             matched_rows,
-            identity_domains,
             identity_bindings,
             has_return,
+            sink_stopped: false,
         });
     }
 
@@ -374,22 +410,24 @@ pub(super) fn execute(
     if let SinkFlow::Stop = sink.on_meta(&columns) {
         return Ok(SearchOutcome {
             matched_rows,
-            identity_domains,
             identity_bindings,
             has_return,
+            sink_stopped: true,
         });
     }
+    let mut sink_stopped = false;
     for (_, row) in projected {
         execution.check()?;
         if let SinkFlow::Stop = sink.push(row) {
+            sink_stopped = true;
             break;
         }
     }
     Ok(SearchOutcome {
         matched_rows,
-        identity_domains,
         identity_bindings,
         has_return,
+        sink_stopped,
     })
 }
 

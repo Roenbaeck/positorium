@@ -22,7 +22,7 @@ Beta does not mean an Internet-facing, production-ready service. Authentication,
 replication, distributed execution, and container packaging are outside this
 milestone unless they become necessary for a concrete deployment.
 
-All beta-gating decisions D001-D032 in `DECISIONS.md` were accepted on
+All beta-gating decisions D001-D032 in [DECISIONS.md](DECISIONS.md) were accepted on
 2026-08-26. The unchecked items below track remaining specification,
 implementation, documentation, and test work; decision acceptance alone does not
 complete them. Decision identifiers are included where they clarify the governing
@@ -30,7 +30,8 @@ contract.
 
 ## P0: Defects Found In Review (2026-08-20)
 
-Concrete issues observed in the current code while annotating `DECISIONS.md`.
+Concrete issues observed in the current code while annotating
+[DECISIONS.md](DECISIONS.md).
 The accepted decisions now define the required fixes.
 
 - [x] **Equality/ordering law violations in core constructs.**
@@ -87,6 +88,16 @@ The accepted decisions now define the required fixes.
             manifest; delete it.
         - `.github/copilot-instructions.md` refers to `PositoriumError`, but the
             error type is `DatabaseError` (src/error.rs); update the instructions.
+- [x] **Validate `search ... or add` before it can emit or mutate.**
+        - Prepare and validate both branch domains and the complete return shape before
+            evaluating the search or calling a streaming sink.
+        - Require every returned fallback binding to exist with the same domain in both
+            branches, independent of whether the search currently has matches.
+        - Apply projection, `distinct`, ordering, limits, and sink-stop behavior to
+            zero-match fallback rows consistently with matched search rows.
+        - Cover zero-match and nonzero-match invalid commands through buffered,
+            streaming, HTTP/SSE, and WASM regression tests; none publishes rows or
+            fallback posits.
 
 ## P0: Semantic Contracts
 
@@ -490,7 +501,7 @@ posit replay.
         - Test that both copies of `traqula.tmLanguage.json` remain aligned with
             `src/traqula.pest`.
 - [x] **Write beta documentation.**
-        - Update `TRAQULA.md` to distinguish history, ordinary snapshots, assertions,
+        - Update `../reference/TRAQULA.md` to distinguish history, ordinary snapshots, assertions,
             and assertion-resolution policies.
         - Document exact/open set matching, structural query-variable domains, posit
             identity binding, script versus search scope, open-world negation, and
@@ -538,6 +549,17 @@ posit replay.
         - Add convenience OR syntax, BETWEEN, IN, richer aggregates, subqueries, and
             structured returns as orthogonal features with explicit desugarings where
             possible. Keep the beta algebra stable underneath them.
+        - Design correlation-preserving mutation bindings. `search ... or add`
+            currently promotes each matching identity variable as an independent set;
+            using two such variables later can form a Cartesian product and lose the
+            original matched pairs. Either add an explicit row-valued/named binding
+            (`using` is one candidate), provide explicit correlated versus cross-product
+            fan-out operators, or reject ambiguous multi-binding continuation.
+        - Keep the present zero/one-or-many behavior until aggregation semantics are
+            designed. A future branch guard such as `for count(?registry) = 1` must
+            define whether it counts result rows, distinct identities, or correlated
+            tuples, how it interacts with `distinct` and `limit`, and what happens when
+            the condition is false; do not reserve its exact syntax yet.
 - [ ] **Storage scaling.**
         - Add snapshots, compaction, incremental indexes, and backup tooling when
             replay measurements demonstrate the need.

@@ -196,6 +196,42 @@ mod tests {
     }
 
     #[wasm_bindgen_test]
+    fn invalid_or_add_wasm_execution_returns_no_result_and_never_mutates() {
+        const INVALID_SCRIPT: &str = r#"
+            search [{(?registry, registry_code), ...}, ?code, *]
+            return ?registry, ?code
+            or add posit [{(+registry, registry_code)}, "CODE", @NOW];
+        "#;
+
+        for matched in [false, true] {
+            let engine = WasmEngine::new().expect("Failed to create engine");
+            engine.execute("add role registry_code;").unwrap();
+            if matched {
+                engine
+                    .execute("add posit [{(+existing, registry_code)}, \"CODE\", '2024-01-01'];")
+                    .unwrap();
+            }
+            let count = |engine: &WasmEngine| {
+                let output = engine
+                    .execute("search [{(?registry, registry_code), ...}, *, *] return ?registry;")
+                    .unwrap();
+                let output: serde_json::Value = serde_wasm_bindgen::from_value(output).unwrap();
+                output["result_sets"][0]["row_count"].as_u64().unwrap()
+            };
+            let before = count(&engine);
+
+            let error = engine.execute(INVALID_SCRIPT).unwrap_err();
+            assert!(
+                error
+                    .as_string()
+                    .unwrap()
+                    .contains("fallback cannot supply")
+            );
+            assert_eq!(count(&engine), before);
+        }
+    }
+
+    #[wasm_bindgen_test]
     fn test_wasm_typed_parameters() {
         let engine = WasmEngine::new().expect("Failed to create engine");
         engine

@@ -148,7 +148,7 @@ may truncate, and both expose completeness metadata.
 
 ## Golden fixture
 
-[`traqula/terrain.traqula`](traqula/terrain.traqula) is retained as a population
+[`traqula/terrain.traqula`](../../traqula/terrain.traqula) is retained as a population
 fixture for backend tests, not as a browser workflow. It produces:
 
 | Measurement | History | Current |

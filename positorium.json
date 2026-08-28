@@ -2,6 +2,7 @@
     "listen_interface": "127.0.0.1",
     "listen_port": 8080,
     "database_file_and_path": "positorium.store",
+    "enable_persistence": true,
     "recreate_database_on_startup": false,
     "traqula_file_to_run_on_startup": "traqula/empty.traqula"
 }
