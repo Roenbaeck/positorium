@@ -84,3 +84,33 @@ fn beta_entry_points_match_the_package_and_default_config() {
         );
     }
 }
+
+#[test]
+fn detective_showcase_is_discoverable_and_shipped_with_the_ui() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script = root.join("traqula/blackthorn.traqula");
+    assert!(script.is_file());
+
+    let readme = fs::read_to_string(root.join("README.md")).unwrap();
+    let index = fs::read_to_string(root.join("docs/README.md")).unwrap();
+    let guide = fs::read_to_string(root.join("docs/guides/BLACKTHORN_CASE.md")).unwrap();
+    assert!(readme.contains("The Blackthorn Ruby"));
+    assert!(index.contains("The Blackthorn Ruby"));
+    assert!(guide.contains("15 searches"));
+    assert!(guide.contains("Class overlay demonstration"));
+
+    let studio = fs::read_to_string(root.join("positorium.html")).unwrap();
+    assert!(studio.contains("Load detective case"));
+    assert!(studio.contains("traqula/blackthorn.traqula"));
+
+    for workflow in [
+        ".github/workflows/pages.yml",
+        ".github/workflows/release.yml",
+    ] {
+        let contents = fs::read_to_string(root.join(workflow)).unwrap();
+        assert!(
+            contents.contains("traqula/blackthorn.traqula"),
+            "{workflow} does not ship the detective case"
+        );
+    }
+}

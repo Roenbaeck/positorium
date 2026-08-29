@@ -13,6 +13,7 @@ on:
       - "positorium-terrain.js"
       - "positorium-terrain.css"
       - "traqula/terrain.traqula"
+      - "traqula/blackthorn.traqula"
       - "tests/terrain_client.test.js"
       - "tests/terrain_fixture.rs"
       - "og.png"
@@ -50,7 +51,7 @@ jobs:
           mkdir -p site/traqula
           cp positorium.html site/index.html
           cp positorium.css positorium-terrain.css positorium-terrain.js og.png site/
-          cp traqula/terrain.traqula site/traqula/
+          cp traqula/terrain.traqula traqula/blackthorn.traqula site/traqula/
           cp -R pkg site/pkg
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5

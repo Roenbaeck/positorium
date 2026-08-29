@@ -14,8 +14,8 @@
 <meta name="twitter:title" content="Positorium — Traqula Query Studio" />
 <meta name="twitter:description" content="Compose Traqula scripts and inspect Positorium results in a focused local workspace." />
 <meta name="twitter:image" content="https://roenbaeck.github.io/positorium/og.png" />
-<link rel="stylesheet" href="positorium.css" />
-<link rel="stylesheet" href="positorium-terrain.css?v=0.7.1" />
+<link rel="stylesheet" href="positorium.css?v=0.8.0" />
+<link rel="stylesheet" href="positorium-terrain.css?v=0.8.0" />
 </head>
 <body>
 <!-- Inline regex-based syntax highlighting (no external deps) -->
@@ -33,7 +33,7 @@
   </nav>
   <div class="workspace-meta" aria-label="Workspace details">
     <span class="workspace-status"><span class="status-dot" aria-hidden="true"></span>Local workspace</span>
-    <span id="studioVersion" class="version-chip" data-version="0.7.1">Studio v0.7.1</span>
+    <span id="studioVersion" class="version-chip" data-version="0.8.0">Studio v0.8.0</span>
     <span class="version-chip traqula-version">Traqula v1</span>
     <button id="settingsBtn" class="icon-button settings-button" type="button" aria-label="Studio settings" aria-controls="settingsPanel" aria-expanded="false" title="Studio settings"></button>
   </div>
@@ -87,7 +87,10 @@
         <div class="editor-frame">
           <div class="editor-toolbar">
             <span class="file-name"><span class="file-dot" aria-hidden="true"></span>workspace.traqula</span>
-            <span class="save-state">Autosaved locally</span>
+            <span class="editor-toolbar-actions">
+              <button id="loadBlackthornBtn" class="editor-example-button" type="button" title="Load the Blackthorn Ruby detective showcase into the editor">Load detective case</button>
+              <span class="save-state">Autosaved locally</span>
+            </span>
           </div>
           <div id="script-container">
             <div id="script" contenteditable="true" spellcheck="false" role="textbox" aria-multiline="true" aria-label="Traqula script" data-placeholder="Write a Traqula script…"></div>
@@ -238,6 +241,7 @@ const els = {
   queryWorkspace: document.getElementById('splitContainer'),
   workspaceModes: document.querySelectorAll('.workspace-mode'),
   script: document.getElementById('script'),
+  loadBlackthornBtn: document.getElementById('loadBlackthornBtn'),
   runBtn: document.getElementById('runBtn'),
   runBtnLabel: document.getElementById('runBtnLabel'),
   clearBtn: document.getElementById('clearBtn'),
@@ -395,6 +399,28 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   els.endpoint.addEventListener('change', () => {
     localStorage.setItem(ENDPOINT_STORAGE_KEY, els.endpoint.value.trim());
+  });
+  els.loadBlackthornBtn.addEventListener('click', async () => {
+    const current = scriptEditor.innerText.trim();
+    if (current && !window.confirm('Replace the current editor contents with the Blackthorn Ruby detective case?')) return;
+    const originalLabel = els.loadBlackthornBtn.textContent;
+    els.loadBlackthornBtn.disabled = true;
+    els.loadBlackthornBtn.textContent = 'Loading…';
+    try {
+      const response = await fetch('traqula/blackthorn.traqula', { cache: 'no-store' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const script = await response.text();
+      scriptEditor.textContent = script;
+      localStorage.setItem('positorium-query', script);
+      updateHighlight();
+      scriptEditor.focus();
+      setStatus('Loaded the Blackthorn Ruby detective case. Run it when ready.');
+    } catch (error) {
+      setStatus(`Could not load detective case: ${error.message || error}`, 'err');
+    } finally {
+      els.loadBlackthornBtn.disabled = false;
+      els.loadBlackthornBtn.textContent = originalLabel;
+    }
   });
 
   // Tabs switching
@@ -745,6 +771,7 @@ function showCompletionSummary(details) {
 
 let wasmEngine = null;
 let wasmPackageSource = 'workspace';
+const WASM_ASSET_VERSION = STUDIO_VERSION;
 const PUBLISHED_WASM_MODULE = 'https://roenbaeck.github.io/positorium/pkg/positorium.js';
 
 function isLoopbackHost(hostname) {
@@ -753,7 +780,7 @@ function isLoopbackHost(hostname) {
 
 async function loadWasmPackage() {
   try {
-    return await import('./pkg/positorium.js');
+    return await import(`./pkg/positorium.js?v=${encodeURIComponent(WASM_ASSET_VERSION)}`);
   } catch (localError) {
     if (!isLoopbackHost(location.hostname)) throw localError;
     setStatus('Workspace WASM package unavailable; loading the published package…');
@@ -775,7 +802,12 @@ async function runWasm(script, started) {
       setStatus('Initializing WASM engine...');
       const pkg = await loadWasmPackage();
       const { WasmEngine } = pkg;
-      await pkg.default();
+      if (wasmPackageSource === 'workspace') {
+        const wasmUrl = new URL(`./pkg/positorium_bg.wasm?v=${encodeURIComponent(WASM_ASSET_VERSION)}`, location.href);
+        await pkg.default({ module_or_path: wasmUrl });
+      } else {
+        await pkg.default();
+      }
       wasmEngine = new WasmEngine();
     }
     const output = wasmEngine.execute(script);
@@ -1096,6 +1128,6 @@ async function runStream(endpoint, payload, started, controller) {
   flushEvents(buffer); // flush remainder
 }
 </script>
-<script src="positorium-terrain.js?v=0.7.1"></script>
+<script src="positorium-terrain.js?v=0.8.0"></script>
 </body>
 </html>

@@ -15,8 +15,8 @@ fn source(name: &str) -> String {
 #[test]
 fn standalone_example_scripts_execute() {
     for name in [
+        "blackthorn.traqula",
         "cross-search.traqula",
-        "heist.traqula",
         "multi-match.traqula",
         "timetest.traqula",
     ] {
@@ -25,6 +25,113 @@ fn standalone_example_scripts_execute() {
             .execute_collect_multi(&source(name))
             .unwrap_or_else(|error| panic!("execute {name}: {error}"));
     }
+}
+
+#[test]
+fn blackthorn_detective_story_reaches_supported_conclusion() {
+    let database = Database::new(PersistenceMode::InMemory).unwrap();
+    let engine = Engine::new(&database);
+    let script = source("blackthorn.traqula");
+    let results = engine
+        .execute_collect_multi(&script)
+        .expect("execute blackthorn.traqula");
+
+    assert_eq!(results.len(), 15, "one result set per narrated search");
+    assert_eq!(
+        results
+            .iter()
+            .map(|result| result.row_count)
+            .collect::<Vec<_>>(),
+        [5, 10, 4, 5, 7, 5, 2, 1, 1, 1, 2, 1, 2, 1, 3]
+    );
+    assert_eq!(
+        results[6]
+            .rows
+            .iter()
+            .map(|row| row[0].as_str())
+            .collect::<Vec<_>>(),
+        ["\"Beatrice Shaw\"", "\"Lydia Marr\""]
+    );
+    assert_eq!(results[7].rows[0][0].as_str(), "\"Jonah Pike\"");
+    assert_eq!(results[7].rows[0][1].as_str(), "\"Master Card JP-1\"");
+    assert_eq!(results[8].rows[0][0].as_str(), "\"Jonah Pike\"");
+    assert_eq!(results[8].rows[0][1].as_str(), "44");
+    assert_eq!(results[9].rows[0][0].as_str(), "\"Jonah Pike\"");
+    assert_eq!(results[9].rows[0][1].as_str(), "\"Blackthorn red wool\"");
+    assert_eq!(results[11].rows[0][1].as_str(), "\"Jonah Pike\"");
+    assert_eq!(results[11].rows[0][2].as_str(), "44");
+    assert_eq!(results[13].rows[0][0].as_str(), "\"Jonah Pike\"");
+    assert_eq!(results[13].rows[0][2].as_str(), "96%");
+    assert_eq!(
+        results[14].rows[2][0].as_str(),
+        "\"closed — Jonah Pike charged\""
+    );
+
+    let report = database
+        .terrain_with_options(positorium::TerrainOptions {
+            as_of: Some(
+                positorium::datatype::Time::new_date_from("2026-01-01").expect("fixed cutoff"),
+            ),
+            ..positorium::TerrainOptions::default()
+        })
+        .expect("blackthorn terrain");
+    assert!(report.projection.complete);
+    assert_eq!(report.projection.total_attribute_roles, 8);
+    assert_eq!(
+        report
+            .projection
+            .roles
+            .iter()
+            .map(|role| role.name.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "dossier_id",
+            "name",
+            "occupation",
+            "class",
+            "description",
+            "source type",
+            "shoe size",
+            "status",
+        ]
+    );
+    let signatures = report
+        .relationship_catalog
+        .signatures
+        .iter()
+        .map(|signature| {
+            signature
+                .roles
+                .iter()
+                .map(|role| role.name.as_str())
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    for expected in [
+        vec!["thing", "class"],
+        vec!["suspect", "case"],
+        vec!["credential", "holder"],
+        vec!["credential", "access point"],
+        vec!["trace", "location"],
+    ] {
+        assert!(signatures.contains(&expected), "missing {expected:?}");
+    }
+
+    engine
+        .execute_collect_multi(&script)
+        .expect("rerun idempotent blackthorn.traqula");
+    let rerun_report = database
+        .terrain_with_options(positorium::TerrainOptions {
+            as_of: Some(
+                positorium::datatype::Time::new_date_from("2026-01-01").expect("fixed cutoff"),
+            ),
+            ..positorium::TerrainOptions::default()
+        })
+        .expect("blackthorn terrain after rerun");
+    assert_eq!(
+        rerun_report, report,
+        "rerunning must not duplicate the case"
+    );
 }
 
 #[test]

@@ -9,6 +9,7 @@ contracts that define compatibility and the design record used by maintainers.
 | Document | Use it for |
 | --- | --- |
 | [Getting started](GETTING_STARTED.md) | Install, run, query, restart, troubleshoot, and report beta feedback |
+| [The Blackthorn Ruby](guides/BLACKTHORN_CASE.md) | Run an interactive detective story showcasing contradictions, retractions, classifications, and Terrain |
 | [Operations](guides/OPERATIONS.md) | Configuration, durability, backup, restore, failure handling, and resource limits |
 | [Cookbook](guides/COOKBOOK.md) | Worked modeling, correction, assertion, identification, backup, and transfer recipes |
 

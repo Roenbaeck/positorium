@@ -83,6 +83,7 @@ checks, backup, Query Studio setup, and troubleshooting, follow
 | Start here | Purpose |
 | --- | --- |
 | [Getting started](docs/GETTING_STARTED.md) | Install, run, query, restart, back up, and troubleshoot |
+| [The Blackthorn Ruby](docs/guides/BLACKTHORN_CASE.md) | Interactive detective story and full Query Studio/Terrain showcase |
 | [Traqula](docs/reference/TRAQULA.md) | Language and query reference |
 | [Cookbook](docs/guides/COOKBOOK.md) | Worked modeling and maintenance recipes |
 | [Operations](docs/guides/OPERATIONS.md) | Durability, recovery, limits, and deployment posture |

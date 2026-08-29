@@ -1,0 +1,639 @@
+/*
+  THE BLACKTHORN RUBY
+  A detective story and guided tour of Traqula 1
+
+  At 20:42 on 8 November 2025, Bellwether Museum loses power for ninety
+  seconds. When the lights return, the Blackthorn Ruby is gone. A camera saw
+  a red scarf near the cabinet, apparently making clock conservator Elias Reed
+  the obvious suspect. Head guard Jonah Pike says he never left his desk, and
+  two witnesses initially support the story.
+
+  We are Detective Mara Voss. We will preserve what everybody said, including
+  claims later withdrawn under questioning, then search for the explanation
+  that makes the independent evidence agree.
+
+  Run the complete script in a fresh Query Studio database. It is intentionally
+  idempotent: every durable Thing is resolved by dossier_id before it is added,
+  and canonical posits are reused if the script is run again.
+
+  UI TOUR AFTER RUNNING
+  1. Result set 1 maps opaque class Thing identities to readable class names.
+  2. Open Terrain and refresh. Compare History with Current.
+  3. Inspect the {thing, class}, {suspect, case}, {credential, holder},
+     {credential, access point}, and {trace, location} relationships.
+  4. In Current, choose the "Person of interest" class identity from result
+     set 1, exact value "active", and compare the two evidence sources.
+     The police registry retains three people; Mara's current view retains one.
+
+  SPOILER: the final searches identify the thief. Read and run section by
+  section instead if you want to solve the case before the reveal.
+*/
+
+/* -------------------------------------------------------------------------
+   ACT I — BUILD THE DOSSIER
+
+   Singleton Roles become useful Terrain attributes. There are exactly eight
+   in this example: dossier_id, name, occupation, shoe size, description,
+   status, source type, and the reserved class Role. Other Roles appear only
+   in relationships.
+   ------------------------------------------------------------------------- */
+
+add role dossier_id, name, occupation, `shoe size`, description, status,
+         `source type`, suspect, case, credential, holder, `access point`,
+         trace, fibre, location, garment, owner, borrower, exhibit;
+
+/* search ... or add posit gives a stable store-local identity to the case. */
+search [{(?blackthorn_case, dossier_id), ...}, "CASE-BLACKTHORN-2025", *]
+or add posit
+  [{(+blackthorn_case, dossier_id)}, "CASE-BLACKTHORN-2025", '2025-11-08 21:00:00'];
+
+add posit [{(blackthorn_case, name)}, "The Blackthorn Ruby", '2025-11-08 21:00:00'],
+          [{(blackthorn_case, status)}, "opened", '2025-11-08 21:00:00'],
+          [{(blackthorn_case, status)}, "evidence converging", '2025-11-08 22:15:00'],
+          [{(blackthorn_case, status)}, "closed — Jonah Pike charged", '2025-11-08 23:40:00'];
+
+/* The detective and the five people in the museum after closing. */
+search [{(?mara, dossier_id), ...}, "PERSON-MARA-VOSS", *]
+or add posit [{(+mara, dossier_id)}, "PERSON-MARA-VOSS", '2025-11-08 21:00:00'];
+add posit [{(mara, name)}, "Detective Mara Voss", '2025-11-08 21:00:00'],
+          [{(mara, occupation)}, "detective", '2025-11-08 21:00:00'];
+
+search [{(?jonah, dossier_id), ...}, "PERSON-JONAH-PIKE", *]
+or add posit [{(+jonah, dossier_id)}, "PERSON-JONAH-PIKE", '2025-11-08 21:00:00'];
+add posit [{(jonah, name)}, "Jonah Pike", '2025-11-08 21:00:00'],
+          [{(jonah, occupation)}, "head of security", '2025-11-08 21:00:00'],
+          [{(jonah, `shoe size`)}, 44, '2025-11-08 21:00:00'];
+
+search [{(?elias, dossier_id), ...}, "PERSON-ELIAS-REED", *]
+or add posit [{(+elias, dossier_id)}, "PERSON-ELIAS-REED", '2025-11-08 21:00:00'];
+add posit [{(elias, name)}, "Elias Reed", '2025-11-08 21:00:00'],
+          [{(elias, occupation)}, "clock conservator", '2025-11-08 21:00:00'],
+          [{(elias, `shoe size`)}, 42, '2025-11-08 21:00:00'];
+
+search [{(?bea, dossier_id), ...}, "PERSON-BEATRICE-SHAW", *]
+or add posit [{(+bea, dossier_id)}, "PERSON-BEATRICE-SHAW", '2025-11-08 21:00:00'];
+add posit [{(bea, name)}, "Beatrice Shaw", '2025-11-08 21:00:00'],
+          [{(bea, occupation)}, "assistant archivist", '2025-11-08 21:00:00'],
+          [{(bea, `shoe size`)}, 38, '2025-11-08 21:00:00'];
+
+search [{(?lydia, dossier_id), ...}, "PERSON-LYDIA-MARR", *]
+or add posit [{(+lydia, dossier_id)}, "PERSON-LYDIA-MARR", '2025-11-08 21:00:00'];
+add posit [{(lydia, name)}, "Lydia Marr", '2025-11-08 21:00:00'],
+          [{(lydia, occupation)}, "museum patron", '2025-11-08 21:00:00'];
+
+search [{(?celeste, dossier_id), ...}, "PERSON-CELESTE-VALE", *]
+or add posit [{(+celeste, dossier_id)}, "PERSON-CELESTE-VALE", '2025-11-08 21:00:00'];
+add posit [{(celeste, name)}, "Dr Celeste Vale", '2025-11-08 21:00:00'],
+          [{(celeste, occupation)}, "museum curator", '2025-11-08 21:00:00'];
+
+/* Independent sources. A human may also be an assertion source; these source
+   records distinguish devices, laboratories, and the institutional register. */
+search [{(?access_system, dossier_id), ...}, "SOURCE-ACCESS-CONTROL", *]
+or add posit [{(+access_system, dossier_id)}, "SOURCE-ACCESS-CONTROL", '2025-11-08 21:00:00'];
+add posit [{(access_system, name)}, "Bellwether Access Control", '2025-11-08 21:00:00'],
+          [{(access_system, `source type`)}, "access-control device", '2025-11-08 21:00:00'];
+
+search [{(?camera, dossier_id), ...}, "SOURCE-CAMERA-4", *]
+or add posit [{(+camera, dossier_id)}, "SOURCE-CAMERA-4", '2025-11-08 21:00:00'];
+add posit [{(camera, name)}, "East Gallery Camera 4", '2025-11-08 21:00:00'],
+          [{(camera, `source type`)}, "low-light camera", '2025-11-08 21:00:00'];
+
+search [{(?forensic_lab, dossier_id), ...}, "SOURCE-COUNTY-FORENSICS", *]
+or add posit [{(+forensic_lab, dossier_id)}, "SOURCE-COUNTY-FORENSICS", '2025-11-08 21:00:00'];
+add posit [{(forensic_lab, name)}, "County Forensics", '2025-11-08 21:00:00'],
+          [{(forensic_lab, `source type`)}, "forensic laboratory", '2025-11-08 21:00:00'];
+
+search [{(?police_registry, dossier_id), ...}, "SOURCE-POLICE-REGISTRY", *]
+or add posit [{(+police_registry, dossier_id)}, "SOURCE-POLICE-REGISTRY", '2025-11-08 21:00:00'];
+add posit [{(police_registry, name)}, "Bellwether Police Registry", '2025-11-08 21:00:00'],
+          [{(police_registry, `source type`)}, "case registry", '2025-11-08 21:00:00'];
+
+/* Places. Their shared {dossier_id, name} Terrain profile keeps the map tidy. */
+search [{(?east_gallery, dossier_id), ...}, "PLACE-EAST-GALLERY", *]
+or add posit [{(+east_gallery, dossier_id)}, "PLACE-EAST-GALLERY", '2025-11-08 20:00:00'];
+add posit [{(east_gallery, name)}, "East Gallery", '2025-11-08 20:00:00'];
+
+search [{(?security_desk, dossier_id), ...}, "PLACE-SECURITY-DESK", *]
+or add posit [{(+security_desk, dossier_id)}, "PLACE-SECURITY-DESK", '2025-11-08 20:00:00'];
+add posit [{(security_desk, name)}, "Security Desk", '2025-11-08 20:00:00'];
+
+search [{(?service_stair, dossier_id), ...}, "PLACE-SERVICE-STAIR", *]
+or add posit [{(+service_stair, dossier_id)}, "PLACE-SERVICE-STAIR", '2025-11-08 20:00:00'];
+add posit [{(service_stair, name)}, "East Service Stair", '2025-11-08 20:00:00'];
+
+search [{(?west_clock, dossier_id), ...}, "PLACE-WEST-CLOCK", *]
+or add posit [{(+west_clock, dossier_id)}, "PLACE-WEST-CLOCK", '2025-11-08 20:00:00'];
+add posit [{(west_clock, name)}, "West-Wing Clock", '2025-11-08 20:00:00'];
+
+search [{(?display_cabinet, dossier_id), ...}, "PLACE-RUBY-CABINET", *]
+or add posit [{(+display_cabinet, dossier_id)}, "PLACE-RUBY-CABINET", '2025-11-08 20:00:00'];
+add posit [{(display_cabinet, name)}, "Blackthorn Display Cabinet", '2025-11-08 20:00:00'];
+
+/* Objects and traces. Shared description values later become join keys. */
+search [{(?ruby, dossier_id), ...}, "OBJECT-BLACKTHORN-RUBY", *]
+or add posit [{(+ruby, dossier_id)}, "OBJECT-BLACKTHORN-RUBY", '2025-11-08 20:00:00'];
+add posit [{(ruby, name)}, "Blackthorn Ruby", '2025-11-08 20:00:00'],
+          [{(ruby, description)}, "a pigeon-blood ruby in a blackthorn setting", '2025-11-08 20:00:00'];
+
+search [{(?master_card, dossier_id), ...}, "EVIDENCE-MASTER-CARD-JP1", *]
+or add posit [{(+master_card, dossier_id)}, "EVIDENCE-MASTER-CARD-JP1", '2025-11-08 20:00:00'];
+add posit [{(master_card, name)}, "Master Card JP-1", '2025-11-08 20:00:00'],
+          [{(master_card, description)}, "museum-wide master credential", '2025-11-08 20:00:00'];
+
+search [{(?shoeprint, dossier_id), ...}, "EVIDENCE-SHOEPRINT-7", *]
+or add posit [{(+shoeprint, dossier_id)}, "EVIDENCE-SHOEPRINT-7", '2025-11-08 21:35:00'];
+add posit [{(shoeprint, name)}, "Service Stair Print 7", '2025-11-08 21:35:00'],
+          [{(shoeprint, description)}, "wet herringbone sole impression", '2025-11-08 21:35:00'];
+
+search [{(?red_scarf, dossier_id), ...}, "EVIDENCE-RED-SCARF", *]
+or add posit [{(+red_scarf, dossier_id)}, "EVIDENCE-RED-SCARF", '2025-11-08 20:00:00'];
+add posit [{(red_scarf, name)}, "Elias Reed's Red Scarf", '2025-11-08 20:00:00'],
+          [{(red_scarf, description)}, "Blackthorn red wool", '2025-11-08 20:00:00'];
+
+search [{(?red_fibre, dossier_id), ...}, "EVIDENCE-CABINET-FIBRE", *]
+or add posit [{(+red_fibre, dossier_id)}, "EVIDENCE-CABINET-FIBRE", '2025-11-08 21:38:00'];
+add posit [{(red_fibre, name)}, "Cabinet Fibre", '2025-11-08 21:38:00'],
+          [{(red_fibre, description)}, "Blackthorn red wool", '2025-11-08 21:38:00'];
+
+/* -------------------------------------------------------------------------
+   ACT II — CLASSIFY WITHOUT HIDING A TRUTH TABLE
+
+   class, thing, and subclass are reserved structural Roles. Literal "active"
+   is merely the presentation convention chosen by this example. Every direct
+   membership is asserted so the Terrain class overlay can apply its visible
+   source/certainty policy.
+   ------------------------------------------------------------------------- */
+
+search [{(?person_class, dossier_id), ...}, "CLASS-PERSON", *]
+or add posit [{(+person_class, dossier_id)}, "CLASS-PERSON", '2025-11-08 21:00:00'];
+add posit [{(person_class, name)}, "Person", '2025-11-08 21:00:00'],
+          [{(person_class, class)}, "declared", '2025-11-08 21:00:00']
+            and assert by police_registry with 100% at '2025-11-08 21:00:01';
+
+search [{(?poi_class, dossier_id), ...}, "CLASS-PERSON-OF-INTEREST", *]
+or add posit [{(+poi_class, dossier_id)}, "CLASS-PERSON-OF-INTEREST", '2025-11-08 21:00:00'];
+add posit [{(poi_class, name)}, "Person of interest", '2025-11-08 21:00:00'],
+          [{(poi_class, class)}, "declared", '2025-11-08 21:00:00']
+            and assert by police_registry with 100% at '2025-11-08 21:00:01';
+
+search [{(?witness_class, dossier_id), ...}, "CLASS-WITNESS", *]
+or add posit [{(+witness_class, dossier_id)}, "CLASS-WITNESS", '2025-11-08 21:00:00'];
+add posit [{(witness_class, name)}, "Witness", '2025-11-08 21:00:00'],
+          [{(witness_class, class)}, "declared", '2025-11-08 21:00:00']
+            and assert by police_registry with 100% at '2025-11-08 21:00:01';
+
+search [{(?evidence_class, dossier_id), ...}, "CLASS-PHYSICAL-EVIDENCE", *]
+or add posit [{(+evidence_class, dossier_id)}, "CLASS-PHYSICAL-EVIDENCE", '2025-11-08 21:00:00'];
+add posit [{(evidence_class, name)}, "Physical evidence", '2025-11-08 21:00:00'],
+          [{(evidence_class, class)}, "declared", '2025-11-08 21:00:00']
+            and assert by mara with 100% at '2025-11-08 21:45:00';
+
+search [{(?source_class, dossier_id), ...}, "CLASS-EVIDENCE-SOURCE", *]
+or add posit [{(+source_class, dossier_id)}, "CLASS-EVIDENCE-SOURCE", '2025-11-08 21:00:00'];
+add posit [{(source_class, name)}, "Evidence source", '2025-11-08 21:00:00'],
+          [{(source_class, class)}, "declared", '2025-11-08 21:00:00']
+            and assert by mara with 100% at '2025-11-08 21:45:00';
+
+/* Explicit hierarchy: Traqula records it but never traverses it implicitly. */
+add posit [{(poi_class, subclass), (person_class, class)}, "active", '2025-11-08 21:00:00']
+            and assert by police_registry with 100% at '2025-11-08 21:00:02';
+add posit [{(witness_class, subclass), (person_class, class)}, "active", '2025-11-08 21:00:00']
+            and assert by police_registry with 100% at '2025-11-08 21:00:02';
+
+/* People. */
+add posit [{(mara, thing), (person_class, class)}, "active", '2025-11-08 21:00:00']
+            and assert by police_registry with 100% at '2025-11-08 21:00:03';
+add posit [{(jonah, thing), (person_class, class)}, "active", '2025-11-08 21:00:00']
+            and assert by police_registry with 100% at '2025-11-08 21:00:03';
+add posit [{(elias, thing), (person_class, class)}, "active", '2025-11-08 21:00:00']
+            and assert by police_registry with 100% at '2025-11-08 21:00:03';
+add posit [{(bea, thing), (person_class, class)}, "active", '2025-11-08 21:00:00']
+            and assert by police_registry with 100% at '2025-11-08 21:00:03';
+add posit [{(lydia, thing), (person_class, class)}, "active", '2025-11-08 21:00:00']
+            and assert by police_registry with 100% at '2025-11-08 21:00:03';
+add posit [{(celeste, thing), (person_class, class)}, "active", '2025-11-08 21:00:00']
+            and assert by police_registry with 100% at '2025-11-08 21:00:03';
+
+/* Witnesses. */
+add posit [{(jonah, thing), (witness_class, class)}, "active", '2025-11-08 21:00:00']
+            and assert by mara with 100% at '2025-11-08 21:01:00';
+add posit [{(elias, thing), (witness_class, class)}, "active", '2025-11-08 21:00:00']
+            and assert by mara with 100% at '2025-11-08 21:01:00';
+add posit [{(bea, thing), (witness_class, class)}, "active", '2025-11-08 21:00:00']
+            and assert by mara with 100% at '2025-11-08 21:01:00';
+add posit [{(lydia, thing), (witness_class, class)}, "active", '2025-11-08 21:00:00']
+            and assert by mara with 100% at '2025-11-08 21:01:00';
+add posit [{(celeste, thing), (witness_class, class)}, "active", '2025-11-08 21:00:00']
+            and assert by mara with 100% at '2025-11-08 21:01:00';
+
+/* Physical evidence and evidence sources. */
+add posit [{(ruby, thing), (evidence_class, class)}, "active", '2025-11-08 21:45:00']
+            and assert by mara with 100% at '2025-11-08 21:45:01';
+add posit [{(master_card, thing), (evidence_class, class)}, "active", '2025-11-08 21:45:00']
+            and assert by mara with 100% at '2025-11-08 21:45:01';
+add posit [{(shoeprint, thing), (evidence_class, class)}, "active", '2025-11-08 21:45:00']
+            and assert by mara with 100% at '2025-11-08 21:45:01';
+add posit [{(red_scarf, thing), (evidence_class, class)}, "active", '2025-11-08 21:45:00']
+            and assert by mara with 100% at '2025-11-08 21:45:01';
+add posit [{(red_fibre, thing), (evidence_class, class)}, "active", '2025-11-08 21:45:00']
+            and assert by mara with 100% at '2025-11-08 21:45:01';
+
+add posit [{(access_system, thing), (source_class, class)}, "active", '2025-11-08 21:45:00']
+            and assert by mara with 100% at '2025-11-08 21:45:01';
+add posit [{(camera, thing), (source_class, class)}, "active", '2025-11-08 21:45:00']
+            and assert by mara with 100% at '2025-11-08 21:45:01';
+add posit [{(forensic_lab, thing), (source_class, class)}, "active", '2025-11-08 21:45:00']
+            and assert by mara with 100% at '2025-11-08 21:45:01';
+add posit [{(police_registry, thing), (source_class, class)}, "active", '2025-11-08 21:45:00']
+            and assert by mara with 100% at '2025-11-08 21:45:01';
+
+/* The register and Mara both open the same three memberships. The target posit
+   is canonical; the two assertion envelopes preserve independent provenance. */
+add posit +jonah_poi [{(jonah, thing), (poi_class, class)}, "active", '2025-11-08 21:00:00']
+            and assert by police_registry with 100% at '2025-11-08 21:02:00';
+add posit [{(jonah, thing), (poi_class, class)}, "active", '2025-11-08 21:00:00']
+            and assert by mara with 100% at '2025-11-08 21:03:00';
+
+add posit +elias_poi [{(elias, thing), (poi_class, class)}, "active", '2025-11-08 21:00:00']
+            and assert by police_registry with 100% at '2025-11-08 21:02:00';
+add posit [{(elias, thing), (poi_class, class)}, "active", '2025-11-08 21:00:00']
+            and assert by mara with 100% at '2025-11-08 21:03:00';
+
+add posit +bea_poi [{(bea, thing), (poi_class, class)}, "active", '2025-11-08 21:00:00']
+            and assert by police_registry with 100% at '2025-11-08 21:02:00';
+add posit [{(bea, thing), (poi_class, class)}, "active", '2025-11-08 21:00:00']
+            and assert by mara with 100% at '2025-11-08 21:03:00';
+
+/* -------------------------------------------------------------------------
+   ACT III — THE FIRST ACCOUNTS
+
+   Every target below uses the same exact {suspect, case} appearance set for a
+   particular person and the same modeled event time, 20:42. Equal-time
+   alternatives remain visible. Assertion time records when a source spoke.
+   ------------------------------------------------------------------------- */
+
+/* Jonah places himself safely at the security desk. */
+add posit +jonah_alibi [
+  {(jonah, suspect), (blackthorn_case, case)},
+  "remained at the security desk throughout the blackout",
+  '2025-11-08 20:42:00'
+] and assert by jonah with 100% at '2025-11-08 21:05:00';
+
+/* Beatrice, Jonah's subordinate, initially repeats his story. */
+add posit +bea_initial [
+  {(jonah, suspect), (blackthorn_case, case)},
+  "remained at the security desk throughout the blackout",
+  '2025-11-08 20:42:00'
+] and assert by bea with 80% at '2025-11-08 21:12:00';
+
+/* Lydia points to the conspicuous red scarf and accuses Elias. */
+add posit +lydia_initial [
+  {(elias, suspect), (blackthorn_case, case)},
+  "entered the East Gallery wearing his red scarf",
+  '2025-11-08 20:42:00'
+] and assert by lydia with 85% at '2025-11-08 21:10:00';
+
+/* Elias contradicts Lydia and says the scarf was no longer with him. */
+add posit +elias_alibi [
+  {(elias, suspect), (blackthorn_case, case)},
+  "worked at the West-Wing Clock without his scarf",
+  '2025-11-08 20:42:00'
+] and assert by elias with 100% at '2025-11-08 21:15:00';
+
+/* A low-light camera supports only the scarf, not the wearer's identity. */
+add posit +camera_scarf [
+  {(red_scarf, garment), (east_gallery, location)},
+  "seen on a figure",
+  '2025-11-08 20:41:50'
+] and assert by camera with 65% at '2025-11-08 21:25:00';
+
+/* -------------------------------------------------------------------------
+   ACT IV — THINGS THAT DO NOT FEEL PRESSURE
+
+   Device and laboratory propositions are still assertions, not privileged
+   truth. We can query them through the same provenance machinery as testimony.
+   ------------------------------------------------------------------------- */
+
+/* The master card was assigned to Jonah long before the theft. */
+add posit +card_assignment [
+  {(master_card, credential), (jonah, holder)},
+  "assigned",
+  '2024-05-01'
+] and assert by access_system with 100% at '2025-11-08 21:20:00';
+
+/* It opened the East Gallery thirty seconds before the blackout. */
+add posit +door_event [
+  {(master_card, credential), (east_gallery, `access point`)},
+  "opened",
+  '2025-11-08 20:41:32'
+] and assert by access_system with 100% at '2025-11-08 21:20:00';
+
+/* The ruby is absent after the blackout. Dr Vale asserts the observation. */
+add posit +missing_ruby [
+  {(ruby, exhibit), (display_cabinet, location)},
+  "missing",
+  '2025-11-08 20:43:30'
+] and assert by celeste with 100% at '2025-11-08 20:46:00';
+
+/* A wet size-44 print climbs the service stair away from the gallery. */
+add posit +print_size [
+  {(shoeprint, trace), (service_stair, location)},
+  44,
+  '2025-11-08 20:43:00'
+] and assert by forensic_lab with 98% at '2025-11-08 21:40:00';
+
+/* The cabinet fibre and Elias's scarf have the exact same description token.
+   This is not proof of a wearer; it is a joinable observation. */
+add posit +fibre_recovery [
+  {(red_fibre, fibre), (display_cabinet, location)},
+  "recovered",
+  '2025-11-08 20:43:30'
+] and assert by forensic_lab with 97% at '2025-11-08 21:42:00';
+
+/* Elias owns the scarf. Ownership alone explains why the first story works. */
+add posit +scarf_owner [
+  {(red_scarf, garment), (elias, owner)},
+  "owns",
+  '2023-12-24'
+] and assert by elias with 100% at '2025-11-08 21:15:00';
+
+/* Access control also makes a statement about Jonah during the theft. It uses
+   the same {suspect, case} shape as the human accounts, so disagreement can be
+   inspected in one query. */
+add posit +access_account [
+  {(jonah, suspect), (blackthorn_case, case)},
+  "his assigned master card opened the East Gallery",
+  '2025-11-08 20:42:00'
+] and assert by access_system with 100% at '2025-11-08 21:20:00';
+
+/* -------------------------------------------------------------------------
+   ACT V — SECOND INTERVIEWS
+
+   Beatrice admits Jonah, her supervisor, pressured her to repeat his alibi.
+   Lydia admits Jonah threatened her job on the museum board if she did not
+   identify Elias. Each first assertion is retracted with 0%; its target posit
+   remains part of history. A new target records the revised account.
+   ------------------------------------------------------------------------- */
+
+/* Beatrice withdraws only her support for the shared Jonah alibi. Jonah's own
+   assertion of that target remains effective for Jonah. */
+add posit [
+  {(bea_initial, posit), (bea, ascertains)},
+  0%,
+  '2025-11-08 23:02:00'
+];
+
+add posit +bea_revised [
+  {(jonah, suspect), (blackthorn_case, case)},
+  "left the security desk with the master card before the blackout",
+  '2025-11-08 20:42:00'
+] and assert by bea with 95% at '2025-11-08 23:05:00';
+
+add posit +scarf_borrowed [
+  {(red_scarf, garment), (jonah, borrower)},
+  "carried away from the cloakroom",
+  '2025-11-08 20:31:00'
+] and assert by bea with 90% at '2025-11-08 23:06:00';
+
+/* Lydia withdraws the accusation against Elias, then identifies Jonah as the
+   person wearing Elias's scarf on the service stair. */
+add posit [
+  {(lydia_initial, posit), (lydia, ascertains)},
+  0%,
+  '2025-11-08 23:12:00'
+];
+
+add posit +lydia_revised [
+  {(jonah, suspect), (blackthorn_case, case)},
+  "passed the service stair wearing Elias Reed's red scarf",
+  '2025-11-08 20:42:00'
+] and assert by lydia with 90% at '2025-11-08 23:14:00';
+
+/* We retract our active memberships for the two people the converging evidence
+   clears. The police registry does not change, making source policy visible in
+   Terrain instead of silently forcing one institutional view. */
+add posit [{(elias_poi, posit), (mara, ascertains)}, 0%, '2025-11-08 23:35:00'];
+add posit [{(bea_poi, posit), (mara, ascertains)}, 0%, '2025-11-08 23:35:00'];
+
+/* Our conclusion is deliberately another sourced posit. Positorium preserves
+   why we believe it; it does not promote it to metaphysical database truth. */
+add posit +detective_conclusion [
+  {(jonah, suspect), (blackthorn_case, case)},
+  "stole the Blackthorn Ruby and used Elias Reed's scarf as a disguise",
+  '2025-11-08 20:42:00'
+] and assert by mara with 96% at '2025-11-08 23:32:00';
+
+/* -------------------------------------------------------------------------
+   ACT VI — DETECTIVE QUERIES
+
+   Every search below becomes a separate Query Studio result set.
+   ------------------------------------------------------------------------- */
+
+/* RESULT SET 1 — CLASS LEGEND
+   Terrain's class selector is intentionally identity-based. Use this table to
+   map its Thing numbers to the readable class names. */
+search [{(?class_id, class)}, "declared", *],
+       [{(?class_id, name), ...}, ?class_name, *]
+return distinct ?class_id, ?class_name
+order by ?class_id;
+
+/* RESULT SET 2 — VOICES AND INSTRUMENTS
+   union combines human occupations and institutional source types into one
+   provenance directory. */
+search [{(?source, name), ...}, ?source_name, *],
+       [{(?source, occupation), ...}, ?source_kind, *]
+union  [{(?source, name), ...}, ?source_name, *],
+       [{(?source, `source type`), ...}, ?source_kind, *]
+return distinct ?source, ?source_name, ?source_kind
+order by ?source;
+
+/* RESULT SET 3 — WHO EACH SOURCE STILL CALLS A PERSON OF INTEREST
+   The same class target can have several effective assertion sources. Elias
+   and Beatrice remain active for the registry but not for Mara. */
+search ?membership = [
+  {(?member, thing), (?selected_class, class)}, "active", ?classified
+] in effect @NOW, @NOW
+  via ?classification_assertion = [
+    {(?membership, posit), (?source, ascertains)}, ?certainty, ?asserted
+  ],
+  [{(?selected_class, name), ...}, ?class_name, *],
+  [{(?member, name), ...}, ?member_name, *],
+  [{(?source, name), ...}, ?source_name, *]
+where ?class_name = "Person of interest" and ?certainty > 0%
+return ?member_name, ?source_name, ?certainty, ?asserted
+order by ?asserted;
+
+/* RESULT SET 4 — THE FIRST-ROUND STORY AT 22:00
+   in effect uses 22:00 as both the assertion and appearance cutoff. At this
+   point Beatrice still supports Jonah and Lydia still accuses Elias. */
+search ?account = [
+  {(?suspect_id, suspect), (?case_id, case)}, ?statement, ?happened
+] in effect '2025-11-08 22:00:00', '2025-11-08 22:00:00'
+  via ?assertion = [
+    {(?account, posit), (?source, ascertains)}, ?certainty, ?asserted
+  ],
+  [{(?suspect_id, name), ...}, ?suspect_name, *],
+  [{(?source, name), ...}, ?source_name, *],
+  [{(?case_id, dossier_id), ...}, "CASE-BLACKTHORN-2025", *]
+return ?suspect_name, ?statement, ?source_name, ?certainty, ?asserted
+order by ?asserted;
+
+/* RESULT SET 5 — RAW APPEARANCE-TIME SNAPSHOT
+   as of does not inspect assertion time or retractions. All equal-time target
+   alternatives survive, including later interpretations of the same event. */
+search ?account = [
+  {(?suspect_id, suspect), (?case_id, case)}, ?statement, ?happened
+] as of '2025-11-08 23:59:00',
+  [{(?suspect_id, name), ...}, ?suspect_name, *],
+  [{(?case_id, dossier_id), ...}, "CASE-BLACKTHORN-2025", *]
+return ?suspect_name, ?statement, ?happened;
+
+/* RESULT SET 6 — EFFECTIVE ACCOUNTS AFTER THE SECOND INTERVIEWS
+   Compare with result set 4. The withdrawn source/target pairs disappear, but
+   Jonah's own alibi remains because Beatrice could retract only her evidence. */
+search ?account = [
+  {(?suspect_id, suspect), (?case_id, case)}, ?statement, ?happened
+] in effect '2025-11-08 23:20:00', '2025-11-08 23:20:00'
+  via ?assertion = [
+    {(?account, posit), (?source, ascertains)}, ?certainty, ?asserted
+  ],
+  [{(?suspect_id, name), ...}, ?suspect_name, *],
+  [{(?source, name), ...}, ?source_name, *],
+  [{(?case_id, dossier_id), ...}, "CASE-BLACKTHORN-2025", *]
+return ?suspect_name, ?statement, ?source_name, ?certainty, ?asserted
+order by ?asserted;
+
+/* RESULT SET 7 — WHO CHANGED THEIR ACCOUNT?
+   Assertion envelopes are ordinary posits, so we can audit 0% retractions
+   directly and still read the withdrawn target statement. */
+search ?withdrawn = [
+  {(?suspect_id, suspect), (?case_id, case)}, ?withdrawn_statement, ?happened
+],
+  [{(?withdrawn, posit), (?source, ascertains)}, 0%, ?retracted],
+  [{(?suspect_id, name), ...}, ?suspect_name, *],
+  [{(?source, name), ...}, ?source_name, *],
+  [{(?case_id, dossier_id), ...}, "CASE-BLACKTHORN-2025", *]
+return ?source_name, ?suspect_name, ?withdrawn_statement, ?retracted
+order by ?retracted;
+
+/* RESULT SET 8 — FOLLOW THE CARD
+   Natural joins connect the credential assignment to the door event. `via`
+   exposes the independent source and its certainty. */
+search ?assignment = [
+  {(?card, credential), (?cardholder, holder)}, "assigned", ?assigned
+] in effect @NOW, @NOW,
+  ?opening = [
+  {(?card, credential), (?door, `access point`)}, "opened", ?opened
+] in effect @NOW, @NOW
+  via ?opening_assertion = [
+    {(?opening, posit), (?source, ascertains)}, ?certainty, ?asserted
+  ],
+  [{(?cardholder, name), ...}, ?cardholder_name, *],
+  [{(?card, name), ...}, ?card_name, *],
+  [{(?door, name), ...}, ?door_name, *],
+  [{(?source, name), ...}, ?source_name, *]
+where ?door_name = "East Gallery"
+return ?cardholder_name, ?card_name, ?door_name, ?opened,
+       ?source_name, ?certainty
+order by ?opened;
+
+/* RESULT SET 9 — MATCH THE PRINT
+   Reusing ?size performs a typed equality join. No fuzzy scoring or hidden
+   inference is involved: the result is simply the matching dossier value. */
+search ?print = [
+  {(?trace_id, trace), (?place, location)}, ?size, ?found
+] in effect @NOW, @NOW
+  via ?print_assertion = [
+    {(?print, posit), (?source, ascertains)}, ?certainty, ?asserted
+  ],
+  [{(?suspect_id, `shoe size`), ...}, ?size, *],
+  [{(?suspect_id, name), ...}, ?suspect_name, *],
+  [{(?place, name), ...}, ?place_name, *],
+  [{(?source, name), ...}, ?source_name, *]
+where ?place_name = "East Service Stair" and ?certainty >= 90%
+return ?suspect_name, ?size, ?place_name, ?source_name, ?certainty;
+
+/* RESULT SET 10 — WHO HAD THE MATCHING SCARF?
+   The fibre and scarf share an exact description. Effective camera, lab, and
+   revised witness relations join the material to Jonah without erasing Elias's
+   ownership. */
+search [{(?fibre, fibre), (?cabinet, location)}, "recovered", ?recovered]
+         in effect @NOW, @NOW,
+       [{(?fibre, description), ...}, ?material, *],
+       [{(?scarf, description), ...}, ?material, *],
+       [{(?scarf, garment), (?gallery, location)}, "seen on a figure", ?seen]
+         in effect @NOW, @NOW,
+       [{(?scarf, garment), (?borrower_id, borrower)}, "carried away from the cloakroom", ?borrowed]
+         in effect @NOW, @NOW,
+       [{(?borrower_id, name), ...}, ?borrower_name, *],
+       [{(?cabinet, name), ...}, ?cabinet_name, *],
+       [{(?gallery, name), ...}, ?gallery_name, *]
+return distinct ?borrower_name, ?material, ?cabinet_name, ?gallery_name,
+                ?borrowed, ?seen;
+
+/* RESULT SET 11 — SAFE OPEN-WORLD ELIMINATION
+   not exists may only refer to positively bound outer variables. Wildcards
+   avoid inventing an unsafe card variable. This does not prove innocence; it
+   lists current registry candidates lacking both observed links. */
+search [{(?candidate, thing), (?selected_class, class)}, "active", *]
+         in effect @NOW, @NOW,
+       [{(?selected_class, name), ...}, "Person of interest", *],
+       [{(?candidate, name), ...}, ?candidate_name, *]
+not exists { [{(?candidate, `shoe size`), ...}, 44, *] }
+not exists { [{(*, credential), (?candidate, holder)}, "assigned", *] }
+return distinct ?candidate, ?candidate_name
+order by ?candidate;
+
+/* RESULT SET 12 — CONVERGENCE
+   This one query intersects the active class, the card assignment and opening,
+   and the size-44 service-stair trace. Only one Thing satisfies every positive
+   pattern. */
+search [{(?candidate, thing), (?selected_class, class)}, "active", *]
+         in effect @NOW, @NOW,
+       [{(?selected_class, name), ...}, "Person of interest", *],
+       [{(?candidate, name), ...}, ?candidate_name, *],
+       [{(?candidate, `shoe size`), ...}, ?size, *],
+       [{(?card, credential), (?candidate, holder)}, "assigned", *]
+         in effect @NOW, @NOW,
+       [{(?card, credential), (?door, `access point`)}, "opened", ?opened]
+         in effect @NOW, @NOW,
+       [{(?print, trace), (?stairs, location)}, ?size, ?found]
+         in effect @NOW, @NOW,
+       [{(?door, name), ...}, ?door_name, *],
+       [{(?stairs, name), ...}, ?stairs_name, *]
+where ?door_name = "East Gallery" and ?stairs_name = "East Service Stair"
+return distinct ?candidate, ?candidate_name, ?size, ?opened, ?found;
+
+/* RESULT SET 13 — EXPLICIT CLASS HIERARCHY
+   subclass is queryable data, not automatic transitive closure. */
+search [{(?child, subclass), (?parent, class)}, ?state, ?classified],
+       [{(?child, name), ...}, ?child_name, *],
+       [{(?parent, name), ...}, ?parent_name, *]
+return ?child, ?child_name, ?parent, ?parent_name, ?state
+order by ?child;
+
+/* RESULT SET 14 — OUR CONCLUSION, WITH PROVENANCE
+   Filtering by source and certainty is an explicit detective policy. Another
+   application could choose another policy without rewriting stored history. */
+search ?conclusion = [
+  {(?accused, suspect), (?case_id, case)}, ?finding, ?happened
+] in effect @NOW, @NOW
+  via ?conclusion_assertion = [
+    {(?conclusion, posit), (?source, ascertains)}, ?certainty, ?asserted
+  ],
+  [{(?accused, name), ...}, ?accused_name, *],
+  [{(?source, name), ...}, ?source_name, *],
+  [{(?case_id, dossier_id), ...}, "CASE-BLACKTHORN-2025", *]
+where ?source_name = "Detective Mara Voss" and ?certainty >= 90%
+return ?accused_name, ?finding, ?certainty, ?asserted;
+
+/* RESULT SET 15 — THE CASE FILE'S TRANSITIONAL STATUS
+   History preserves all three values; as of @NOW would return only the latest. */
+search [{(?case_id, status), ...}, ?case_status, ?changed],
+       [{(?case_id, dossier_id), ...}, "CASE-BLACKTHORN-2025", *]
+return ?case_status, ?changed
+order by ?changed;
+
+/* End of case. The ruby was recovered from Jonah's locker before midnight.
+   That epilogue is left out of the evidence graph: a good detective example
+   should show how we reached the warrant, not smuggle the answer in as loot. */

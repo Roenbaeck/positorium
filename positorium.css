@@ -562,6 +562,37 @@ h2 {
   white-space: nowrap;
 }
 
+.editor-toolbar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.7rem;
+}
+
+.editor-example-button {
+  border: 0;
+  border-radius: 999px;
+  padding: 0.2rem 0.55rem;
+  background: rgba(149, 78, 45, 0.09);
+  color: var(--accent-strong);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.editor-example-button:hover {
+  background: rgba(149, 78, 45, 0.16);
+}
+
+.editor-example-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.editor-example-button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
 #script-container {
   position: relative;
   flex: 1;
