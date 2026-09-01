@@ -1,0 +1,52 @@
+name: Beta feedback or use case
+description: Tell us about conflicting or evolving information you want to preserve.
+title: "[Feedback]: "
+labels: ["feedback"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Positorium is looking for concrete evidence, compliance, investigation,
+        and master-data workflows. A small real example is more useful than a
+        polished feature request.
+  - type: textarea
+    id: situation
+    attributes:
+      label: What information disagrees or changes?
+      description: Describe the sources, revisions, uncertainty, or historical questions involved.
+      placeholder: Two screening providers disagree about an organisation, and an analyst may later retract one assessment…
+    validations:
+      required: true
+  - type: textarea
+    id: current-approach
+    attributes:
+      label: How do you handle it today?
+      description: A schema sketch or short pseudocode example is welcome. Please remove private data.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: What would make Positorium useful here?
+      description: Describe the query, integration, or operational outcome you need.
+    validations:
+      required: true
+  - type: dropdown
+    id: tried
+    attributes:
+      label: Have you tried Positorium?
+      options:
+        - Browser quick example
+        - Browser detective case
+        - Native release
+        - Source checkout
+        - Python source package
+        - Not yet
+    validations:
+      required: true
+  - type: checkboxes
+    id: follow-up
+    attributes:
+      label: Follow-up
+      options:
+        - label: I am open to follow-up questions on this public issue.

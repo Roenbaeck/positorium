@@ -1,19 +1,58 @@
-<img src="./positorium.svg" width="333" alt="Positorium">
+<img src="https://raw.githubusercontent.com/Roenbaeck/positorium/master/positorium.svg" width="333" alt="Positorium">
 
 # Positorium
 
-Positorium is an experimental database engine for information that can
-conflict, vary over time, and carry source-specific certainty. It combines an
-immutable posit model, the Traqula query language, an append-only native store,
-a trusted-local HTTP service, and an in-browser WASM testbed.
+> **A database for facts that disagree.**
 
-The current release line is `0.1.4-beta.1`. Beta means the documented language,
-storage, transfer, and interface versions have explicit compatibility rules; it
-does not mean an Internet-facing or production-ready service.
+Positorium preserves conflicting claims instead of forcing them into one current
+value. Every assertion can retain its source, certainty, appearance time, and
+assertion time, so corrections never erase the evidence that came before.
 
-[Try the browser testbed](https://roenbaeck.github.io/positorium/) ·
-[Get started](docs/GETTING_STARTED.md) ·
-[Browse all documentation](docs/README.md)
+It is an experimental embedded evidence database with an immutable posit model,
+the Traqula query language, an append-only native store, Python bindings, a
+trusted-local HTTP service, and an in-browser WASM testbed.
+
+The repository is preparing `0.1.4-beta.2`; the latest tagged release is
+[`0.1.4-beta.1`](https://github.com/Roenbaeck/positorium/releases/tag/v0.1.4-beta.1).
+Beta means the documented language, storage, transfer, and interface versions
+have explicit compatibility rules; it does not mean an Internet-facing or
+production-ready service.
+
+[Run the 60-second browser example](https://roenbaeck.github.io/positorium/) ·
+[Get started](https://github.com/Roenbaeck/positorium/blob/master/docs/GETTING_STARTED.md) ·
+[Browse all documentation](https://github.com/Roenbaeck/positorium/blob/master/docs/README.md)
+
+## Python
+
+The source tree contains an embedded Python package for CPython 3.9+ on Linux,
+macOS, and Windows. It needs no separate Positorium server. Until beta.2 is
+published to PyPI, install it from a source checkout with Rust available:
+
+```sh
+python -m pip install .
+```
+
+After beta.2 is published, the prerelease install will be:
+
+```sh
+python -m pip install --pre positorium
+```
+
+```python
+import positorium
+
+with positorium.Database.memory() as database:
+    result = database.execute_one(
+        'add role name; add posit [{(+person, name)}, "Ada", @NOW]; '
+        'search [{(?person, name)}, ?name, *] return ?person, ?name;'
+    )
+    print(result[0]["person"].text, result[0]["name"].text)
+```
+
+Use `Database.open("positorium.store")` for an append-only persistent store.
+Results retain each cell's kind and exact entered text. See the
+[Python guide](https://github.com/Roenbaeck/positorium/blob/master/docs/guides/PYTHON.md) for typed parameters, Terrain, Pandas,
+exceptions, and lifecycle rules.
 
 ## Why Positorium?
 
@@ -25,8 +64,10 @@ Most databases converge on one current value. Positorium preserves evidence:
 - snapshots and `in effect` queries make resolution policy explicit; and
 - exact entered literals survive native storage, HTTP, SSE, and WASM results.
 
-This is useful for exploring master data, regulated records, investigations,
-and other domains where evidence accumulates and is revised.
+This is useful for compliance evidence, investigations, conflicting master
+data, and other domains where evidence accumulates and is revised. Positorium
+can serve as a focused evidence layer alongside existing operational systems;
+it does not need to replace them.
 
 ## Five-minute source checkout
 
@@ -53,7 +94,7 @@ next start.
 
 For release archives, checksum verification, Windows commands, persistence
 checks, backup, Query Studio setup, and troubleshooting, follow
-[Getting started](docs/GETTING_STARTED.md).
+[Getting started](https://github.com/Roenbaeck/positorium/blob/master/docs/GETTING_STARTED.md).
 
 ## Beta boundaries
 
@@ -65,7 +106,7 @@ checks, backup, Query Studio setup, and troubleshooting, follow
 - Authentication, replication, distributed execution, and container packaging
   are outside the current beta.
 - Independent contract versions are listed in
-  [Contracts](docs/reference/CONTRACTS.md).
+  [Contracts](https://github.com/Roenbaeck/positorium/blob/master/docs/reference/CONTRACTS.md).
 
 ## Current capabilities
 
@@ -76,25 +117,27 @@ checks, backup, Query Studio setup, and troubleshooting, follow
 - Atomic durable mutation batches with deterministic replay and recovery
 - Inspection, physical backup, logical export/import, and identity remapping
 - Structured Rust, buffered HTTP, SSE, and WASM results
+- Embedded Python 3.9+ bindings with structured lossless results
 - Query Studio and authoritative Terrain structural reports
 
 ## Documentation
 
 | Start here | Purpose |
 | --- | --- |
-| [Getting started](docs/GETTING_STARTED.md) | Install, run, query, restart, back up, and troubleshoot |
-| [The Blackthorn Ruby](docs/guides/BLACKTHORN_CASE.md) | Interactive detective story and full Query Studio/Terrain showcase |
-| [Traqula](docs/reference/TRAQULA.md) | Language and query reference |
-| [Cookbook](docs/guides/COOKBOOK.md) | Worked modeling and maintenance recipes |
-| [Operations](docs/guides/OPERATIONS.md) | Durability, recovery, limits, and deployment posture |
-| [Core model](docs/reference/MODEL.md) | Identity, literal, temporal, and snapshot semantics |
-| [Storage](docs/reference/STORAGE.md) | Append-only format contract |
-| [Transfer](docs/reference/TRANSFER.md) | Backup, export, import, and identity remapping |
-| [Terrain](docs/reference/TERRAIN.md) | Structural report and visualization contract |
-| [Theory](docs/design/THEORY.md) | Philosophical foundations |
-| [Roadmap](docs/development/ROADMAP.md) | Remaining and post-beta work |
+| [Getting started](https://github.com/Roenbaeck/positorium/blob/master/docs/GETTING_STARTED.md) | Install, run, query, restart, back up, and troubleshoot |
+| [Python](https://github.com/Roenbaeck/positorium/blob/master/docs/guides/PYTHON.md) | Install the wheel, embed a database, bind parameters, and consume results |
+| [The Blackthorn Ruby](https://github.com/Roenbaeck/positorium/blob/master/docs/guides/BLACKTHORN_CASE.md) | Interactive detective story and full Query Studio/Terrain showcase |
+| [Traqula](https://github.com/Roenbaeck/positorium/blob/master/docs/reference/TRAQULA.md) | Language and query reference |
+| [Cookbook](https://github.com/Roenbaeck/positorium/blob/master/docs/guides/COOKBOOK.md) | Worked modeling and maintenance recipes |
+| [Operations](https://github.com/Roenbaeck/positorium/blob/master/docs/guides/OPERATIONS.md) | Durability, recovery, limits, and deployment posture |
+| [Core model](https://github.com/Roenbaeck/positorium/blob/master/docs/reference/MODEL.md) | Identity, literal, temporal, and snapshot semantics |
+| [Storage](https://github.com/Roenbaeck/positorium/blob/master/docs/reference/STORAGE.md) | Append-only format contract |
+| [Transfer](https://github.com/Roenbaeck/positorium/blob/master/docs/reference/TRANSFER.md) | Backup, export, import, and identity remapping |
+| [Terrain](https://github.com/Roenbaeck/positorium/blob/master/docs/reference/TERRAIN.md) | Structural report and visualization contract |
+| [Theory](https://github.com/Roenbaeck/positorium/blob/master/docs/design/THEORY.md) | Philosophical foundations |
+| [Roadmap](https://github.com/Roenbaeck/positorium/blob/master/docs/development/ROADMAP.md) | Remaining and post-beta work |
 
-The [documentation index](docs/README.md) also links compatibility decisions,
+The [documentation index](https://github.com/Roenbaeck/positorium/blob/master/docs/README.md) also links compatibility decisions,
 benchmarks, and maintainer specifications. The original paper,
 [Modeling Conflicting, Unreliable, and Varying Information](https://www.researchgate.net/publication/329352497_Modeling_Conflicting_Unreliable_and_Varying_Information),
 provides additional background.
@@ -112,7 +155,7 @@ cargo test --all-targets --no-default-features --no-fail-fast
 node tests/terrain_client.test.js
 ```
 
-See [Extending Traqula](docs/development/EXTEND_TRAQULA.md) before changing the
+See [Extending Traqula](https://github.com/Roenbaeck/positorium/blob/master/docs/development/EXTEND_TRAQULA.md) before changing the
 language or synchronized editor grammar.
 
 ## License

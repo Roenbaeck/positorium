@@ -41,8 +41,8 @@ The quickest zero-install demonstration uses the
 [hosted Query Studio](https://roenbaeck.github.io/positorium/):
 
 1. Reload the page if you want a fresh browser database.
-2. Open **Studio settings** and enable **Local WASM**.
-3. Select **Load detective case** in the editor toolbar.
+2. Leave **Local WASM** enabled; it is the first-visit default.
+3. Select **Detective case** in the editor toolbar.
 4. Read the opening comment, then select **Run query**.
 5. Use the result-set selector above the table to move through the
    investigation.

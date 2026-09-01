@@ -1,0 +1,52 @@
+name: Bug report
+description: Report reproducible beta behavior without including sensitive data.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: v0.1.4-beta.1 or a commit hash
+    validations:
+      required: true
+  - type: dropdown
+    id: interface
+    attributes:
+      label: Interface
+      options:
+        - Browser WASM
+        - Rust API
+        - Python
+        - HTTP
+        - SSE
+        - Store maintenance CLI
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      placeholder: macOS Apple Silicon, Linux x86-64, or Windows x86-64
+    validations:
+      required: true
+  - type: textarea
+    id: script
+    attributes:
+      label: Smallest reproducing script
+      render: traqula
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include a short error or log excerpt after removing secrets and sensitive literal values.
+    validations:
+      required: true

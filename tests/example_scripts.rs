@@ -15,6 +15,7 @@ fn source(name: &str) -> String {
 #[test]
 fn standalone_example_scripts_execute() {
     for name in [
+        "welcome.traqula",
         "blackthorn.traqula",
         "cross-search.traqula",
         "multi-match.traqula",
@@ -25,6 +26,43 @@ fn standalone_example_scripts_execute() {
             .execute_collect_multi(&source(name))
             .unwrap_or_else(|error| panic!("execute {name}: {error}"));
     }
+}
+
+#[test]
+fn welcome_example_preserves_conflict_correction_and_history() {
+    let database = Database::new(PersistenceMode::InMemory).unwrap();
+    let engine = Engine::new(&database);
+    let script = source("welcome.traqula");
+    let results = engine
+        .execute_collect_multi(&script)
+        .expect("execute welcome.traqula");
+
+    assert_eq!(results.len(), 3);
+    assert_eq!(
+        results
+            .iter()
+            .map(|result| result.row_count)
+            .collect::<Vec<_>>(),
+        [2, 2, 4]
+    );
+    assert_eq!(results[0].rows[0][1].as_str(), "\"high risk\"");
+    assert_eq!(results[0].rows[1][1].as_str(), "\"needs review\"");
+    assert_eq!(results[1].rows[1][1].as_str(), "\"low risk\"");
+    assert_eq!(results[2].rows[2][2].as_str(), "0%");
+
+    engine
+        .execute_collect_multi(&script)
+        .expect("rerun idempotent welcome.traqula");
+    let rerun = engine
+        .execute_collect_multi(&script)
+        .expect("collect welcome.traqula after rerun");
+    assert_eq!(
+        rerun
+            .iter()
+            .map(|result| result.row_count)
+            .collect::<Vec<_>>(),
+        [2, 2, 4]
+    );
 }
 
 #[test]

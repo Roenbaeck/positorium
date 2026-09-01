@@ -850,6 +850,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cross_request_recall_is_a_typed_error_and_does_not_poison_the_server() {
+        let database = Arc::new(Database::new(PersistenceMode::InMemory).unwrap());
+        let state = ServerState {
+            interface: Arc::new(QueryInterface::new(Arc::clone(&database))),
+            config: ServerConfig::default(),
+        };
+
+        let first = query(
+            State(state.clone()),
+            Ok(Json(QueryRequest {
+                traqula_version: TRAQULA_VERSION,
+                script: r#"add role name; add posit [{(+alice, name)}, "Alice", '2024-01-01'];"#
+                    .into(),
+                stream: false,
+                timeout_ms: None,
+                parameters: std::collections::HashMap::new(),
+            })),
+        )
+        .await;
+        assert_eq!(first.status(), StatusCode::OK);
+
+        let invalid_recall = query(
+            State(state.clone()),
+            Ok(Json(QueryRequest {
+                traqula_version: TRAQULA_VERSION,
+                script: r#"add posit [{(alice, name)}, "Alice Updated", '2025-01-01'];"#.into(),
+                stream: false,
+                timeout_ms: None,
+                parameters: std::collections::HashMap::new(),
+            })),
+        )
+        .await;
+        let invalid_status = invalid_recall.status();
+        let body = json_body(invalid_recall).await;
+        assert_eq!(invalid_status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap()
+                .contains("not bound in a prior command")
+        );
+
+        let healthy_follow_up = query(
+            State(state),
+            Ok(Json(QueryRequest {
+                traqula_version: TRAQULA_VERSION,
+                script: "search [{(?person, name)}, ?value, *] return ?value;".into(),
+                stream: false,
+                timeout_ms: None,
+                parameters: std::collections::HashMap::new(),
+            })),
+        )
+        .await;
+        assert_eq!(healthy_follow_up.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
     async fn invalid_or_add_http_requests_publish_nothing_in_either_data_state() {
         const INVALID_SCRIPT: &str = r#"
             search [{(?registry, registry_code), ...}, ?code, *]

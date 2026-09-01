@@ -440,6 +440,18 @@ kbd {
   gap: 0.15rem;
 }
 
+.query-panel > .panel-heading {
+  min-height: 86px;
+}
+
+.panel-intro {
+  max-width: 310px;
+  margin: 0.12rem 0 0;
+  color: var(--muted);
+  font-size: 0.62rem;
+  line-height: 1.35;
+}
+
 .eyebrow {
   color: var(--accent);
   font-size: 0.6rem;
@@ -1171,6 +1183,30 @@ footer > span {
   gap: 0.45rem;
 }
 
+.footer-links {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+.footer-links a {
+  color: #625c54;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.footer-links a:hover {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.footer-links a:focus-visible {
+  border-radius: 3px;
+  box-shadow: 0 0 0 3px rgba(152, 42, 53, 0.18);
+  outline: none;
+}
+
 .footer-dot {
   width: 5px;
   height: 5px;
@@ -1204,6 +1240,10 @@ footer > span {
 
   .button-primary {
     min-width: 128px;
+  }
+
+  .save-state {
+    display: none;
   }
 }
 
@@ -1247,6 +1287,10 @@ footer > span {
     flex-basis: auto;
     padding-top: 0.7rem;
     padding-bottom: 0.7rem;
+  }
+
+  .query-panel > .panel-heading {
+    min-height: 76px;
   }
 
   .editor-frame {
@@ -1314,6 +1358,10 @@ footer > span {
     padding-left: 0.75rem;
   }
 
+  .panel-intro {
+    display: none;
+  }
+
   .button-secondary {
     display: none;
   }
@@ -1364,10 +1412,18 @@ footer > span {
     min-height: 27px;
     padding: 0 0.85rem;
   }
+
+  .footer-links {
+    margin-left: auto;
+  }
 }
 
 @media (max-width: 420px) {
   #studioVersion {
+    display: none;
+  }
+
+  .editor-example-button:first-child {
     display: none;
   }
 }

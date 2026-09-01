@@ -1557,7 +1557,9 @@ impl<'en> Engine<'en> {
                                 )
                             })?;
                         let result_set = variables.get(*local_variable).ok_or_else(|| {
-                            DatabaseError::Invariant("missing allocation binding".to_string())
+                            DatabaseError::InvalidRecall(format!(
+                                "variable '{local_variable}' is not bound in a prior command"
+                            ))
                         })?;
                         match result_set.mode {
                             ResultSetMode::Empty => (),

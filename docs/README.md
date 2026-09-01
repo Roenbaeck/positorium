@@ -9,6 +9,7 @@ contracts that define compatibility and the design record used by maintainers.
 | Document | Use it for |
 | --- | --- |
 | [Getting started](GETTING_STARTED.md) | Install, run, query, restart, troubleshoot, and report beta feedback |
+| [Python](guides/PYTHON.md) | Install the native package, embed a database, bind typed parameters, and consume lossless results |
 | [The Blackthorn Ruby](guides/BLACKTHORN_CASE.md) | Run an interactive detective story showcasing contradictions, retractions, classifications, and Terrain |
 | [Operations](guides/OPERATIONS.md) | Configuration, durability, backup, restore, failure handling, and resource limits |
 | [Cookbook](guides/COOKBOOK.md) | Worked modeling, correction, assertion, identification, backup, and transfer recipes |
@@ -37,6 +38,7 @@ contracts that define compatibility and the design record used by maintainers.
 
 ## Releases
 
+- [0.1.4-beta.2 notes](releases/v0.1.4-beta.2.md)
 - [0.1.4-beta.1 notes](releases/v0.1.4-beta.1.md)
 
 Normative documents say so explicitly. Development plans and historical design

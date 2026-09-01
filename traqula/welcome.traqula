@@ -1,0 +1,82 @@
+/*
+  FACTS CAN DISAGREE
+
+  A screening feed and a human analyst assess the same organisation. Their
+  claims are stored independently, with source, certainty, and assertion time.
+  The analyst later withdraws "low risk" and replaces it with "needs review".
+
+  Run the complete script, then compare the three result sets:
+  1. what is in effect after the correction;
+  2. what was in effect before the correction; and
+  3. the complete, non-destructive assertion history.
+*/
+
+add role record_id, name, status;
+
+search [{(?company, record_id), ...}, "ORG-NORTHSTAR", *]
+or add posit [{(+company, record_id)}, "ORG-NORTHSTAR", '2026-01-12'];
+add posit [{(company, name)}, "Northstar Trading", '2026-01-12'];
+
+search [{(?screening_feed, record_id), ...}, "SOURCE-SCREENING-FEED", *]
+or add posit [{(+screening_feed, record_id)}, "SOURCE-SCREENING-FEED", '2026-01-12'];
+add posit [{(screening_feed, name)}, "Automated screening feed", '2026-01-12'];
+
+search [{(?analyst, record_id), ...}, "SOURCE-ANALYST", *]
+or add posit [{(+analyst, record_id)}, "SOURCE-ANALYST", '2026-01-12'];
+add posit [{(analyst, name)}, "Human analyst", '2026-01-12'];
+
+add posit +feed_claim [
+  {(company, status)}, "high risk", '2026-01-12 08:00:00'
+] and assert by screening_feed with 88% at '2026-01-12 09:00:00';
+
+add posit +analyst_first_claim [
+  {(company, status)}, "low risk", '2026-01-12 08:00:00'
+] and assert by analyst with 95% at '2026-01-12 09:05:00';
+
+/* The analyst retracts only their own earlier assertion. */
+add posit [
+  {(analyst_first_claim, posit), (analyst, ascertains)},
+  0%,
+  '2026-01-12 09:30:00'
+];
+
+add posit +analyst_revised_claim [
+  {(company, status)}, "needs review", '2026-01-12 08:00:00'
+] and assert by analyst with 96% at '2026-01-12 09:31:00';
+
+/* RESULT 1 — CURRENT VIEW
+   Two sources still disagree. Positorium preserves both current claims. */
+search ?claim = [
+  {(?company_id, status)}, ?assessment, ?effective
+] in effect '2026-01-12 10:00:00', '2026-01-12 10:00:00'
+  via ?assertion = [
+    {(?claim, posit), (?source, ascertains)}, ?certainty, ?asserted
+  ],
+  [{(?company_id, name), ...}, ?company_name, *],
+  [{(?source, name), ...}, ?source_name, *]
+return ?company_name, ?assessment, ?source_name, ?certainty;
+
+/* RESULT 2 — BEFORE THE CORRECTION
+   Rewind assertion time to see the earlier disagreement. */
+search ?claim = [
+  {(?company_id, status)}, ?assessment, ?effective
+] in effect '2026-01-12 09:15:00', '2026-01-12 10:00:00'
+  via ?assertion = [
+    {(?claim, posit), (?source, ascertains)}, ?certainty, ?asserted
+  ],
+  [{(?company_id, name), ...}, ?company_name, *],
+  [{(?source, name), ...}, ?source_name, *]
+return ?company_name, ?assessment, ?source_name, ?certainty;
+
+/* RESULT 3 — COMPLETE EVIDENCE TRAIL
+   The 0% row is the retraction. Nothing was overwritten or deleted. */
+search ?claim = [
+  {(?company_id, status)}, ?assessment, ?effective
+],
+  ?assertion = [
+    {(?claim, posit), (?source, ascertains)}, ?certainty, ?asserted
+  ],
+  [{(?company_id, name), ...}, ?company_name, *],
+  [{(?source, name), ...}, ?source_name, *]
+return ?assessment, ?source_name, ?certainty, ?asserted
+order by ?asserted;

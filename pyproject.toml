@@ -1,0 +1,50 @@
+[build-system]
+requires = ["maturin>=1.9,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "positorium"
+requires-python = ">=3.9"
+dynamic = ["version", "description", "authors", "license", "readme"]
+keywords = [
+    "database",
+    "hypergraph",
+    "temporal",
+    "provenance",
+    "uncertainty",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: Apache Software License",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Rust",
+    "Topic :: Database :: Database Engines/Servers",
+]
+
+[project.optional-dependencies]
+pandas = ["pandas>=1.5"]
+
+[project.urls]
+Homepage = "https://github.com/Roenbaeck/positorium"
+Documentation = "https://github.com/Roenbaeck/positorium/tree/master/docs"
+Issues = "https://github.com/Roenbaeck/positorium/issues"
+Repository = "https://github.com/Roenbaeck/positorium"
+
+[tool.maturin]
+bindings = "pyo3"
+features = ["python", "pyo3/extension-module"]
+no-default-features = true
+python-source = "python"
+module-name = "positorium._native"
+strip = true

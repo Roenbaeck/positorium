@@ -29,6 +29,9 @@ Temporary Items
 # will have compiled files and executables
 /target/
 /pkg/
+/dist/
+__pycache__/
+*.py[cod]
 
 # Remove Cargo.lock from gitignore if creating an executable, leave it for libraries
 # More information here http://doc.crates.io/guide.html#cargotoml-vs-cargolock

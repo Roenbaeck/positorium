@@ -62,6 +62,8 @@ pub mod interface;
 pub mod literal;
 #[cfg(feature = "persistence")]
 pub mod maintenance;
+#[cfg(feature = "python")]
+mod python;
 #[cfg(feature = "server")]
 pub mod server;
 #[cfg(feature = "persistence")]
@@ -79,6 +81,8 @@ pub use effect::{
 pub use error::{DatabaseError, Result};
 pub use interface::{CancelToken, QueryHandle, QueryId, QueryInterface, QueryOptions, Row};
 pub use literal::{LiteralFamily, LiteralValue};
+#[cfg(feature = "python")]
+pub use python::PYTHON_INTERFACE_VERSION;
 pub use terrain::{
     DEFAULT_PROJECTED_ROLE_LIMIT, MAX_PROJECTED_ROLE_LIMIT, TERRAIN_VERSION, TerrainAllocation,
     TerrainDatabaseTotals, TerrainFrame, TerrainFrameStats, TerrainFrames, TerrainIsopleth,

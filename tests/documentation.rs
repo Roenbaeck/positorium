@@ -100,7 +100,7 @@ fn detective_showcase_is_discoverable_and_shipped_with_the_ui() {
     assert!(guide.contains("Class overlay demonstration"));
 
     let studio = fs::read_to_string(root.join("positorium.html")).unwrap();
-    assert!(studio.contains("Load detective case"));
+    assert!(studio.contains("Detective case"));
     assert!(studio.contains("traqula/blackthorn.traqula"));
 
     for workflow in [
@@ -113,4 +113,60 @@ fn detective_showcase_is_discoverable_and_shipped_with_the_ui() {
             "{workflow} does not ship the detective case"
         );
     }
+}
+
+#[test]
+fn hosted_studio_defaults_to_wasm_and_ships_the_welcome_example() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let welcome = root.join("traqula/welcome.traqula");
+    assert!(welcome.is_file());
+
+    let studio = fs::read_to_string(root.join("positorium.html")).unwrap();
+    assert!(studio.contains("Facts can disagree"));
+    assert!(studio.contains("traqula/welcome.traqula"));
+    assert!(studio.contains("savedWasmMode === null ? true"));
+    assert!(studio.contains("Share feedback"));
+
+    for workflow in [
+        ".github/workflows/pages.yml",
+        ".github/workflows/release.yml",
+    ] {
+        let contents = fs::read_to_string(root.join(workflow)).unwrap();
+        assert!(
+            contents.contains("traqula/welcome.traqula"),
+            "{workflow} does not ship the welcome example"
+        );
+    }
+}
+
+#[test]
+fn python_distribution_is_documented_versioned_and_publishable() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for required in [
+        "pyproject.toml",
+        "python/positorium/__init__.py",
+        "python/positorium/_api.py",
+        "python/positorium/_native.pyi",
+        "python/positorium/py.typed",
+        "tests/test_python.py",
+        ".github/workflows/python.yml",
+        "docs/guides/PYTHON.md",
+    ] {
+        assert!(root.join(required).is_file(), "missing {required}");
+    }
+
+    let readme = fs::read_to_string(root.join("README.md")).unwrap();
+    let index = fs::read_to_string(root.join("docs/README.md")).unwrap();
+    let contracts = fs::read_to_string(root.join("docs/reference/CONTRACTS.md")).unwrap();
+    let workflow = fs::read_to_string(root.join(".github/workflows/python.yml")).unwrap();
+    assert!(readme.contains("pip install --pre positorium"));
+    assert!(index.contains("guides/PYTHON.md"));
+    assert!(contracts.contains("| Python | `1` |"));
+    assert!(workflow.contains("pypa/gh-action-pypi-publish@release/v1"));
+    assert!(workflow.contains("startsWith(github.ref, 'refs/tags/')"));
+
+    let release_notes = root
+        .join("docs/releases")
+        .join(format!("v{}.md", env!("CARGO_PKG_VERSION")));
+    assert!(release_notes.is_file(), "missing current release notes");
 }

@@ -11,9 +11,10 @@ untrusted network.
 ### Browser-only testbed
 
 Open the [Positorium Query Studio](https://roenbaeck.github.io/positorium/) and
-leave **Local WASM** enabled. This uses an in-memory database in the browser,
-writes no native store, and is the quickest way to explore Traqula and Terrain.
-Refreshing the page discards the in-memory database.
+run the preloaded **Facts can disagree** example. Local WASM is enabled
+automatically for a first-time visitor, so the example runs entirely in the
+browser, writes no native store, and needs no installation. The editor is saved
+locally, while refreshing the page discards the in-memory database.
 
 ### Native release archive
 

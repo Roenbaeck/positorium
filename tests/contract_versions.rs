@@ -12,6 +12,9 @@ fn external_contract_versions_are_explicit() {
     #[cfg(feature = "wasm")]
     assert_eq!(positorium::wasm::WASM_INTERFACE_VERSION, "1");
 
+    #[cfg(feature = "python")]
+    assert_eq!(positorium::PYTHON_INTERFACE_VERSION, 1);
+
     #[cfg(feature = "persistence")]
     {
         assert_eq!(positorium::maintenance::LOGICAL_EXPORT_VERSION, 1);

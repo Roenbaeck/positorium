@@ -2,20 +2,24 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Positorium — Traqula Query Studio</title>
+<title>Positorium — A database for facts that disagree</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta name="description" content="Compose Traqula scripts and inspect Positorium results in a focused local workspace." />
-<meta property="og:title" content="Positorium — Traqula Query Studio" />
-<meta property="og:description" content="Compose Traqula scripts and inspect Positorium results in a focused local workspace." />
+<meta name="description" content="Preserve conflicting claims with their source, time, and certainty. Try Positorium in your browser with no installation." />
+<link rel="canonical" href="https://roenbaeck.github.io/positorium/" />
+<meta property="og:title" content="Positorium — A database for facts that disagree" />
+<meta property="og:description" content="Preserve every claim with its source, time, and certainty. Corrections never erase the evidence." />
 <meta property="og:type" content="website" />
 <meta property="og:url" content="https://roenbaeck.github.io/positorium/" />
-<meta property="og:image" content="https://roenbaeck.github.io/positorium/og.png" />
+<meta property="og:image" content="https://roenbaeck.github.io/positorium/og.png?v=0.9.0" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta property="og:image:alt" content="Positorium — a database for facts that disagree" />
 <meta name="twitter:card" content="summary_large_image" />
-<meta name="twitter:title" content="Positorium — Traqula Query Studio" />
-<meta name="twitter:description" content="Compose Traqula scripts and inspect Positorium results in a focused local workspace." />
-<meta name="twitter:image" content="https://roenbaeck.github.io/positorium/og.png" />
-<link rel="stylesheet" href="positorium.css?v=0.8.0" />
-<link rel="stylesheet" href="positorium-terrain.css?v=0.8.0" />
+<meta name="twitter:title" content="Positorium — A database for facts that disagree" />
+<meta name="twitter:description" content="Preserve every claim with its source, time, and certainty. Corrections never erase the evidence." />
+<meta name="twitter:image" content="https://roenbaeck.github.io/positorium/og.png?v=0.9.0" />
+<link rel="stylesheet" href="positorium.css?v=0.9.0" />
+<link rel="stylesheet" href="positorium-terrain.css?v=0.9.0" />
 </head>
 <body>
 <!-- Inline regex-based syntax highlighting (no external deps) -->
@@ -24,7 +28,7 @@
     <span class="brand-mark" aria-hidden="true">P</span>
     <div class="brand-copy">
       <span class="brand-name">Positorium</span>
-      <span class="brand-product">Traqula Query Studio</span>
+      <span class="brand-product">Evidence Query Studio</span>
     </div>
   </div>
   <nav class="workspace-switch" aria-label="Workspace view">
@@ -33,7 +37,7 @@
   </nav>
   <div class="workspace-meta" aria-label="Workspace details">
     <span class="workspace-status"><span class="status-dot" aria-hidden="true"></span>Local workspace</span>
-    <span id="studioVersion" class="version-chip" data-version="0.8.0">Studio v0.8.0</span>
+    <span id="studioVersion" class="version-chip" data-version="0.9.0">Studio v0.9.0</span>
     <span class="version-chip traqula-version">Traqula v1</span>
     <button id="settingsBtn" class="icon-button settings-button" type="button" aria-label="Studio settings" aria-controls="settingsPanel" aria-expanded="false" title="Studio settings"></button>
   </div>
@@ -71,8 +75,9 @@
       <section class="query-panel">
         <div class="panel-heading">
           <div>
-            <span class="eyebrow">Compose</span>
-            <h1>Query</h1>
+            <span class="eyebrow">60-second example</span>
+            <h1>Facts can disagree</h1>
+            <p class="panel-intro">Run the preloaded evidence trail entirely in this browser.</p>
           </div>
           <div class="primary-actions">
             <button id="clearBtn" class="button-secondary" type="button" title="Clear results">Clear</button>
@@ -88,7 +93,8 @@
           <div class="editor-toolbar">
             <span class="file-name"><span class="file-dot" aria-hidden="true"></span>workspace.traqula</span>
             <span class="editor-toolbar-actions">
-              <button id="loadBlackthornBtn" class="editor-example-button" type="button" title="Load the Blackthorn Ruby detective showcase into the editor">Load detective case</button>
+              <button id="loadWelcomeBtn" class="editor-example-button" type="button" title="Restore the short conflicting-evidence example">Quick example</button>
+              <button id="loadBlackthornBtn" class="editor-example-button" type="button" title="Load the Blackthorn Ruby detective showcase into the editor">Detective case</button>
               <span class="save-state">Autosaved locally</span>
             </span>
           </div>
@@ -142,8 +148,8 @@
             <div class="empty-illustration" aria-hidden="true">
               <span></span><span></span><span></span><span></span><span></span><span></span>
             </div>
-            <strong>Results will land here</strong>
-            <p>Run a Traqula script to inspect structured values, exact types, and execution details.</p>
+            <strong>See both sides of the evidence</strong>
+            <p>Run the preloaded example, then compare the current view with the complete history.</p>
           </div>
           <table id="resultsTable" aria-label="Query results">
             <thead></thead>
@@ -229,8 +235,13 @@
   </section>
 </main>
 <footer>
-  <span><span class="footer-dot" aria-hidden="true"></span>Positorium local console</span>
-  <span class="footer-help"><kbd>Ctrl / ⌘</kbd><kbd>Enter</kbd> Run query <span aria-hidden="true">·</span> Drag divider to resize</span>
+  <span><span class="footer-dot" aria-hidden="true"></span>Private browser workspace</span>
+  <nav class="footer-links" aria-label="Project links">
+    <a href="https://github.com/Roenbaeck/positorium" target="_blank" rel="noreferrer">GitHub</a>
+    <a href="https://github.com/Roenbaeck/positorium/tree/master/docs" target="_blank" rel="noreferrer">Docs</a>
+    <a href="https://github.com/Roenbaeck/positorium/issues/new" target="_blank" rel="noreferrer">Share feedback</a>
+  </nav>
+  <span class="footer-help"><kbd>Ctrl / ⌘</kbd><kbd>Enter</kbd> Run <span aria-hidden="true">·</span> Drag divider to resize</span>
 </footer>
 <script>
 const els = {
@@ -241,6 +252,7 @@ const els = {
   queryWorkspace: document.getElementById('splitContainer'),
   workspaceModes: document.querySelectorAll('.workspace-mode'),
   script: document.getElementById('script'),
+  loadWelcomeBtn: document.getElementById('loadWelcomeBtn'),
   loadBlackthornBtn: document.getElementById('loadBlackthornBtn'),
   runBtn: document.getElementById('runBtn'),
   runBtnLabel: document.getElementById('runBtnLabel'),
@@ -288,6 +300,9 @@ const STUDIO_VERSION = els.studioVersion.dataset.version;
 const STUDIO_VERSION_STORAGE_KEY = 'positorium-query-studio-version';
 const ENDPOINT_STORAGE_KEY = 'positorium-endpoint';
 const WASM_MODE_STORAGE_KEY = 'positorium-local-wasm';
+const QUERY_STORAGE_KEY = 'positorium-query';
+const WELCOME_EXAMPLE_PATH = 'traqula/welcome.traqula';
+const BLACKTHORN_EXAMPLE_PATH = 'traqula/blackthorn.traqula';
 
 function compareStudioVersions(left, right) {
   const leftParts = left.split('.').map(Number);
@@ -356,23 +371,53 @@ function clearResults() {
   setStatus('Results cleared');
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+async function fetchExample(path) {
+  const response = await fetch(path, { cache: 'no-store' });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return response.text();
+}
+
+async function replaceEditorWithExample({ path, label, confirmation }) {
+  const current = scriptEditor.innerText.trim();
+  if (current && !window.confirm(confirmation)) return false;
+  const script = await fetchExample(path);
+  scriptEditor.textContent = script;
+  localStorage.setItem(QUERY_STORAGE_KEY, script);
+  updateHighlight();
+  scriptEditor.focus();
+  setStatus(`${label} loaded. Run it when ready.`);
+  return true;
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
   const versionNotice = trackStudioVersion();
-  // Load saved query from localStorage
-  const savedQuery = localStorage.getItem('positorium-query');
-  if (savedQuery) {
+  const savedQuery = localStorage.getItem(QUERY_STORAGE_KEY);
+  let firstRunExampleLoaded = false;
+  if (savedQuery !== null) {
     scriptEditor.textContent = savedQuery;
+  } else {
+    try {
+      scriptEditor.textContent = await fetchExample(WELCOME_EXAMPLE_PATH);
+      firstRunExampleLoaded = true;
+    } catch (error) {
+      console.error('Could not load the welcome example', error);
+    }
   }
   const savedEndpoint = localStorage.getItem(ENDPOINT_STORAGE_KEY);
   if (savedEndpoint) els.endpoint.value = savedEndpoint;
-  els.wasmMode.checked = localStorage.getItem(WASM_MODE_STORAGE_KEY) === 'true';
+  const savedWasmMode = localStorage.getItem(WASM_MODE_STORAGE_KEY);
+  els.wasmMode.checked = savedWasmMode === null ? true : savedWasmMode === 'true';
 
   // Initialize highlighting
   setTimeout(() => {
     updateHighlight();
     const initTime = new Date().toLocaleTimeString();
     els.statusOut.textContent = `[${initTime}] Positorium Query Studio v${STUDIO_VERSION} initialized\n[${initTime}] Editor loaded with syntax highlighting\n`;
-    setStatus(versionNotice || 'Ready');
+    setStatus(
+      firstRunExampleLoaded
+        ? 'Quick example loaded — run it entirely in this browser.'
+        : (versionNotice || 'Ready')
+    );
   }, 100);
 
   // Button event listeners
@@ -400,28 +445,29 @@ document.addEventListener('DOMContentLoaded', () => {
   els.endpoint.addEventListener('change', () => {
     localStorage.setItem(ENDPOINT_STORAGE_KEY, els.endpoint.value.trim());
   });
-  els.loadBlackthornBtn.addEventListener('click', async () => {
-    const current = scriptEditor.innerText.trim();
-    if (current && !window.confirm('Replace the current editor contents with the Blackthorn Ruby detective case?')) return;
-    const originalLabel = els.loadBlackthornBtn.textContent;
-    els.loadBlackthornBtn.disabled = true;
-    els.loadBlackthornBtn.textContent = 'Loading…';
+  async function loadExampleFromButton(button, options) {
+    const originalLabel = button.textContent;
+    button.disabled = true;
+    button.textContent = 'Loading…';
     try {
-      const response = await fetch('traqula/blackthorn.traqula', { cache: 'no-store' });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const script = await response.text();
-      scriptEditor.textContent = script;
-      localStorage.setItem('positorium-query', script);
-      updateHighlight();
-      scriptEditor.focus();
-      setStatus('Loaded the Blackthorn Ruby detective case. Run it when ready.');
+      await replaceEditorWithExample(options);
     } catch (error) {
-      setStatus(`Could not load detective case: ${error.message || error}`, 'err');
+      setStatus(`Could not load example: ${error.message || error}`, 'err');
     } finally {
-      els.loadBlackthornBtn.disabled = false;
-      els.loadBlackthornBtn.textContent = originalLabel;
+      button.disabled = false;
+      button.textContent = originalLabel;
     }
-  });
+  }
+  els.loadWelcomeBtn.addEventListener('click', () => loadExampleFromButton(els.loadWelcomeBtn, {
+    path: WELCOME_EXAMPLE_PATH,
+    label: 'Quick example',
+    confirmation: 'Replace the current editor contents with the quick conflicting-evidence example?'
+  }));
+  els.loadBlackthornBtn.addEventListener('click', () => loadExampleFromButton(els.loadBlackthornBtn, {
+    path: BLACKTHORN_EXAMPLE_PATH,
+    label: 'Detective case',
+    confirmation: 'Replace the current editor contents with the Blackthorn Ruby detective case?'
+  }));
 
   // Tabs switching
   els.tabs.forEach(btn=>{
@@ -643,7 +689,7 @@ function updateHighlight() {
   // Reconnect observer after updating
   observer.observe(scriptEditor, { subtree: true, characterData: true });
   
-  localStorage.setItem('positorium-query', code);
+  localStorage.setItem(QUERY_STORAGE_KEY, code);
 }
 
 // Setup event listeners for the editor
@@ -718,7 +764,7 @@ scriptEditor.addEventListener('cut', function() {
 
 // Save query on page unload
 window.addEventListener('beforeunload', () => {
-  localStorage.setItem('positorium-query', scriptEditor.innerText);
+  localStorage.setItem(QUERY_STORAGE_KEY, scriptEditor.innerText);
 });
 
 // No Monaco initialization needed - using Prism.js instead
@@ -1128,6 +1174,6 @@ async function runStream(endpoint, payload, started, controller) {
   flushEvents(buffer); // flush remainder
 }
 </script>
-<script src="positorium-terrain.js?v=0.8.0"></script>
+<script src="positorium-terrain.js?v=0.9.0"></script>
 </body>
 </html>

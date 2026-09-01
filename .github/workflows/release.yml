@@ -66,7 +66,7 @@ jobs:
           mkdir -p dist/package/traqula
           cp target/release/positorium target/release/positorium-store dist/package/
           cp positorium.json README.md LICENSE.MIT LICENSE.Apache-2.0 dist/package/
-          cp traqula/empty.traqula traqula/blackthorn.traqula dist/package/traqula/
+          cp traqula/empty.traqula traqula/welcome.traqula traqula/blackthorn.traqula dist/package/traqula/
           cp -R docs dist/package/
           archive="positorium-${GITHUB_REF_NAME}-${{ matrix.label }}.tar.gz"
           tar -czf "dist/${archive}" -C dist/package .
@@ -78,7 +78,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist/package/traqula | Out-Null
           Copy-Item target/release/positorium.exe,target/release/positorium-store.exe -Destination dist/package
           Copy-Item positorium.json,README.md,LICENSE.MIT,LICENSE.Apache-2.0 -Destination dist/package
-          Copy-Item traqula/empty.traqula,traqula/blackthorn.traqula -Destination dist/package/traqula
+          Copy-Item traqula/empty.traqula,traqula/welcome.traqula,traqula/blackthorn.traqula -Destination dist/package/traqula
           Copy-Item docs -Destination dist/package -Recurse
           $archive = "positorium-$env:GITHUB_REF_NAME-${{ matrix.label }}.zip"
           Compress-Archive -Path dist/package/* -DestinationPath "dist/$archive"
@@ -93,6 +93,7 @@ jobs:
           tar -xzf dist/*.tar.gz -C "$smoke_dir"
           cd "$smoke_dir"
           test -f traqula/blackthorn.traqula
+          test -f traqula/welcome.traqula
           ./positorium >smoke.log 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid" 2>/dev/null || true; rm -rf "$smoke_dir"' EXIT
@@ -123,6 +124,9 @@ jobs:
           Expand-Archive -Path (Get-ChildItem dist/*.zip).FullName -DestinationPath $smokeDir
           if (-not (Test-Path (Join-Path $smokeDir "traqula/blackthorn.traqula"))) {
             throw "release archive is missing the Blackthorn detective case"
+          }
+          if (-not (Test-Path (Join-Path $smokeDir "traqula/welcome.traqula"))) {
+            throw "release archive is missing the welcome example"
           }
           $stdout = Join-Path $smokeDir "smoke.out"
           $stderr = Join-Path $smokeDir "smoke.err"
