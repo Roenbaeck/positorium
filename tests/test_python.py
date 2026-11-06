@@ -9,8 +9,8 @@ import positorium
 
 class PositoriumPythonTests(unittest.TestCase):
     def test_distribution_and_contract_versions_match(self):
-        self.assertEqual(positorium.__version__, "0.1.4b2")
-        self.assertEqual(positorium.RUST_PACKAGE_VERSION, "0.1.4-beta.2")
+        self.assertEqual(positorium.__version__, "0.1.4b3")
+        self.assertEqual(positorium.RUST_PACKAGE_VERSION, "0.1.4-beta.3")
         self.assertEqual(positorium.PYTHON_INTERFACE_VERSION, 1)
         self.assertEqual(positorium.TRAQULA_VERSION, 1)
         self.assertEqual(positorium.TERRAIN_VERSION, 1)

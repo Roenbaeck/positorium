@@ -4,13 +4,13 @@
 //! appearance cutoffs. It deliberately does not fuse sources, rank certainty,
 //! or select an accepted truth.
 
-use crate::construct::{ASCERTAINS_ROLE_ID, Database, POSIT_ROLE_ID, Posit, Thing};
+use crate::construct::{ASCERTAINS_ROLE_ID, Database, OtherHasher, POSIT_ROLE_ID, Posit, Thing};
 use crate::datatype::Time;
+use crate::datatype::temporal::{Frontier, Work, retain_maximal_by_key};
 use crate::error::DatabaseError;
 use crate::literal::LiteralValue;
 use roaring::RoaringTreemap;
-use std::collections::HashMap;
-use std::hash::Hash;
+use std::collections::{HashMap, hash_map::Entry};
 use std::sync::Arc;
 
 pub const MAX_EFFECT_ASSERTION_CANDIDATES: u64 = 1_000_000;
@@ -62,6 +62,8 @@ pub struct EffectCounters {
     pub assertion_candidates: u64,
     pub temporally_eligible: u64,
     pub retractions: u64,
+    /// Ordering comparisons in retraction lookup and temporal reduction,
+    /// including interval-start comparisons used to select dominance witnesses.
     pub temporal_comparisons: u64,
     pub effective_assertions: u64,
 }
@@ -233,56 +235,54 @@ pub(crate) fn resolve(
     }
     drop(keeper);
 
-    let mut retractions_by_target = HashMap::<(Thing, Thing), Vec<usize>>::new();
-    for (index, candidate) in eligible.iter().enumerate() {
+    let mut work = |work| {
         check()?;
+        if work == Work::Comparison {
+            count_comparison(&mut counters, limits)?;
+        }
+        Ok(())
+    };
+    let mut retractions_by_target = HashMap::<(Thing, Thing), Frontier, OtherHasher>::default();
+    for candidate in &eligible {
+        work(Work::Row)?;
         if candidate.certainty_percent == 0 {
-            retractions_by_target
-                .entry((candidate.positor, candidate.target.posit()))
-                .or_default()
-                .push(index);
+            match retractions_by_target.entry((candidate.positor, candidate.target.posit())) {
+                Entry::Vacant(entry) => {
+                    entry.insert(Frontier::new(candidate.assertion.time()));
+                }
+                Entry::Occupied(mut entry) => {
+                    entry
+                        .get_mut()
+                        .observe(candidate.assertion.time(), &mut work)?;
+                }
+            }
         }
     }
 
     let mut nonzero = Vec::new();
-    for candidate in eligible.iter().filter(|row| row.certainty_percent != 0) {
-        check()?;
-        let mut retracted = false;
-        let retractions = retractions_by_target
-            .get(&(candidate.positor, candidate.target.posit()))
-            .into_iter()
-            .flatten();
-        for &retraction_index in retractions {
-            check()?;
-            let retraction = &eligible[retraction_index];
-            count_comparison(&mut counters, limits)?;
-            if candidate
-                .assertion
-                .time()
-                .definitely_before(retraction.assertion.time())
-            {
-                retracted = true;
-                break;
-            }
+    for candidate in eligible
+        .into_iter()
+        .filter(|row| row.certainty_percent != 0)
+    {
+        work(Work::Row)?;
+        if let Some(frontier) =
+            retractions_by_target.get(&(candidate.positor, candidate.target.posit()))
+            && frontier.dominates(candidate.assertion.time(), &mut work)?
+        {
+            continue;
         }
-        if !retracted {
-            nonzero.push(candidate.clone());
-        }
+        nonzero.push(candidate);
     }
+    drop(retractions_by_target);
 
-    let target_maxima = nondominated_by_key(
+    let target_maxima = retain_maximal_by_key(
         nonzero,
-        &mut counters,
-        limits,
-        &mut check,
         |row| (row.positor, row.target.appearance_set()),
-        |left, right| left.target.time().definitely_before(right.target.time()),
+        |row| row.target.time(),
+        &mut work,
     )?;
-    let mut effective = nondominated_by_key(
+    let mut effective = retain_maximal_by_key(
         target_maxima,
-        &mut counters,
-        limits,
-        &mut check,
         |row| {
             (
                 row.positor,
@@ -290,11 +290,8 @@ pub(crate) fn resolve(
                 row.target.value().clone(),
             )
         },
-        |left, right| {
-            left.assertion
-                .time()
-                .definitely_before(right.assertion.time())
-        },
+        |row| row.assertion.time(),
+        &mut work,
     )?;
     check()?;
     effective.sort_by(|left, right| {
@@ -337,52 +334,6 @@ fn assertion_candidates(database: &Database) -> Result<RoaringTreemap, DatabaseE
         .cloned()
         .unwrap_or_default();
     Ok(candidates)
-}
-
-fn nondominated(
-    rows: Vec<EffectiveAssertion>,
-    counters: &mut EffectCounters,
-    limits: EffectLimits,
-    check: &mut impl FnMut() -> Result<(), DatabaseError>,
-    dominates: impl Fn(&EffectiveAssertion, &EffectiveAssertion) -> bool,
-) -> Result<Vec<EffectiveAssertion>, DatabaseError> {
-    let mut retained = Vec::new();
-    'candidate: for (index, candidate) in rows.iter().enumerate() {
-        check()?;
-        for (other_index, other) in rows.iter().enumerate() {
-            check()?;
-            if index == other_index {
-                continue;
-            }
-            count_comparison(counters, limits)?;
-            if dominates(candidate, other) {
-                continue 'candidate;
-            }
-        }
-        retained.push(candidate.clone());
-    }
-    Ok(retained)
-}
-
-fn nondominated_by_key<K: Eq + Hash>(
-    rows: Vec<EffectiveAssertion>,
-    counters: &mut EffectCounters,
-    limits: EffectLimits,
-    check: &mut impl FnMut() -> Result<(), DatabaseError>,
-    key: impl Fn(&EffectiveAssertion) -> K,
-    dominates: impl Fn(&EffectiveAssertion, &EffectiveAssertion) -> bool,
-) -> Result<Vec<EffectiveAssertion>, DatabaseError> {
-    let mut groups = HashMap::<K, Vec<EffectiveAssertion>>::new();
-    for row in rows {
-        check()?;
-        groups.entry(key(&row)).or_default().push(row);
-    }
-    let mut retained = Vec::new();
-    for group in groups.into_values() {
-        check()?;
-        retained.extend(nondominated(group, counters, limits, check, &dominates)?);
-    }
-    Ok(retained)
 }
 
 fn count_comparison(

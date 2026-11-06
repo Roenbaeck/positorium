@@ -13,6 +13,8 @@ use std::rc::Rc;
 #[cfg(feature = "persistence")]
 use std::sync::atomic::{AtomicU64, Ordering};
 
+mod temporal;
+
 #[cfg(feature = "persistence")]
 static NEXT_STORE: AtomicU64 = AtomicU64::new(1);
 
@@ -437,8 +439,14 @@ criterion_group!(
     append_and_storage_benchmarks,
     replay_benchmarks,
     query_benchmarks,
+    temporal::benchmarks,
     result_set_benchmarks
 );
 #[cfg(not(feature = "persistence"))]
-criterion_group!(benches, query_benchmarks, result_set_benchmarks);
+criterion_group!(
+    benches,
+    query_benchmarks,
+    temporal::benchmarks,
+    result_set_benchmarks
+);
 criterion_main!(benches);

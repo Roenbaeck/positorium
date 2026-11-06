@@ -51,6 +51,10 @@
         {
           "name": "keyword.control.traqula",
           "match": "\\b(add|role|posit|search|return|where|as|of|in|effect|via|limit|and|assert|or|with|at|latest|union|not|exists|distinct|order|by|asc|desc)\\b"
+        },
+        {
+          "name": "keyword.control.traqula",
+          "match": "\\bexplain\\b"
         }
       ]
     },

@@ -1,6 +1,6 @@
 traqula = _{
     SOI ~
-    (add_role | add_posit | search)* ~
+    (add_role | add_posit | explain | search)* ~
     EOI
 }
 
@@ -103,6 +103,9 @@ order_item = { variable_reference ~ direction? }
 order_by_clause = { ^"order by" ~ order_item ~ ("," ~ order_item)* }
 or_add_clause = { ^"or add posit" ~ (posit_addition ~ ","?)+ }
 search = { search_clause ~ union_clause* ~ not_exists_clause* ~ where_clause? ~ return_clause? ~ order_by_clause? ~ limit_clause? ~ or_add_clause? ~ ";" }
+
+// Contextual command keyword: existing mutation variables named explain remain valid.
+explain = { ^"explain" ~ search }
 
 // Optional per-pattern 'as of' clause
 as_of_clause = { "as of" ~ (parameter | constant | time | query_variable) }

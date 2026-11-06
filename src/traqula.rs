@@ -396,6 +396,30 @@ fn bind_identity(variables: &mut Variables, name: String, identity: Thing) {
     variables.entry(name).or_default().insert(identity);
 }
 
+fn search_limit(command: &Pair<'_, Rule>) -> Result<Option<usize>, DatabaseError> {
+    for clause in command.clone().into_inner() {
+        if clause.as_rule() == Rule::limit_clause {
+            let token = clause
+                .into_inner()
+                .next()
+                .ok_or_else(|| DatabaseError::Invariant("limit clause has no count".into()))?;
+            return token
+                .as_str()
+                .trim()
+                .parse::<usize>()
+                .map(Some)
+                .map_err(|_| {
+                    DatabaseError::Execution(format!(
+                        "LIMIT must be a non-negative integer no greater than {}: '{}'",
+                        usize::MAX,
+                        token.as_str()
+                    ))
+                });
+        }
+    }
+    Ok(None)
+}
+
 fn nested_mutation_variable(component: Pair<'_, Rule>) -> Result<String, DatabaseError> {
     let mut current = component;
     while current.as_rule() != Rule::variable {
@@ -921,7 +945,15 @@ struct TraqulaParser;
 
 mod query;
 
+pub use query::plan::{
+    PlanAccess, PlanBinding, PlanCutoff, PlanDomain, PlanNode, PlanOperator, PlanOrder,
+    QUERY_PLAN_VERSION, QueryPlan,
+};
+
 fn search_has_return(search: &Pair<'_, Rule>) -> bool {
+    if search.as_rule() == Rule::explain {
+        return true;
+    }
     search
         .clone()
         .into_inner()
@@ -946,7 +978,7 @@ pub(crate) fn script_counts(traqula: &str) -> Result<(usize, usize), DatabaseErr
         if pair.as_rule() != Rule::EOI {
             commands += 1;
         }
-        if pair.as_rule() == Rule::search && search_has_return(&pair) {
+        if matches!(pair.as_rule(), Rule::search | Rule::explain) && search_has_return(&pair) {
             searches += 1;
         }
     }
@@ -1213,6 +1245,86 @@ impl<'en> Engine<'en> {
         Self { database }
     }
 
+    /// Plan exactly one search without evaluating rows or executing mutations.
+    /// Accepts either `search ...;` or `explain search ...;`.
+    pub fn explain(&self, traqula: &str) -> Result<QueryPlan, DatabaseError> {
+        self.explain_with_options(traqula, ExecutionOptions::default())
+    }
+
+    /// Explain a search using this invocation's typed parameters and clock.
+    /// Estimates inspect catalog/index sizes under the database owner.
+    pub fn explain_with_options(
+        &self,
+        traqula: &str,
+        options: ExecutionOptions,
+    ) -> Result<QueryPlan, DatabaseError> {
+        let execution = options.resolve(traqula)?;
+        let _owner = self.acquire_owner(&execution)?;
+        execution.check()?;
+        let commands = TraqulaParser::parse(Rule::traqula, traqula.trim())
+            .map_err(|error| DatabaseError::Parse {
+                message: error.to_string(),
+                line: None,
+                col: None,
+            })?
+            .filter(|command| command.as_rule() != Rule::EOI)
+            .collect::<Vec<_>>();
+        if commands.len() != 1 || !matches!(commands[0].as_rule(), Rule::search | Rule::explain) {
+            return Err(DatabaseError::Execution(
+                "EXPLAIN expects exactly one search".into(),
+            ));
+        }
+        self.explain_command(commands.into_iter().next().unwrap(), &execution)
+    }
+
+    fn explain_command(
+        &self,
+        command: Pair<'_, Rule>,
+        execution: &ExecutionContext,
+    ) -> Result<QueryPlan, DatabaseError> {
+        let command = if command.as_rule() == Rule::explain {
+            command
+                .into_inner()
+                .next()
+                .ok_or_else(|| DatabaseError::Invariant("EXPLAIN has no search".into()))?
+        } else {
+            command
+        };
+        let fallback = command
+            .clone()
+            .into_inner()
+            .find(|part| part.as_rule() == Rule::or_add_clause);
+        let prepared = query::prepare(command, execution)?;
+        let fallback_plan = fallback
+            .as_ref()
+            .map(|fallback| prepare_fallback(&prepared, fallback))
+            .transpose()?;
+        let mut plan = query::explain_prepared(self.database, prepared, execution)?;
+        if let (Some(fallback), Some(fallback_plan)) = (fallback, fallback_plan) {
+            let mut allocations: Vec<_> = fallback_plan
+                .allocation_domains
+                .into_iter()
+                .map(|(name, domain)| PlanBinding {
+                    name,
+                    domain: match domain {
+                        query::IdentityDomain::Thing => PlanDomain::Thing,
+                        query::IdentityDomain::Posit => PlanDomain::Posit,
+                    },
+                })
+                .collect();
+            allocations.sort_by(|a, b| a.name.cmp(&b.name));
+            plan.root = PlanNode {
+                operation: PlanOperator::SearchOrAdd {
+                    fallback: fallback.as_str().trim().to_string(),
+                    allocations,
+                },
+                bindings: plan.root.bindings.clone(),
+                inputs: vec![plan.root],
+            };
+        }
+        Ok(plan)
+    }
+
     fn acquire_owner(
         &self,
         execution: &ExecutionContext,
@@ -1283,7 +1395,7 @@ impl<'en> Engine<'en> {
         };
         let search_count = pairs
             .clone()
-            .filter(|p| p.as_rule() == Rule::search && search_has_return(p))
+            .filter(|p| matches!(p.as_rule(), Rule::search | Rule::explain) && search_has_return(p))
             .count();
         if search_count != 1 {
             return Err(crate::error::DatabaseError::Execution(format!(
@@ -1304,19 +1416,8 @@ impl<'en> Engine<'en> {
                     &execution.metadata.resolved_now,
                     &execution,
                 )?,
-                Rule::search => {
-                    // limit extraction
-                    let mut limit = None;
-                    let cloned = command.clone();
-                    for c in cloned.into_inner() {
-                        if c.as_rule() == Rule::limit_clause {
-                            for p in c.into_inner() {
-                                if let Ok(v) = p.as_str().parse::<usize>() {
-                                    limit = Some(v);
-                                }
-                            }
-                        }
-                    }
+                Rule::search | Rule::explain => {
+                    let limit = search_limit(&command)?;
                     struct CountingSink<'a, T: RowSink> {
                         inner: &'a mut T,
                         limit: Option<usize>,
@@ -1900,6 +2001,24 @@ impl<'en> Engine<'en> {
         return_columns: &mut Option<Vec<String>>,
         execution: &ExecutionContext,
     ) -> Result<query::SearchOutcome, DatabaseError> {
+        if command.as_rule() == Rule::explain {
+            let plan = self.explain_command(command, execution)?;
+            let json = serde_json::to_string(&plan)
+                .map_err(|error| DatabaseError::Invariant(error.to_string()))?;
+            let columns = vec!["plan".to_string()];
+            *return_columns = Some(columns.clone());
+            let sink_stopped = matches!(sink.on_meta(&columns), SinkFlow::Stop)
+                || matches!(
+                    sink.push(vec![ResultCell::new(ResultCellKind::Literal, json)]),
+                    SinkFlow::Stop
+                );
+            return Ok(query::SearchOutcome {
+                matched_rows: 0,
+                identity_bindings: HashMap::default(),
+                has_return: true,
+                sink_stopped,
+            });
+        }
         let fallback = command
             .clone()
             .into_inner()
@@ -3458,22 +3577,8 @@ impl<'en> Engine<'en> {
                 Rule::add_posit => {
                     self.add_posit(command, &mut variables, &metadata.resolved_now, &execution)?;
                 }
-                Rule::search => {
-                    // Extract per-search limit and install into sink (overwrite any prior; only meaningful when one search in script)
-                    let limit = {
-                        let mut l = None;
-                        let cloned = command.clone();
-                        for c in cloned.into_inner() {
-                            if c.as_rule() == Rule::limit_clause {
-                                for p in c.into_inner() {
-                                    if let Ok(v) = p.as_str().parse::<usize>() {
-                                        l = Some(v);
-                                    }
-                                }
-                            }
-                        }
-                        l
-                    };
+                Rule::search | Rule::explain => {
+                    let limit = search_limit(&command)?;
                     collector.limit = execution.effective_limit(limit);
                     let outcome = self.execute_search_command(
                         command,
@@ -3555,7 +3660,7 @@ impl<'en> Engine<'en> {
                 Rule::add_posit => {
                     self.add_posit(command, &mut variables, &metadata.resolved_now, &execution)?;
                 }
-                Rule::search => {
+                Rule::search | Rule::explain => {
                     struct LocalSink {
                         rows: Vec<Vec<ResultCell>>,
                         limit: Option<usize>,
@@ -3580,20 +3685,7 @@ impl<'en> Engine<'en> {
                     };
                     // Capture raw search text before moving command into search execution
                     let raw_search_string = command.as_str().trim().to_string();
-                    let query_limit = {
-                        let mut l = None;
-                        let cloned = command.clone();
-                        for c in cloned.into_inner() {
-                            if c.as_rule() == Rule::limit_clause {
-                                for p in c.into_inner() {
-                                    if let Ok(v) = p.as_str().parse::<usize>() {
-                                        l = Some(v);
-                                    }
-                                }
-                            }
-                        }
-                        l
-                    };
+                    let query_limit = search_limit(&command)?;
                     sink.limit = execution.effective_limit(query_limit);
                     let mut local_return_columns: Option<Vec<String>> = None;
                     let outcome = self.execute_search_command(
@@ -3686,20 +3778,10 @@ impl<'en> Engine<'en> {
                         &execution,
                     )?;
                 }
-                Rule::search => {
+                Rule::search | Rule::explain => {
                     // Extract limit for this search
                     let search_text_full = command.as_str().trim().to_string();
-                    let mut limit = None;
-                    let cloned = command.clone();
-                    for c in cloned.into_inner() {
-                        if c.as_rule() == Rule::limit_clause {
-                            for p in c.into_inner() {
-                                if let Ok(v) = p.as_str().parse::<usize>() {
-                                    limit = Some(v);
-                                }
-                            }
-                        }
-                    }
+                    let limit = search_limit(&command)?;
                     // Per-set sink bridging to callbacks
                     struct SetSink<'a, C: MultiStreamCallbacks> {
                         cb: &'a mut C,
@@ -3792,6 +3874,7 @@ fn friendly_rule_name(rule: Rule) -> &'static str {
         Rule::add_posit => "add posit",
         Rule::and_assert_clause => "and assert <binding?> by <source> with <certainty> at <time>",
         Rule::search => "search",
+        Rule::explain => "explain search",
         Rule::or_add_clause => "or add posit",
         Rule::search_clause => "search clause",
         Rule::where_clause => "where clause",

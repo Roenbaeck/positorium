@@ -3,6 +3,33 @@ use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[test]
+fn query_algebra_reference_example_executes() {
+    let reference = include_str!("../docs/reference/TRAQULA.md");
+    let section = reference.split("## Query algebra").nth(1).unwrap();
+    let script = section
+        .split("```traqula\n")
+        .nth(1)
+        .unwrap()
+        .split("```")
+        .next()
+        .unwrap();
+    let database = positorium::Database::new(positorium::PersistenceMode::InMemory).unwrap();
+    let engine = positorium::Engine::new(&database);
+    engine
+        .execute(
+            "add role name, alias, retired; \
+         add posit [{(+alice, name)}, \"Alice\", '2024'], \
+                   [{(alice, retired)}, \"yes\", '2024'], \
+                   [{(+bob, name)}, \"Bob\", '2024'], \
+                   [{(bob, alias)}, \"Bob\", '2024'];",
+        )
+        .unwrap();
+    let result = engine.execute_collect(script).unwrap();
+    assert_eq!(result.row_count, 1);
+    assert_eq!(result.rows[0][1], "\"Bob\"");
+}
+
 fn markdown_files(directory: &Path, files: &mut Vec<PathBuf>) {
     for entry in fs::read_dir(directory).unwrap() {
         let path = entry.unwrap().path();

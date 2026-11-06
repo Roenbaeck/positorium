@@ -232,6 +232,11 @@ return ?case, ?time;
 An `as of ?cutoff` variable may be bound by another pattern in the same search;
 the planner resolves the dependency regardless of source order.
 
+An external binding of a pattern's Posit, LiteralValue, or Time variable joins
+the temporally reduced result. It must not hide a newer state before reduction.
+For `latest`, literal restrictions written inside that pattern are applied
+before reduction; external field-variable bindings still join its result.
+
 ### History, snapshots, and assertions are separate
 
 A search without `as of` reads recorded history. Ordinary `as of` reduces that
@@ -333,21 +338,73 @@ not traverse it implicitly.
 ## Query algebra
 
 Multiple patterns in one branch form a natural join and preserve bag
-multiplicity. `union` appends another branch. `not exists` is a safe correlated
-anti-join: every variable it references must already be bound positively.
+multiplicity. `union` appends another branch. Returned variables and variables
+used by an outer `where`, `order by`, or correlated `not exists` must be bound
+in every union branch, with the same domain in each branch. Other positive
+bindings remain private to their branches and are not promoted into mutation
+scope after the search.
+
+`not exists` is a safe correlated anti-join. Variables already bound positively
+are correlated; variables introduced inside the block are local existential
+variables and cannot escape it. Separate blocks have separate local scopes.
+Absence of recorded evidence does not assert that a proposition is false.
 
 ```traqula
 search [{(?person, name), ...}, ?name, *]
 union [{(?person, alias), ...}, ?name, *]
-not exists { [{(?person, retired), ...}, true, *] }
+not exists { [{(?person, retired), ...}, "yes", *] }
 return distinct ?person, ?name
-order by ?name, ?person
+order by ?person
 limit 100;
 ```
 
 The result pipeline is projection, optional `distinct`, deterministic
 `order by`, then `limit`. Without `distinct`, duplicate rows are meaningful and
 are retained. `asc` is the default direction; `desc` reverses it.
+Limits must be non-negative integers within the supported count range; negative
+or overflowing counts are errors. Ordering literal values requires compatible
+numeric families (integer/decimal) or certainty values; certainty cannot be
+mixed with ordinary numbers. String ordering is unsupported.
+
+## Execution plans
+
+Prefix a search with `explain` to inspect the chosen plan:
+
+```traqula
+explain search [{(?person, name)}, ?name, ?time] as of '2025'
+return ?person, ?name
+order by ?person
+limit 20;
+```
+
+`explain` produces one result set with one `plan` column and one JSON literal
+cell. It uses the usual Rust, HTTP, SSE, WASM, and Python result framing. It
+does not scan result rows, resolve effective evidence, allocate identities, or
+execute an `or add` fallback. It validates the search and fallback binding
+shape before returning a plan. Other commands in the same script still execute
+normally; `explain` applies only to its attached search.
+
+The JSON has an independent `version` (`1`), `resolved_now`, and an operator
+tree under `root`. Each node describes its operation, typed `bindings`, and
+`inputs`. Plans show chosen pattern order, scopes and dependencies, full scans
+or bitmap access, candidate estimates, temporal reduction and field-filter
+placement, effective-evidence cuts, projection, ordering, and limits. Candidate
+estimates come from catalog/index sizes and are upper bounds, not measured
+cardinalities after matching. A changed database may produce a different plan.
+
+Execution currently materializes intermediate relations and applies limits to
+presentation. A `limit` node therefore reports `presentation_only: true`; a
+small limit does not yet imply bounded intermediate work. The explained query's
+limit does not truncate its explanation. `EXPLAIN ANALYZE` is not implemented.
+
+Rust callers can use `Engine::explain` or `Engine::explain_with_options` to get a
+typed `QueryPlan` directly. These methods accept exactly one search (optionally
+prefixed by `explain`) and reject scripts containing other commands before any
+mutation. Typed parameters and a supplied clock resolve once per invocation,
+as for normal execution. The returned plan describes that invocation; it is
+not a reusable prepared-query handle.
+
+`explain` is contextual and does not reserve an existing mutation-variable name.
 
 ## Typed parameters
 

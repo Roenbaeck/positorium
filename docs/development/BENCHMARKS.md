@@ -12,6 +12,94 @@ floor across several atomic batch sizes, physical size at two scales, warm
 startup replay, full and selective query shapes, historical selection, and both
 dense and sparse bitmap construction.
 
+## 2026-11-06 shared temporal reduction
+
+The shared reducer replaces pairwise dominance scans in ordinary and
+latest-matching snapshots, effective target/assertion maxima, and Terrain's
+current frame. It groups query rows by exact appearance set and finds a witness
+with the greatest **interval start**, then checks each candidate against that
+witness. A single witness suffices to test whether any later interval exists;
+the result still retains every equal or incomparable maximum, in input order,
+with duplicate bindings intact. Retractions use the same rule within each
+positor/target pair before either effective-evidence reduction.
+
+Each grouped reduction performs `2(n - groups)` temporal ordering comparisons
+and uses `O(n + groups)` auxiliary memory. Terrain already has grouped records,
+so its per-group reduction needs only a constant-sized witness beyond its output.
+Cancellation and comparison limits apply during both passes. The effective
+comparison counter now includes interval-start comparisons used to select a
+witness; it measures executed work, so optimized requests can fit budgets that
+the pairwise implementation exhausted. The stored time representation, cutoff
+semantics, and result contracts are unchanged.
+
+### Method and reproduction
+
+Environment: Apple M1 Pro, 10 logical CPUs, 16 GiB RAM, Darwin 27.2.0 arm64,
+`rustc 1.98.0 (88d9e12ae 2026-08-18)`, optimized build with
+`--no-default-features`. Databases are in memory and warm. The identical
+benchmark harness was run first with the pairwise reducers after the initial
+typed-plan implementation, then with the shared reducer. Compilation and other
+test runs were kept outside the measurement runs.
+
+```sh
+# Run before changing the reducer to capture the reference.
+cargo bench --offline --no-default-features --bench benchmark -- 'temporal/' \
+  --sample-size 20 --warm-up-time 0.2 --measurement-time 0.5 \
+  --save-baseline before-shared-temporal --noplot
+
+# Run after the change, on the same host and with the same fixtures.
+cargo bench --offline --no-default-features --bench benchmark -- 'temporal/' \
+  --sample-size 20 --warm-up-time 0.2 --measurement-time 0.5 \
+  --baseline before-shared-temporal --noplot
+```
+
+The 45 cases in `benches/temporal.rs` cover 128, 512, and 2,048 input rows.
+Fixture construction and result-count assertions run outside the timed loop;
+normal query parsing/planning, materialization, and result creation are included.
+For evidence cases, the size is the assertion count. Ordered target histories
+have one retained row, while equal and overlapping target histories retain
+every row. The retraction case has old zero-certainty assertions followed by
+later reassertions, forcing the original implementation to exhaust its
+retraction lists. The independent-set control has no dominance work within a
+group. Each case verifies its expected result count before timing.
+
+These are Criterion **mean latencies**, with 20 samples, 0.2 seconds of warm-up,
+and a requested 0.5-second measurement window (Criterion extends it when needed).
+[All 45 measurements](TEMPORAL_BENCHMARK_RESULTS.json) include 95% confidence
+intervals for the means and the effective-evidence comparison counters. Raw
+Criterion samples remain under `target/criterion/temporal_*`. The table shows
+the largest scale, 2,048 rows:
+
+| Workload | Pairwise | Shared reducer | Speedup |
+| --- | ---: | ---: | ---: |
+| Snapshot / independent sets | 54.349 ms | 1.568 ms | 34.7× |
+| Snapshot / ordered history | 68.385 ms | 0.554 ms | 123.4× |
+| Snapshot / equal times | 82.433 ms | 1.293 ms | 63.7× |
+| Snapshot / overlapping precision | 81.295 ms | 1.291 ms | 63.0× |
+| Snapshot / skewed history | 60.675 ms | 0.663 ms | 91.5× |
+| Latest matching / ordered history | 70.734 ms | 0.796 ms | 88.9× |
+| Terrain / ordered history | 43.689 ms | 0.257 ms | 170.0× |
+| Terrain / equal times | 9.716 ms | 0.242 ms | 40.2× |
+| Terrain / overlapping precision | 23.028 ms | 0.276 ms | 83.4× |
+| Effective evidence / independent sets | 1.343 ms | 0.864 ms | 1.6× |
+| Effective evidence / ordered target history | 54.321 ms | 0.458 ms | 118.6× |
+| Effective evidence / equal target times | 9.512 ms | 0.817 ms | 11.6× |
+| Effective evidence / overlapping target precision | 22.907 ms | 0.818 ms | 28.0× |
+| Effective evidence / assertion history | 60.297 ms | 0.566 ms | 106.5× |
+| Effective evidence / older retractions | 44.016 ms | 0.488 ms | 90.3× |
+
+All measured cases improved in this run. The large ratios describe these
+history-heavy shapes, rather than a general speedup for every query. For 2,048
+equal target times, temporal comparisons fell from 4,192,256 to 4,094; for the
+retraction case they fell from 2,620,927 to 6,139. Regression tests compare the
+kernel against the public pairwise temporal relation and enforce linear work
+budgets independently of machine timing.
+
+These measurements do not cover peak memory, first-row latency, cache eviction,
+or incremental execution. Limits remain presentation limits. Effective-slice
+indexing, incremental operators, and per-operator runtime profiling remain
+separate roadmap work.
+
 ## 2026-08-27 local baseline
 
 Environment: Darwin arm64, stable `rustc 1.95.0`, optimized Criterion build in a

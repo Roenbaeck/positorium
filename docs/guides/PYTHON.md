@@ -167,7 +167,7 @@ All database exceptions derive from `PositoriumError`. Useful subclasses include
 The package exports `PYTHON_INTERFACE_VERSION`, `TRAQULA_VERSION`, and
 `TERRAIN_VERSION`. Python interface 1 is documented in
 [Contracts](../reference/CONTRACTS.md). The distribution version follows PEP
-440, so Cargo `0.1.4-beta.2` is installed as Python `0.1.4b2`.
+440, so Cargo `0.1.4-beta.3` is installed as Python `0.1.4b3`.
 
 ## Publishing a release
 

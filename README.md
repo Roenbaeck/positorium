@@ -12,8 +12,9 @@ It is an experimental embedded evidence database with an immutable posit model,
 the Traqula query language, an append-only native store, Python bindings, a
 trusted-local HTTP service, and an in-browser WASM testbed.
 
-The repository is preparing `0.1.4-beta.2`; the latest tagged release is
-[`0.1.4-beta.1`](https://github.com/Roenbaeck/positorium/releases/tag/v0.1.4-beta.1).
+The repository is preparing `0.1.4-beta.3`; see the
+[milestone notes](docs/releases/v0.1.4-beta.3.md). Tagged releases are available
+on the [releases page](https://github.com/Roenbaeck/positorium/releases).
 Beta means the documented language, storage, transfer, and interface versions
 have explicit compatibility rules; it does not mean an Internet-facing or
 production-ready service.

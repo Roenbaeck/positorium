@@ -32,6 +32,8 @@ use std::hash::{Hash, Hasher};
 // used to overload common operations for datatypes
 use std::ops;
 
+pub(crate) mod temporal;
+
 /// Trait implemented by all logical value/time types that may appear in a posit.
 pub trait DataType: fmt::Display + Eq + Ord + Hash + Send + Sync {}
 
@@ -513,12 +515,6 @@ impl Time {
     pub fn within(&self, other: &Self) -> bool {
         other.contains(self)
     }
-}
-
-/// Shared partial-order dominance predicate used by ordinary `as of` queries
-/// and by Terrain's current frame. Equal and incomparable times never dominate.
-pub(crate) fn time_is_strictly_dominated(candidate: &Time, other: &Time) -> bool {
-    candidate.definitely_before(other)
 }
 
 impl Default for Time {

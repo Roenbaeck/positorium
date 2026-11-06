@@ -92,6 +92,7 @@ pub use terrain::{
 };
 pub use traqula::{
     CancellationToken, CollectedResult, CollectedResultSet, Engine, ExecutionMetadata,
-    ExecutionOptions, ExecutionParameter, ExecutionWarning, MultiStreamCallbacks, ResultCell,
-    ResultCellKind, RowSink, SinkFlow, TRAQULA_VERSION,
+    ExecutionOptions, ExecutionParameter, ExecutionWarning, MultiStreamCallbacks, PlanAccess,
+    PlanBinding, PlanCutoff, PlanDomain, PlanNode, PlanOperator, PlanOrder, QUERY_PLAN_VERSION,
+    QueryPlan, ResultCell, ResultCellKind, RowSink, SinkFlow, TRAQULA_VERSION,
 };

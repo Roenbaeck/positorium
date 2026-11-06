@@ -802,6 +802,49 @@ mod tests {
             search [{(?thing, label), ...}, ?value, *] return ?thing, ?value;
         "#;
         assert_eq!(script_counts(script).unwrap(), (2, 1));
+        assert_eq!(script_counts("explain search [*, *, *];").unwrap(), (1, 1));
+    }
+
+    #[tokio::test]
+    async fn explain_returns_a_plan_through_http_and_sse_without_mutating() {
+        let database = Arc::new(Database::new(PersistenceMode::InMemory).unwrap());
+        let engine = crate::traqula::Engine::new(&database);
+        engine.execute("add role name;").unwrap();
+        let state = ServerState {
+            interface: Arc::new(QueryInterface::new(Arc::clone(&database))),
+            config: ServerConfig::default(),
+        };
+        for stream in [false, true] {
+            let response = query(State(state.clone()), Ok(Json(QueryRequest {
+                traqula_version: TRAQULA_VERSION,
+                script: "explain search [{(?e, name)}, *, *] return ?e or add posit [{(+e, name)}, \"Ada\", '2024'];".into(),
+                stream, timeout_ms: None, parameters: std::collections::HashMap::new(),
+            }))).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            if stream {
+                let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                let text = String::from_utf8(body.to_vec()).unwrap();
+                assert!(text.contains(r#""event":"meta""#), "{text}");
+                assert!(text.contains("search_or_add"), "{text}");
+                assert!(!text.contains(r#""event":"error""#), "{text}");
+            } else {
+                let body = json_body(response).await;
+                assert_eq!(body["columns"], serde_json::json!(["plan"]));
+                let plan: serde_json::Value =
+                    serde_json::from_str(body["rows"][0][0]["text"].as_str().unwrap()).unwrap();
+                assert_eq!(plan["version"], crate::QUERY_PLAN_VERSION);
+                assert_eq!(plan["root"]["operator"], "search_or_add");
+            }
+        }
+        assert_eq!(
+            engine
+                .execute_collect("search ?p = [*, *, *] return ?p;")
+                .unwrap()
+                .row_count,
+            0
+        );
     }
 
     #[tokio::test]

@@ -60,6 +60,11 @@ fn editor_keywords_and_comparators_follow_the_parser_grammar() {
     let keywords = quoted_rule_tokens(&parser, "keyword");
     let expected_keywords = format!(r"\b({})\b", keywords.join("|"));
     assert_eq!(grammar_match(&editor, "keywords"), expected_keywords);
+    assert!(parser.contains("explain = {"));
+    assert_eq!(
+        editor["repository"]["keywords"]["patterns"][1]["match"],
+        r"\bexplain\b"
+    );
 
     let mut operators: Vec<String> = quoted_rule_tokens(&parser, "comparator")
         .iter()

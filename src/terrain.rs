@@ -1,7 +1,8 @@
 //! Authoritative, bounded structural Terrain reports.
 
 use crate::construct::{AppearanceSet, Database, Thing, ThingHasher};
-use crate::datatype::{Time, time_is_strictly_dominated};
+use crate::datatype::Time;
+use crate::datatype::temporal::{Work, retain_maximal};
 use crate::error::DatabaseError;
 use crate::traqula::CancellationToken;
 use roaring::RoaringTreemap;
@@ -618,22 +619,15 @@ fn aggregate(
                 eligible.push(record);
             }
         }
-        for (candidate_index, candidate) in eligible.iter().enumerate() {
-            let mut dominated = false;
-            for (other_index, other) in eligible.iter().enumerate() {
-                if candidate_index == other_index {
-                    continue;
-                }
-                execution.temporal_comparison()?;
-                if time_is_strictly_dominated(&candidate.time, &other.time) {
-                    dominated = true;
-                    break;
-                }
-            }
-            if !dominated {
-                current_records.push((*candidate).clone());
-            }
-        }
+        let maxima = retain_maximal(
+            eligible,
+            |record| &record.time,
+            |work| match work {
+                Work::Row => execution.check(),
+                Work::Comparison => execution.temporal_comparison(),
+            },
+        )?;
+        current_records.extend(maxima.into_iter().cloned());
     }
     current_records.sort_by_key(|record| record.posit);
 

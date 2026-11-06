@@ -252,6 +252,33 @@ mod tests {
     }
 
     #[wasm_bindgen_test]
+    fn explain_wasm_returns_a_plan_without_fallback_mutation() {
+        let engine = WasmEngine::new().unwrap();
+        engine.execute("add role name;").unwrap();
+        let result = engine.execute(
+            "explain search [{(?e, name)}, *, *] return ?e or add posit [{(+e, name)}, \"Ada\", '2024'];"
+        ).unwrap();
+        let result: serde_json::Value = serde_wasm_bindgen::from_value(result).unwrap();
+        assert_eq!(
+            result["result_sets"][0]["columns"],
+            serde_json::json!(["plan"])
+        );
+        let plan: serde_json::Value = serde_json::from_str(
+            result["result_sets"][0]["rows"][0][0]["text"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(plan["version"], crate::QUERY_PLAN_VERSION);
+        assert_eq!(plan["root"]["operator"], "search_or_add");
+        let rows = engine.execute("search ?p = [*, *, *] return ?p;").unwrap();
+        let rows: serde_json::Value = serde_wasm_bindgen::from_value(rows).unwrap();
+        assert_eq!(rows["result_sets"][0]["row_count"], 0);
+        let invalid = engine.execute("search [{(?x, name)}, *, *] not exists { [{(?local, name)}, *, *] } return ?local or add posit [{(+local, name)}, 1, '2024'];");
+        assert!(invalid.is_err());
+    }
+
+    #[wasm_bindgen_test]
     fn test_wasm_information_in_effect() {
         let engine = WasmEngine::new().expect("Failed to create engine");
         let output = engine

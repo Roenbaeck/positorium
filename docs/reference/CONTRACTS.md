@@ -14,10 +14,11 @@ SQLite prototype is deliberately excluded by D031.
 | WASM | `1` | `interface_version` in every returned JavaScript object |
 | Python | `1` | `positorium.PYTHON_INTERFACE_VERSION` and every `ExecutionResult` |
 | Terrain | `1` | Rust report, `/v1/terrain`, and WASM Terrain response |
+| Query plan | `1` | Rust `QueryPlan` and the JSON literal returned by `explain search ...;` |
 | Logical export | `1` | JSONL header; specified by [TRANSFER.md](TRANSFER.md) |
 | Identity remap | `1` | JSON remap artifact; specified by [TRANSFER.md](TRANSFER.md) |
 
-Storage, Traqula, HTTP, SSE, WASM, Python, Terrain, logical export, and identity remapping
+Storage, Traqula, HTTP, SSE, WASM, Python, Terrain, query plans, logical export, and identity remapping
 evolve independently. A change to one does not silently change another. Adding
 Terrain 1 is additive to HTTP v1 and WASM interface 1 and does not change
 Traqula 1 or SSE 1. Terrain rejects an unsupported `terrain_version`
@@ -42,8 +43,10 @@ Such interpretation belongs to an explicit consumer or presentation policy;
 ordinary query filtering remains literal and neutral.
 
 Traqula 1 includes atomic `and assert` mutation sugar and `search ... or add
-posit ...` identity resolution. The latter may omit `return`; only searches
-with a return projection create HTTP, SSE, WASM, or Rust result sets. Ordinary
+posit ...` identity resolution. The latter may omit `return`; ordinary searches
+create result sets only with a return projection. `explain search ...;` always
+describes its search in one JSON plan cell through the same result contract,
+without evaluating rows or executing the search's fallback. Ordinary
 query variables remain lexical. Within the compound operation, same-name Thing
 or Posit query/allocation binders are explicitly unified into a script mutation
 binding, with zero matches executing the fallback once and one or many matches

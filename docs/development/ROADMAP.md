@@ -28,6 +28,133 @@ implementation, documentation, and test work; decision acceptance alone does not
 complete them. Decision identifiers are included where they clarify the governing
 contract.
 
+## Next Execution Milestone (2026-11-06)
+
+The completeness and execution review sets the following implementation order.
+Complete the correctness regressions before changing planning strategies. The
+older checked beta gates below record their original delivery; the new findings
+and remaining work are tracked here.
+
+### 1. Correctness and regression tests
+
+- [x] **Preserve ordinary snapshot semantics under every join order.**
+        - Bound Posit identities, values, and times must not remove competing
+            history before ordinary `as of` reduction. Join external field
+            bindings after reduction;
+            preserve the separate filter-first meaning of `latest`.
+        - Cover reversed patterns, bound identities, ties, mixed precision, and
+            correlated absence queries.
+- [x] **Keep Thing unions exact unless an ellipsis opens the set.**
+        - Remove the legacy-syntax interpretation of `?left|?right` and test
+            exact and open forms against larger stored appearance sets.
+- [x] **Validate scopes, branch schemas, and dependencies before evaluation.**
+        - Keep `not exists` locals inside their block, require projected and
+            correlated variables in every relevant union branch, validate cutoff
+            domains and cycles, and reject statically incompatible comparisons.
+        - Require a common typed union schema, keep branch-private bindings out
+            of mutation scope, and treat unequal Thing/Posit identities as a
+            nonmatching join rather than a domain error.
+        - Invalid `search ... or add` commands must emit no metadata or rows and
+            perform no fallback mutation, regardless of existing data.
+- [x] **Reject invalid limits and incomparable sort domains.**
+        - Negative and overflowing limits are errors on every execution surface.
+        - Numeric/certainty mixtures must not become equal sort keys by swallowing
+            comparison errors; retain valid integer/decimal interoperability.
+- [x] **Make snapshot work cooperatively cancellable.**
+        - Check cancellation and deadlines inside temporal dominance and structural
+            matching loops, including large or highly ambiguous patterns.
+- [x] **Align the language reference and executable examples.**
+        - Document existential negation locals and use accepted literal syntax.
+        - Keep regression cases independent of source order and empty/populated
+            data, and cover buffered and streaming command boundaries.
+
+### 2. Typed execution plans and EXPLAIN
+
+- [x] **Separate query preparation, physical planning, and execution.**
+        - Represent typed output schemas, scopes, dependencies, scan access paths,
+            joins, anti-joins, temporal reductions, projection, distinctness,
+            ordering, and limits explicitly.
+        - Preserve command order, atomic fallback mutation, script-scoped `@NOW`,
+            parameters, source-local bag multiplicity, and comparison errors.
+        - Keep ordinary snapshots, latest-matching snapshots, and information in
+            effect as distinct semantic operations. Prove any filter movement
+            across a reduction before enabling it.
+- [x] **Expose the actual chosen plan through EXPLAIN.**
+        - Explain without evaluating rows or executing mutations. Report typed
+            bindings, pattern order, dependencies, access paths, estimates, and
+            temporal filter placement from the same plan the executor consumes.
+        - Add plan/result equivalence and deterministic explanation tests.
+        - Defer `EXPLAIN ANALYZE` until per-operator runtime counters exist.
+
+Delivered by the typed physical planner in `src/traqula/query/plan.rs`,
+`Engine::explain[_with_options]`, and `explain search ...;` across native,
+HTTP/SSE, and WASM result paths. Query plans have an independent version (`1`).
+The initial planner selects dependency order and scan access once per command,
+including correlated blocks; execution still materializes intermediate
+relations and applies presentation limits. Incremental operators, reusable
+prepared-query handles, and measured runtime statistics remain follow-up work.
+
+### 3. Temporal reduction and incremental execution
+
+- [x] **Share and optimize temporal reduction.**
+        - Group ordinary history by exact appearance set before dominance checks.
+            Share a tested interval-aware maximum kernel with effective evidence
+            and Terrain while retaining every equal or incomparable maximum.
+        - Select a maximum interval-start witness in each group, then retain all
+            undominated rows in their original order. The reduction uses at most
+            `2(n - groups)` temporal comparisons, including witness selection.
+        - Use the same witness rule for source/target-local retractions. Preserve
+            reassertions, equal-time evidence, source-local bags, and work limits.
+- [ ] **Index and bound effective-slice reuse.**
+        - Index resolved effective slices for correlated joins, bound cut-cache
+            growth, and retain all evidence required for retraction and maxima.
+- [x] **Benchmark temporal reduction before incremental execution.**
+        - Add 45 end-to-end cases at 128, 512, and 2,048 rows: independent sets,
+            ordered and skewed histories, equal and overlapping times, latest
+            matching, assertion history, and older retractions.
+        - Record the pairwise baseline, optimized timings, and effective-evidence
+            comparison counts in [BENCHMARKS.md](BENCHMARKS.md). Keep setup outside
+            the timed loop and verify result counts before measuring.
+- [ ] **Execute incrementally with explicit work and memory budgets.**
+        - Add early safe filters, indexed and hash joins, short-circuit existence,
+            incremental projection, and bounded top-k ordering.
+        - Stop eligible limited queries after establishing whether an additional
+            row exists. Preserve full identity promotion for `search ... or add`.
+        - Use compact binding slots, reuse parsed literal interpretations, and
+            replace linear staged-posit duplicate searches with a command-local
+            hash index.
+- [ ] **Measure operators and scaling.**
+        - Add actual rows, loops, candidate scans, temporal comparisons, peak
+            intermediate memory, first-row latency, and timeout overshoot.
+        - Benchmark long histories, skewed joins, equal/incomparable times,
+            retractions, repeated and distinct cuts, early limits, and large
+            mutation batches alongside existing selective-role fixtures.
+
+### 4. Language completeness and evidence diagnostics
+
+- [ ] **Resolve datetime precision before extending temporal syntax.**
+        - Minute, second, and fractional-second spellings currently normalize to
+            datetime instants. Reconcile this with the precision-preserving model
+            and specify identity, codec, transfer, and compatibility consequences
+            before changing stored time representation.
+- [ ] **Expose the missing temporal relations and composable algebra.**
+        - Add explicit possible-before/after and interval predicates, named or
+            nested relations, local anti-join predicates, and grouped reduction.
+        - Add `count` and further aggregates with explicit bag/distinct semantics,
+            typed Thing/Posit parameters, and correlation-preserving mutation
+            bindings. Test mechanical `in effect` expansion when expressible.
+- [ ] **Add evidence diagnostics with witnesses.**
+        - Report source-local exclusivity, decisiveness, and non-contradiction
+            over explicit effective cuts without selecting an accepted truth.
+        - Keep general constraints, classification acceptance, subclass closure,
+            and fusion as explicit, separately specified policies.
+
+Retain the append-only durable store and single-writer model for this sequence.
+Introduce a read-view boundary as planning evolves; prioritize concurrent
+immutable readers, persisted indexes, and replay snapshots when measurements
+justify them. The query-planning work itself does not require a storage-format
+change.
+
 ## P0: Defects Found In Review (2026-08-20)
 
 Concrete issues observed in the current code while annotating

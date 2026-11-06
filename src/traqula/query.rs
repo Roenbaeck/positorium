@@ -7,6 +7,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use unicode_normalization::UnicodeNormalization;
 
+pub(super) mod plan;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Domain {
     Thing,
@@ -80,9 +82,13 @@ impl Binding {
             return Ok(true);
         };
         match (existing, &value) {
-            (BoundValue::Thing(left), BoundValue::Posit(right)) if left == right => {
-                self.0.insert(name.to_string(), value);
-                Ok(true)
+            (BoundValue::Thing(left), BoundValue::Posit(right)) => {
+                if left == right {
+                    self.0.insert(name.to_string(), value);
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
             }
             (BoundValue::Posit(left), BoundValue::Thing(right)) => Ok(left == right),
             _ if existing.domain() != value.domain() => Err(DatabaseError::VariableDomain {
@@ -192,6 +198,7 @@ struct Query {
     returns: Vec<String>,
     distinct: bool,
     order: Vec<OrderItem>,
+    limit: Option<usize>,
 }
 
 #[derive(Debug)]
@@ -275,14 +282,34 @@ pub(super) fn execute_prepared(
     execution: &ExecutionContext,
 ) -> Result<SearchOutcome, DatabaseError> {
     execution.check()?;
-    let PreparedQuery { query, domains } = prepared;
+    let planned = plan::compile(database, prepared, execution)?;
+    execute_plan(database, planned, sink, return_columns, execution)
+}
+
+pub(super) fn explain_prepared(
+    database: &Database,
+    prepared: PreparedQuery,
+    execution: &ExecutionContext,
+) -> Result<plan::QueryPlan, DatabaseError> {
+    let planned = plan::compile(database, prepared, execution)?;
+    execution.check()?;
+    Ok(planned.describe(execution))
+}
+
+fn execute_plan(
+    database: &Database,
+    query: plan::PhysicalQuery,
+    sink: &mut dyn RowSink,
+    return_columns: &mut Option<Vec<String>>,
+    execution: &ExecutionContext,
+) -> Result<SearchOutcome, DatabaseError> {
+    let domains = &query.domains;
     let mut effect_cache = EffectCache::new();
 
     let mut bindings = Vec::new();
     for branch in &query.branches {
-        let patterns = plan_patterns(database, branch, &HashSet::new())?;
         let mut branch_bindings = vec![Binding::default()];
-        for pattern in patterns {
+        for pattern in &branch.patterns {
             let mut joined = Vec::new();
             for binding in &branch_bindings {
                 execution.check()?;
@@ -290,7 +317,7 @@ pub(super) fn execute_prepared(
                     database,
                     pattern,
                     binding,
-                    &domains,
+                    domains,
                     execution,
                     &mut effect_cache,
                 )?);
@@ -300,7 +327,12 @@ pub(super) fn execute_prepared(
                 break;
             }
         }
-        bindings.extend(branch_bindings);
+        for mut binding in branch_bindings {
+            // Union branches export only their common schema. Private bindings
+            // must not enter correlations or later mutation-variable promotion.
+            binding.0.retain(|name, _| domains.contains_key(name));
+            bindings.push(binding);
+        }
     }
 
     for absence in &query.not_exists {
@@ -311,7 +343,7 @@ pub(super) fn execute_prepared(
                 absence,
                 &binding,
                 database,
-                &domains,
+                domains,
                 execution,
                 &mut effect_cache,
             )? {
@@ -435,6 +467,7 @@ fn parse_query(
     command: Pair<'_, Rule>,
     execution: &ExecutionContext,
 ) -> Result<Query, DatabaseError> {
+    let limit = search_limit(&command)?;
     let mut branches = Vec::new();
     let mut not_exists = Vec::new();
     let mut predicates = Vec::new();
@@ -536,6 +569,7 @@ fn parse_query(
         returns,
         distinct,
         order,
+        limit,
     })
 }
 
@@ -953,41 +987,65 @@ fn canonical_role_name(token: &str) -> String {
 
 impl AppearancePattern {
     fn uses_legacy_syntax(&self) -> bool {
-        matches!(
-            self.thing,
-            ThingSlot::LegacyVariable(_) | ThingSlot::OneOf(_)
-        )
+        matches!(self.thing, ThingSlot::LegacyVariable(_))
     }
 }
 
 fn validate_domains(query: &Query) -> Result<HashMap<String, Domain>, DatabaseError> {
-    let mut domains = HashMap::new();
+    let mut all_variables = HashSet::new();
+    let mut branch_domains = Vec::new();
     for branch in &query.branches {
+        let mut domains = HashMap::new();
         for pattern in branch {
             register_pattern(pattern, &mut domains)?;
         }
+        validate_pattern_dependencies(branch, &domains, &HashSet::new())?;
+        all_variables.extend(domains.keys().cloned());
+        branch_domains.push(domains);
     }
-    for branch in &query.branches {
-        for pattern in branch {
-            for dependency in pattern.dependencies() {
-                if !domains.contains_key(dependency) {
-                    return Err(DatabaseError::InvalidRecall(format!(
-                        "'{dependency}' is not bound by a positive pattern"
-                    )));
-                }
+    // Only bindings supplied by every union branch may escape the positive
+    // relation. Branch-private variables remain usable within their branch.
+    let domains: HashMap<_, _> = branch_domains[0]
+        .iter()
+        .filter(|(name, _)| {
+            branch_domains
+                .iter()
+                .all(|branch| branch.contains_key(*name))
+        })
+        .map(|(name, domain)| (name.clone(), *domain))
+        .collect();
+    for branch in &branch_domains {
+        for (name, domain) in &domains {
+            if branch[name] != *domain {
+                return Err(DatabaseError::VariableDomain {
+                    name: name.clone(),
+                    first: domain.label(),
+                    second: branch[name].label(),
+                });
             }
         }
     }
+    let available: HashSet<_> = domains.keys().map(String::as_str).collect();
     for block in &query.not_exists {
+        let mut local_domains = domains.clone();
         for pattern in block {
-            register_pattern(pattern, &mut domains)?;
+            for name in pattern.introduced().union(&pattern.dependencies()) {
+                if all_variables.contains(*name) && !domains.contains_key(*name) {
+                    return Err(DatabaseError::InvalidRecall(format!(
+                        "correlated variable '{name}' is not bound in every union branch"
+                    )));
+                }
+            }
+            register_pattern(pattern, &mut local_domains)?;
         }
+        validate_pattern_dependencies(block, &local_domains, &available)?;
     }
     for predicate in &query.predicates {
         require_variable(&domains, &predicate.left)?;
         if let Operand::Variable(name) = &predicate.right {
             require_variable(&domains, name)?;
         }
+        validate_predicate_domains(predicate, &domains)?;
     }
     for returned in &query.returns {
         require_variable(&domains, returned)?;
@@ -1002,6 +1060,104 @@ fn validate_domains(query: &Query) -> Result<HashMap<String, Domain>, DatabaseEr
         }
     }
     Ok(domains)
+}
+
+fn validate_predicate_domains(
+    predicate: &Predicate,
+    domains: &HashMap<String, Domain>,
+) -> Result<(), DatabaseError> {
+    let left = domains[&predicate.left];
+    let right = match &predicate.right {
+        Operand::Variable(name) => domains[name],
+        Operand::Literal(_) => Domain::Literal,
+        Operand::Time(_) => Domain::Time,
+    };
+    let identities = matches!(left, Domain::Thing | Domain::Posit)
+        && matches!(right, Domain::Thing | Domain::Posit);
+    let equality = matches!(predicate.operator.as_str(), "=" | "===" | "?=");
+    if (left == right || identities) && (equality || matches!(left, Domain::Literal | Domain::Time))
+    {
+        Ok(())
+    } else {
+        Err(DatabaseError::Comparison(format!(
+            "{} {} {} is unsupported",
+            left.label(),
+            predicate.operator,
+            right.label()
+        )))
+    }
+}
+
+fn validate_pattern_dependencies(
+    patterns: &[PositPattern],
+    domains: &HashMap<String, Domain>,
+    initially_available: &HashSet<&str>,
+) -> Result<(), DatabaseError> {
+    for pattern in patterns {
+        validate_dependency_domains(pattern, domains)?;
+    }
+    let mut available = initially_available.clone();
+    let mut pending: Vec<_> = patterns.iter().collect();
+    while !pending.is_empty() {
+        let Some(index) = pending
+            .iter()
+            .position(|p| p.dependencies().is_subset(&available))
+        else {
+            let mut missing: Vec<_> = pending
+                .iter()
+                .flat_map(|p| p.dependencies())
+                .filter(|name| !available.contains(name))
+                .collect();
+            missing.sort_unstable();
+            missing.dedup();
+            return Err(DatabaseError::InvalidRecall(format!(
+                "query has unresolvable variable dependencies: {}",
+                missing.join(", ")
+            )));
+        };
+        available.extend(pending.remove(index).introduced());
+    }
+    Ok(())
+}
+
+fn validate_dependency_domains(
+    pattern: &PositPattern,
+    domains: &HashMap<String, Domain>,
+) -> Result<(), DatabaseError> {
+    let require_domain = |name: &str, expected: Domain| {
+        require_variable(domains, name)?;
+        let actual = domains[name];
+        if actual == expected || (expected == Domain::Thing && actual == Domain::Posit) {
+            Ok(())
+        } else {
+            Err(DatabaseError::VariableDomain {
+                name: name.to_string(),
+                first: actual.label(),
+                second: expected.label(),
+            })
+        }
+    };
+    if let Some(Cutoff::Variable(name)) = &pattern.cutoff {
+        require_domain(name, Domain::Time)?;
+    }
+    if let Some(effect) = &pattern.effect {
+        for cutoff in [&effect.assertion_cutoff, &effect.appearance_cutoff] {
+            if let Cutoff::Variable(name) = cutoff {
+                require_domain(name, Domain::Time)?;
+            }
+        }
+        if let Some(via) = effect.via.as_deref() {
+            validate_dependency_domains(via, domains)?;
+        }
+    }
+    for member in &pattern.appearances.members {
+        if let ThingSlot::OneOf(names) = &member.thing {
+            for name in names {
+                require_domain(name, Domain::Thing)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn register_pattern(
@@ -1205,12 +1361,13 @@ fn estimated_candidate_count(
 
 fn evaluate_pattern(
     database: &Database,
-    pattern: &PositPattern,
+    planned: &plan::PlannedPattern,
     input: &Binding,
     domains: &HashMap<String, Domain>,
     execution: &ExecutionContext,
     effect_cache: &mut EffectCache,
 ) -> Result<Vec<Binding>, DatabaseError> {
+    let pattern = &planned.pattern;
     if let Some(effect) = &pattern.effect {
         return evaluate_effect_pattern(
             database,
@@ -1228,7 +1385,21 @@ fn evaluate_pattern(
         .map(|cutoff| resolve_cutoff(cutoff, input))
         .transpose()?;
 
-    let posits = candidate_posits(database, pattern, input, execution)?;
+    // A temporal pattern produces its own relation before joining external
+    // posit/value/time bindings. Otherwise whichever pattern happens to run
+    // first can hide a successor and resurrect an older matching state.
+    let reduction_input = pattern
+        .cutoff
+        .as_ref()
+        .map(|_| temporal_input(pattern, input));
+    let structural_input = reduction_input.as_ref().unwrap_or(input);
+    let posits = candidate_posits(
+        database,
+        pattern,
+        structural_input,
+        &planned.access,
+        execution,
+    )?;
     let mut structural = Vec::new();
     for posit in &posits {
         execution.check()?;
@@ -1241,8 +1412,9 @@ fn evaluate_pattern(
         for binding in match_appearance_set(
             &pattern.appearances,
             &posit.appearance_set(),
-            input,
+            structural_input,
             domains,
+            execution,
         )? {
             structural.push(StructuralMatch {
                 posit: Arc::clone(posit),
@@ -1252,7 +1424,7 @@ fn evaluate_pattern(
     }
 
     let candidates = if pattern.cutoff.is_some() && !pattern.latest_matching {
-        maximal(structural)
+        maximal(structural, || execution.check())?
     } else {
         structural
     };
@@ -1267,11 +1439,65 @@ fn evaluate_pattern(
         }
     }
     let matched = if pattern.cutoff.is_some() && pattern.latest_matching {
-        maximal(matched)
+        maximal(matched, || execution.check())?
     } else {
         matched
     };
-    Ok(matched.into_iter().map(|matched| matched.binding).collect())
+    let mut bindings = Vec::new();
+    'row: for candidate in matched {
+        execution.check()?;
+        let mut binding = candidate.binding;
+        for (name, value) in &input.0 {
+            if !binding.bind(name, value.clone())? {
+                continue 'row;
+            }
+        }
+        bindings.push(binding);
+    }
+    Ok(bindings)
+}
+
+fn temporal_input(pattern: &PositPattern, input: &Binding) -> Binding {
+    let deferred = deferred_temporal_fields(pattern);
+    let mut binding = input.clone();
+    binding
+        .0
+        .retain(|name, _| !deferred.contains(name.as_str()));
+    binding
+}
+
+fn deferred_temporal_fields<'a>(pattern: &'a PositPattern) -> HashSet<&'a str> {
+    if pattern.cutoff.is_none() {
+        return HashSet::new();
+    }
+    let mut retained = pattern.dependencies();
+    if let Some(name) = &pattern.appearances.binding {
+        retained.insert(name);
+    }
+    for member in &pattern.appearances.members {
+        if let ThingSlot::Variable(name) | ThingSlot::LegacyVariable(name) = &member.thing {
+            retained.insert(name);
+        }
+        if let RoleSlot::Variable(name) = &member.role {
+            retained.insert(name);
+        }
+    }
+    let mut deferred = HashSet::new();
+    let mut defer = |name: &'a str| {
+        if !retained.contains(name) {
+            deferred.insert(name);
+        }
+    };
+    if let Some(name) = &pattern.posit {
+        defer(name);
+    }
+    if let ValueSlot::Variable(name) | ValueSlot::LegacyVariable(name) = &pattern.value {
+        defer(name);
+    }
+    if let TimeSlot::Variable(name) | TimeSlot::LegacyVariable(name) = &pattern.time {
+        defer(name);
+    }
+    deferred
 }
 
 fn evaluate_effect_pattern(
@@ -1309,6 +1535,7 @@ fn evaluate_effect_pattern(
             &target.appearance_set(),
             input,
             domains,
+            execution,
         )? {
             let Some(binding) = match_fields(pattern, &target, binding)? else {
                 continue;
@@ -1323,6 +1550,7 @@ fn evaluate_effect_pattern(
                 &assertion.appearance_set(),
                 &binding,
                 domains,
+                execution,
             )? {
                 if let Some(via_binding) = match_fields(via, &assertion, via_binding)? {
                     matched.push(via_binding);
@@ -1352,9 +1580,18 @@ fn candidate_posits(
     database: &Database,
     pattern: &PositPattern,
     input: &Binding,
+    access: &plan::PlanAccess,
     execution: &ExecutionContext,
 ) -> Result<Vec<Arc<Posit<LiteralValue>>>, DatabaseError> {
-    let candidates = indexed_candidate_identities(database, pattern, input)?;
+    let candidates = match access {
+        plan::PlanAccess::Bitmap { .. } => indexed_candidate_identities(database, pattern, input)?,
+        plan::PlanAccess::FullScan => None,
+        plan::PlanAccess::EffectiveSlice => {
+            return Err(DatabaseError::Invariant(
+                "effective slice used as a posit scan".into(),
+            ));
+        }
+    };
     let identities = if let Some(candidates) = candidates {
         candidates.into_iter().collect::<Vec<_>>()
     } else {
@@ -1392,7 +1629,9 @@ fn indexed_candidate_identities(
 ) -> Result<Option<RoaringTreemap>, DatabaseError> {
     let mut postings = Vec::new();
 
-    if let Some(name) = &pattern.posit {
+    if let Some(name) = &pattern.posit
+        && (pattern.cutoff.is_none() || pattern.latest_matching)
+    {
         match input.get(name) {
             Some(BoundValue::Thing(identity) | BoundValue::Posit(identity)) => {
                 postings.push(singleton(*identity));
@@ -1589,7 +1828,9 @@ fn match_appearance_set(
     stored: &Arc<AppearanceSet>,
     input: &Binding,
     _domains: &HashMap<String, Domain>,
+    execution: &ExecutionContext,
 ) -> Result<Vec<Binding>, DatabaseError> {
+    execution.check()?;
     let mut binding = input.clone();
     if let Some(name) = &pattern.binding
         && !binding.bind(name, BoundValue::AppearanceSet(Arc::clone(stored)))?
@@ -1613,9 +1854,11 @@ fn match_appearance_set(
         &mut vec![false; stored.appearances().len()],
         binding,
         &mut matches,
+        execution,
     )?;
     let mut unique = Vec::new();
     for binding in matches {
+        execution.check()?;
         if !unique.contains(&binding) {
             unique.push(binding);
         }
@@ -1630,18 +1873,21 @@ fn match_members(
     used: &mut [bool],
     binding: Binding,
     matches: &mut Vec<Binding>,
+    execution: &ExecutionContext,
 ) -> Result<(), DatabaseError> {
+    execution.check()?;
     if index == patterns.len() {
         matches.push(binding);
         return Ok(());
     }
     for (stored_index, appearance) in stored.iter().enumerate() {
+        execution.check()?;
         if used[stored_index] {
             continue;
         }
         if let Some(next) = match_appearance(&patterns[index], appearance, &binding)? {
             used[stored_index] = true;
-            match_members(patterns, stored, index + 1, used, next, matches)?;
+            match_members(patterns, stored, index + 1, used, next, matches, execution)?;
             used[stored_index] = false;
         }
     }
@@ -1724,36 +1970,28 @@ fn match_fields(
     Ok(time_matches.then_some(binding))
 }
 
-fn maximal(matches: Vec<StructuralMatch>) -> Vec<StructuralMatch> {
-    matches
-        .iter()
-        .enumerate()
-        .filter(|(index, candidate)| {
-            !matches.iter().enumerate().any(|(other_index, other)| {
-                *index != other_index
-                    && candidate.posit.appearance_set() == other.posit.appearance_set()
-                    && crate::datatype::time_is_strictly_dominated(
-                        candidate.posit.time(),
-                        other.posit.time(),
-                    )
-            })
-        })
-        .map(|(_, candidate)| candidate.clone())
-        .collect()
+fn maximal(
+    matches: Vec<StructuralMatch>,
+    mut check: impl FnMut() -> Result<(), DatabaseError>,
+) -> Result<Vec<StructuralMatch>, DatabaseError> {
+    crate::datatype::temporal::retain_maximal_by_key(
+        matches,
+        |candidate| candidate.posit.appearance_set(),
+        |candidate| candidate.posit.time(),
+        |_| check(),
+    )
 }
 
 fn block_has_match(
-    patterns: &[PositPattern],
+    plan: &plan::PlannedBranch,
     outer: &Binding,
     database: &Database,
     domains: &HashMap<String, Domain>,
     execution: &ExecutionContext,
     effect_cache: &mut EffectCache,
 ) -> Result<bool, DatabaseError> {
-    let available: HashSet<_> = outer.0.keys().map(String::as_str).collect();
-    let planned = plan_patterns(database, patterns, &available)?;
     let mut bindings = vec![outer.clone()];
-    for pattern in planned {
+    for pattern in &plan.patterns {
         let mut joined = Vec::new();
         for binding in &bindings {
             execution.check()?;
@@ -1779,20 +2017,28 @@ fn validate_order_values(
     order: &[OrderItem],
 ) -> Result<(), DatabaseError> {
     for item in order {
+        let mut first_literal: Option<&LiteralValue> = None;
         for (binding, _) in projected {
             let value = binding
                 .get(&item.variable)
                 .ok_or_else(|| DatabaseError::UnknownVariable(item.variable.clone()))?;
-            if let BoundValue::Literal(literal) = value
-                && !matches!(
+            if let BoundValue::Literal(literal) = value {
+                if !matches!(
                     literal.family(),
                     LiteralFamily::Integer | LiteralFamily::Decimal | LiteralFamily::Certainty
-                )
-            {
-                return Err(DatabaseError::Comparison(format!(
-                    "ORDER BY is unsupported for {:?} literals",
-                    literal.family()
-                )));
+                ) {
+                    return Err(DatabaseError::Comparison(format!(
+                        "ORDER BY is unsupported for {:?} literals",
+                        literal.family()
+                    )));
+                }
+                if let Some(first) = first_literal {
+                    first
+                        .semantic_cmp(literal)
+                        .map_err(DatabaseError::Comparison)?;
+                } else {
+                    first_literal = Some(literal);
+                }
             }
         }
     }
@@ -1828,7 +2074,7 @@ fn order_value(left: &BoundValue, right: &BoundValue) -> std::cmp::Ordering {
         (BoundValue::AppearanceSet(left), BoundValue::AppearanceSet(right)) => left.cmp(right),
         (BoundValue::Literal(left), BoundValue::Literal(right)) => left
             .semantic_cmp(right)
-            .unwrap_or(std::cmp::Ordering::Equal),
+            .expect("literal ordering was validated before sorting"),
         (BoundValue::Time(left), BoundValue::Time(right)) => left.cmp(right),
         _ => std::cmp::Ordering::Equal,
     }
@@ -1934,6 +2180,34 @@ fn ordering_matches(ordering: std::cmp::Ordering, operator: &str) -> bool {
 mod tests {
     use super::*;
     use crate::construct::PersistenceMode;
+
+    #[test]
+    fn snapshot_reduction_checks_cancellation_during_grouping() {
+        let posit = Arc::new(Posit::new(
+            10,
+            Arc::new(AppearanceSet::new(Vec::new()).unwrap()),
+            LiteralValue::new("1", LiteralFamily::Integer).unwrap(),
+            Time::new_year_from("2024").unwrap(),
+        ));
+        let candidates = vec![
+            StructuralMatch {
+                posit,
+                binding: Binding::default()
+            };
+            10
+        ];
+        let mut checks = 0;
+        let result = maximal(candidates, || {
+            checks += 1;
+            if checks == 4 {
+                Err(DatabaseError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+        assert!(matches!(result, Err(DatabaseError::Cancelled)));
+        assert_eq!(checks, 4);
+    }
 
     fn pattern(thing: ThingSlot, role: RoleSlot) -> PositPattern {
         PositPattern {
