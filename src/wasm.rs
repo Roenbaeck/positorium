@@ -10,6 +10,14 @@ use wasm_bindgen::prelude::*;
 
 pub const WASM_INTERFACE_VERSION: &str = "1";
 
+#[derive(Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct WasmQueryOptions {
+    parameters: HashMap<String, ExecutionParameter>,
+    query_limits: crate::traqula::QueryLimits,
+    max_rows_per_search: Option<usize>,
+}
+
 #[derive(serde::Serialize)]
 struct WasmQueryResponse {
     interface_version: &'static str,
@@ -84,6 +92,33 @@ impl WasmEngine {
             script,
             ExecutionOptions {
                 parameters,
+                ..ExecutionOptions::default()
+            },
+        )
+    }
+
+    /// Execute with typed parameters and explicit query work/workspace budgets.
+    pub fn execute_with_query_options(
+        &self,
+        script: &str,
+        options: JsValue,
+    ) -> Result<JsValue, JsValue> {
+        let options: WasmQueryOptions = if options.is_undefined() || options.is_null() {
+            WasmQueryOptions::default()
+        } else {
+            // Struct deserialization reads JS object properties and can silently
+            // default fields supplied in a Map. Decode maps/objects first so
+            // nested limits and unknown-field validation cannot be bypassed.
+            let value: serde_json::Value = serde_wasm_bindgen::from_value(options)
+                .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            serde_json::from_value(value).map_err(|e| JsValue::from_str(&e.to_string()))?
+        };
+        self.execute_with_options(
+            script,
+            ExecutionOptions {
+                parameters: options.parameters,
+                query_limits: options.query_limits,
+                max_rows_per_search: options.max_rows_per_search,
                 ..ExecutionOptions::default()
             },
         )
@@ -208,6 +243,54 @@ mod tests {
             assert_eq!(
                 set["rows"][0][0]["text"],
                 if order.is_empty() { "2" } else { "1" }
+            );
+        }
+    }
+
+    #[wasm_bindgen_test]
+    fn wasm_query_budgets_return_errors_without_running_fallback() {
+        let engine = WasmEngine::new().unwrap();
+        engine.execute("add role value;").unwrap();
+        for (limits, resource) in [
+            (
+                serde_json::json!({ "max_work_units": 0 }),
+                "query work units",
+            ),
+            (
+                serde_json::json!({ "max_memory_bytes": 1 }),
+                "query memory bytes",
+            ),
+        ] {
+            for as_object in [false, true] {
+                let options = serde::Serialize::serialize(
+                    &serde_json::json!({ "query_limits": limits }),
+                    &serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(as_object),
+                )
+                .unwrap();
+                let error = engine
+            .execute_with_query_options(
+                "search [{(?x, value)}, *, *] return ?x or add posit [{(+x, value)}, 1, '2024'];",
+                options,
+            )
+            .unwrap_err();
+                assert!(error.as_string().unwrap().contains(resource));
+            }
+        }
+        let result = engine
+            .execute("search [{(*, value)}, ?v, *] return ?v;")
+            .unwrap();
+        let result: serde_json::Value = serde_wasm_bindgen::from_value(result).unwrap();
+        assert_eq!(result["result_sets"][0]["row_count"], 0);
+        for invalid in [
+            serde_json::json!({ "query_limits": { "max_work_unit": 1 } }),
+            serde_json::json!({ "query_limits": { "max_work_units": -1 } }),
+            serde_json::json!({ "query_limit": {} }),
+        ] {
+            let options = serde_wasm_bindgen::to_value(&invalid).unwrap();
+            assert!(
+                engine
+                    .execute_with_query_options("add role invalid;", options)
+                    .is_err()
             );
         }
     }

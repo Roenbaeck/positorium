@@ -48,7 +48,7 @@ jobs:
           - os: ubuntu-latest
             label: linux-x86_64
             archive: tar
-          - os: macos-14
+          - os: macos-15
             label: macos-aarch64
             archive: tar
           - os: windows-latest
@@ -58,7 +58,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build release binaries
-        run: cargo build --release --all-features --bins --locked
+        # Python is distributed as a wheel; native archives must not link libpython.
+        run: cargo build --release --no-default-features --features cli,server,persistence --bins --locked
       - name: Archive Unix binaries
         if: matrix.archive == 'tar'
         shell: bash
@@ -184,5 +185,4 @@ jobs:
           if [[ "$GITHUB_REF_NAME" == *-* ]]; then prerelease=(--prerelease); fi
           notes_file="docs/releases/${GITHUB_REF_NAME}.md"
           test -f "$notes_file"
-          notes="$(cat "$notes_file")"
-          gh release create "$GITHUB_REF_NAME" artifacts/* --verify-tag --generate-notes --notes "$notes" --title "$GITHUB_REF_NAME" "${prerelease[@]}"
+          gh release create "$GITHUB_REF_NAME" artifacts/* --verify-tag --generate-notes --notes-file "$notes_file" --title "$GITHUB_REF_NAME" "${prerelease[@]}"

@@ -28,6 +28,8 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 pub const MAX_TIMEOUT: Duration = Duration::from_secs(30);
 pub const DEFAULT_MAX_COMMANDS: usize = 1_000;
 pub const DEFAULT_MAX_ROWS_PER_SEARCH: usize = 100_000;
+pub const DEFAULT_MAX_QUERY_WORK_UNITS: u64 = 20_000_000;
+pub const DEFAULT_MAX_QUERY_MEMORY_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
@@ -35,6 +37,8 @@ pub struct ServerConfig {
     pub default_timeout: Duration,
     pub max_commands: usize,
     pub max_rows_per_search: usize,
+    pub max_query_work_units: u64,
+    pub max_query_memory_bytes: u64,
     allowed_origins: Vec<HeaderValue>,
 }
 
@@ -45,6 +49,8 @@ impl Default for ServerConfig {
             default_timeout: DEFAULT_TIMEOUT,
             max_commands: DEFAULT_MAX_COMMANDS,
             max_rows_per_search: DEFAULT_MAX_ROWS_PER_SEARCH,
+            max_query_work_units: DEFAULT_MAX_QUERY_WORK_UNITS,
+            max_query_memory_bytes: DEFAULT_MAX_QUERY_MEMORY_BYTES,
             allowed_origins: Vec::new(),
         }
     }
@@ -52,6 +58,15 @@ impl Default for ServerConfig {
 
 impl ServerConfig {
     pub fn validate(&self) -> Result<(), DatabaseError> {
+        if self.max_query_work_units == 0
+            || self.max_query_work_units > DEFAULT_MAX_QUERY_WORK_UNITS
+            || self.max_query_memory_bytes == 0
+            || self.max_query_memory_bytes > DEFAULT_MAX_QUERY_MEMORY_BYTES
+        {
+            return Err(DatabaseError::Config(
+                "HTTP query budgets must be positive and no larger than the built-in caps".into(),
+            ));
+        }
         if self.request_body_bytes == 0 || self.request_body_bytes > MAX_REQUEST_BODY_BYTES {
             return Err(DatabaseError::Config(format!(
                 "HTTP request body limit must be between 1 and {MAX_REQUEST_BODY_BYTES} bytes"
@@ -137,6 +152,8 @@ pub struct QueryRequest {
     pub timeout_ms: Option<u64>,
     #[serde(default)]
     pub parameters: std::collections::HashMap<String, ExecutionParameter>,
+    #[serde(default)]
+    pub query_limits: crate::traqula::QueryLimits,
 }
 
 #[derive(Debug, Deserialize)]
@@ -366,6 +383,22 @@ async fn query(
         timeout: Some(timeout),
         cancellation: Some(cancellation.clone()),
         max_rows_per_search: Some(state.config.max_rows_per_search),
+        query_limits: crate::traqula::QueryLimits {
+            max_work_units: Some(
+                request
+                    .query_limits
+                    .max_work_units
+                    .unwrap_or(state.config.max_query_work_units)
+                    .min(state.config.max_query_work_units),
+            ),
+            max_memory_bytes: Some(
+                request
+                    .query_limits
+                    .max_memory_bytes
+                    .unwrap_or(state.config.max_query_memory_bytes)
+                    .min(state.config.max_query_memory_bytes),
+            ),
+        },
         parameters: request.parameters,
         ..ExecutionOptions::default()
     };
@@ -786,6 +819,28 @@ mod tests {
             ..ServerConfig::default()
         };
         assert!(too_slow.validate().is_err());
+        for (work, memory) in [
+            (0, DEFAULT_MAX_QUERY_MEMORY_BYTES),
+            (
+                DEFAULT_MAX_QUERY_WORK_UNITS + 1,
+                DEFAULT_MAX_QUERY_MEMORY_BYTES,
+            ),
+            (DEFAULT_MAX_QUERY_WORK_UNITS, 0),
+            (
+                DEFAULT_MAX_QUERY_WORK_UNITS,
+                DEFAULT_MAX_QUERY_MEMORY_BYTES + 1,
+            ),
+        ] {
+            assert!(
+                ServerConfig {
+                    max_query_work_units: work,
+                    max_query_memory_bytes: memory,
+                    ..ServerConfig::default()
+                }
+                .validate()
+                .is_err()
+            );
+        }
     }
 
     #[test]
@@ -818,7 +873,7 @@ mod tests {
             let response = query(State(state.clone()), Ok(Json(QueryRequest {
                 traqula_version: TRAQULA_VERSION,
                 script: "explain search [{(?e, name)}, *, *] return ?e or add posit [{(+e, name)}, \"Ada\", '2024'];".into(),
-                stream, timeout_ms: None, parameters: std::collections::HashMap::new(),
+                stream, timeout_ms: None, parameters: std::collections::HashMap::new(), query_limits: crate::QueryLimits::default(),
             }))).await;
             assert_eq!(response.status(), StatusCode::OK);
             if stream {
@@ -869,6 +924,7 @@ mod tests {
                     stream: false,
                     timeout_ms: None,
                     parameters: std::collections::HashMap::new(),
+                    query_limits: crate::QueryLimits::default(),
                 })),
             )
             .await;
@@ -884,6 +940,7 @@ mod tests {
                     stream: true,
                     timeout_ms: None,
                     parameters: std::collections::HashMap::new(),
+                    query_limits: crate::QueryLimits::default(),
                 })),
             )
             .await;
@@ -905,6 +962,77 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn query_budgets_fail_closed_in_http_and_sse_and_cannot_raise_server_caps() {
+        let database = Arc::new(Database::new(PersistenceMode::InMemory).unwrap());
+        crate::Engine::new(&database)
+            .execute("add role value;")
+            .unwrap();
+        for (work, memory, resource) in [
+            (1, DEFAULT_MAX_QUERY_MEMORY_BYTES, "query work units"),
+            (DEFAULT_MAX_QUERY_WORK_UNITS, 1, "query memory bytes"),
+        ] {
+            let state = ServerState {
+                interface: Arc::new(QueryInterface::new(Arc::clone(&database))),
+                config: ServerConfig {
+                    max_query_work_units: work,
+                    max_query_memory_bytes: memory,
+                    ..ServerConfig::default()
+                },
+            };
+            for stream in [false, true] {
+                for query_limits in [
+                    crate::QueryLimits::default(),
+                    crate::QueryLimits {
+                        max_work_units: Some(u64::MAX),
+                        max_memory_bytes: Some(u64::MAX),
+                    },
+                ] {
+                    let response = query(
+                        State(state.clone()),
+                        Ok(Json(QueryRequest {
+                            traqula_version: TRAQULA_VERSION,
+                            script: "search [{(?x, value)}, *, *] return ?x \
+                                or add posit [{(+x, value)}, 1, '2024'];"
+                                .into(),
+                            stream,
+                            timeout_ms: None,
+                            parameters: std::collections::HashMap::new(),
+                            query_limits,
+                        })),
+                    )
+                    .await;
+                    if stream {
+                        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                            .await
+                            .unwrap();
+                        let events = String::from_utf8(body.to_vec()).unwrap();
+                        assert!(events.contains(resource));
+                        assert!(events.contains(r#""event":"error""#));
+                        assert!(events.contains(r#""event":"end","status":"error""#));
+                        assert!(!events.contains(r#""row_count""#));
+                        assert!(!events.contains(r#""event":"row""#));
+                    } else {
+                        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+                        assert!(
+                            json_body(response).await["error"]
+                                .as_str()
+                                .unwrap()
+                                .contains(resource)
+                        );
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            crate::Engine::new(&database)
+                .execute_collect("search [*, ?v, *] return ?v;")
+                .unwrap()
+                .row_count,
+            0
+        );
+    }
+
+    #[tokio::test]
     async fn validation_errors_keep_their_http_status() {
         let state = ServerState {
             interface: Arc::new(QueryInterface::new(Arc::new(
@@ -920,6 +1048,7 @@ mod tests {
                 stream: false,
                 timeout_ms: None,
                 parameters: std::collections::HashMap::new(),
+                query_limits: crate::QueryLimits::default(),
             })),
         )
         .await;
@@ -941,6 +1070,7 @@ mod tests {
                 stream: false,
                 timeout_ms: None,
                 parameters: std::collections::HashMap::new(),
+                query_limits: crate::QueryLimits::default(),
             })),
         )
         .await;
@@ -966,6 +1096,7 @@ mod tests {
                 stream: false,
                 timeout_ms: None,
                 parameters: std::collections::HashMap::new(),
+                query_limits: crate::QueryLimits::default(),
             })),
         )
         .await;
@@ -979,6 +1110,7 @@ mod tests {
                 stream: false,
                 timeout_ms: None,
                 parameters: std::collections::HashMap::new(),
+                query_limits: crate::QueryLimits::default(),
             })),
         )
         .await;
@@ -1000,6 +1132,7 @@ mod tests {
                 stream: false,
                 timeout_ms: None,
                 parameters: std::collections::HashMap::new(),
+                query_limits: crate::QueryLimits::default(),
             })),
         )
         .await;
@@ -1042,6 +1175,7 @@ mod tests {
                     stream: false,
                     timeout_ms: None,
                     parameters: std::collections::HashMap::new(),
+                    query_limits: crate::QueryLimits::default(),
                 })),
             )
             .await;
@@ -1064,6 +1198,7 @@ mod tests {
                     stream: true,
                     timeout_ms: None,
                     parameters: std::collections::HashMap::new(),
+                    query_limits: crate::QueryLimits::default(),
                 })),
             )
             .await;
@@ -1116,6 +1251,7 @@ mod tests {
                 stream: false,
                 timeout_ms: None,
                 parameters: std::collections::HashMap::new(),
+                query_limits: crate::QueryLimits::default(),
             })),
         )
         .await;
@@ -1131,6 +1267,7 @@ mod tests {
                 stream: true,
                 timeout_ms: None,
                 parameters: std::collections::HashMap::new(),
+                query_limits: crate::QueryLimits::default(),
             })),
         )
         .await;

@@ -26,6 +26,7 @@ pub(super) fn execute(
         identity_bindings: HashMap::default(),
         has_return,
         sink_stopped: false,
+        _identity_memory: Reservation::default(),
     };
     let sorted = !query.order.is_empty();
     if has_return && !sorted {
@@ -36,9 +37,10 @@ pub(super) fn execute(
         }
     }
     let mut seen = BTreeSet::new();
-    let mut ordering = OrderedRows::new(&query.order, query.limit);
+    let mut seen_memory = execution.workspace(|| 0)?;
+    let mut ordering = OrderedRows::new(&query.order, query.limit, execution);
     let mut emit = |mut binding: Binding| {
-        execution.check()?;
+        execution.work(1)?;
         // Union-private bindings cannot become correlations in an absence block.
         binding.0.retain(|name, _| query.domains.contains_key(name));
         for block in &query.not_exists {
@@ -55,6 +57,7 @@ pub(super) fn execute(
         if !has_return {
             return Ok(SinkFlow::Continue);
         }
+        let _projection = execution.workspace(|| projection_bytes(&binding, &query.returns))?;
         let row = query
             .returns
             .iter()
@@ -65,8 +68,12 @@ pub(super) fn execute(
                     .ok_or_else(|| DatabaseError::UnknownVariable(name.clone()))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        if query.distinct && !seen.insert(row.clone()) {
-            return Ok(SinkFlow::Continue);
+        if query.distinct {
+            if seen.contains(&row) {
+                return Ok(SinkFlow::Continue);
+            }
+            seen_memory.grow(row.heap_bytes().saturating_add(96))?;
+            seen.insert(row.clone());
         }
         if sorted {
             ordering.push(binding, row)?;
@@ -91,7 +98,7 @@ pub(super) fn execute(
     if has_return && sorted {
         // Every sort key has been validated, including rows discarded by top-k.
         execution.check()?;
-        let rows = ordering.finish();
+        let (rows, _ordering_memory) = ordering.finish()?;
         *return_columns = Some(query.returns.clone());
         if let SinkFlow::Stop = sink.on_meta(&query.returns) {
             outcome.sink_stopped = true;
@@ -116,12 +123,18 @@ fn visit_branch(
     execution: &ExecutionContext,
     visitor: &mut Visitor<'_>,
 ) -> Result<SinkFlow, DatabaseError> {
-    execution.check()?;
+    execution.work(1)?;
+    let _input = execution.workspace(|| {
+        input
+            .heap_bytes()
+            .saturating_add(size_of::<Binding>() as u64)
+    })?;
     let Some(pattern) = branch.patterns.get(index) else {
         return visitor(input.clone());
     };
     visit_pattern(database, pattern, input, execution, &mut |binding| {
         for predicate in &pattern.predicates {
+            execution.work(1)?;
             if !evaluate_predicate(predicate, &binding)? {
                 return Ok(SinkFlow::Continue);
             }
@@ -156,10 +169,10 @@ fn visit_pattern(
         }
         return Ok(SinkFlow::Continue);
     }
-    let identities = candidate_identities(database, pattern, input, &planned.access)?;
+    let identities = candidate_identities(database, pattern, input, &planned.access, execution)?;
     let keeper = database.posit_keeper();
     for identity in identities {
-        execution.check()?;
+        execution.work(1)?;
         #[cfg(test)]
         SCANNED.with(|count| count.set(count.get() + 1));
         // Release the lock before structural matching or invoking downstream
@@ -173,6 +186,12 @@ fn visit_pattern(
                     "posit index contains identity {identity} without a literal posit"
                 ))
             })?;
+        let _fields = execution.workspace(|| match &pattern.value {
+            ValueSlot::Variable(_) | ValueSlot::LegacyVariable(_) => {
+                posit.value().token().len() as u64 + 128
+            }
+            _ => 128,
+        })?;
         let flow = visit_appearance_set(
             &pattern.appearances,
             &posit.appearance_set(),
@@ -198,6 +217,18 @@ struct RankedRow<'a> {
     row: Vec<ResultCell>,
     ordinal: usize,
     order: &'a [OrderItem],
+    key_payload: u64,
+}
+
+impl Workspace for RankedRow<'_> {
+    fn heap_bytes(&self) -> u64 {
+        self.row
+            .heap_bytes()
+            .saturating_add(self.key_payload)
+            .saturating_add(
+                (self.keys.capacity() as u64).saturating_mul(size_of::<SortKey>() as u64),
+            )
+    }
 }
 
 impl Ord for RankedRow<'_> {
@@ -245,11 +276,14 @@ struct OrderedRows<'a> {
     first_families: Vec<Option<LiteralFamily>>,
     ordinal: usize,
     heap: BinaryHeap<RankedRow<'a>>,
-    all: Vec<RankedRow<'a>>,
+    all: BudgetVec<RankedRow<'a>>,
+    heap_memory: Reservation,
+    heap_payload: u64,
+    execution: &'a ExecutionContext,
 }
 
 impl<'a> OrderedRows<'a> {
-    fn new(order: &'a [OrderItem], limit: Option<usize>) -> Self {
+    fn new(order: &'a [OrderItem], limit: Option<usize>, execution: &'a ExecutionContext) -> Self {
         Self {
             order,
             // Keep a lookahead row for `limited`; usize::MAX needs no bound.
@@ -257,12 +291,32 @@ impl<'a> OrderedRows<'a> {
             first_families: vec![None; order.len()],
             ordinal: 0,
             heap: BinaryHeap::new(),
-            all: Vec::new(),
+            all: BudgetVec::new(&execution.budget),
+            heap_memory: execution.budget.memory(0).unwrap(),
+            heap_payload: 0,
+            execution,
         }
     }
 
     fn push(&mut self, binding: Binding, row: Vec<ResultCell>) -> Result<(), DatabaseError> {
+        self.execution.work(self.order.len() as u64)?;
+        let key_workspace = if self.execution.budget.tracks_memory() {
+            self.order
+                .iter()
+                .map(|key| {
+                    binding
+                        .get(&key.variable)
+                        .map_or(0, Workspace::heap_bytes)
+                        .saturating_mul(4)
+                        .saturating_add(256)
+                })
+                .fold(0, u64::saturating_add)
+        } else {
+            0
+        };
+        let _keys = self.execution.workspace(|| key_workspace)?;
         let mut keys = Vec::with_capacity(self.order.len());
+        let mut key_payload = 0u64;
         for (item, first) in self.order.iter().zip(&mut self.first_families) {
             let value = binding
                 .get(&item.variable)
@@ -280,8 +334,14 @@ impl<'a> OrderedRows<'a> {
                     *first = Some(family);
                 }
                 keys.push(SortKey::Literal(key));
+                key_payload = key_payload.saturating_add(
+                    (literal.token().len() as u64)
+                        .saturating_mul(4)
+                        .saturating_add(64),
+                );
             } else {
                 keys.push(SortKey::Value(value.clone()));
+                key_payload = key_payload.saturating_add(value.heap_bytes());
             }
         }
         let ranked = RankedRow {
@@ -289,26 +349,79 @@ impl<'a> OrderedRows<'a> {
             row,
             ordinal: self.ordinal,
             order: self.order,
+            key_payload,
         };
-        self.ordinal += 1;
+        self.ordinal = self
+            .ordinal
+            .checked_add(1)
+            .ok_or(DatabaseError::ResourceLimit {
+                resource: "ordered query rows",
+                limit: usize::MAX as u64,
+            })?;
         if let Some(capacity) = self.capacity {
+            self.execution.work(
+                2 * (usize::BITS - self.heap.len().leading_zeros()) as u64
+                    * self.order.len() as u64
+                    + 1,
+            )?;
             if self.heap.len() < capacity {
+                if self.heap_memory.active() {
+                    let reserved = if self.heap.len() == self.heap.capacity() {
+                        self.heap.capacity().saturating_mul(2).max(4)
+                    } else {
+                        self.heap.capacity()
+                    };
+                    self.heap_payload = self.heap_payload.saturating_add(ranked.heap_bytes());
+                    self.heap_memory.resize(
+                        (reserved as u64)
+                            .saturating_mul(size_of::<RankedRow>() as u64)
+                            .saturating_add(self.heap_payload),
+                    )?;
+                    if reserved > self.heap.capacity() {
+                        self.heap
+                            .try_reserve_exact(reserved - self.heap.len())
+                            .map_err(|_| {
+                                DatabaseError::Execution("query workspace allocation failed".into())
+                            })?;
+                    }
+                    self.heap_memory.resize(
+                        (self.heap.capacity() as u64)
+                            .saturating_mul(size_of::<RankedRow>() as u64)
+                            .saturating_add(self.heap_payload),
+                    )?;
+                }
                 self.heap.push(ranked);
             } else if ranked < *self.heap.peek().expect("top-k has a lookahead slot") {
+                if self.heap_memory.active() {
+                    self.heap_payload -= self.heap.peek().unwrap().heap_bytes();
+                    self.heap_payload = self.heap_payload.saturating_add(ranked.heap_bytes());
+                    self.heap_memory.resize(
+                        (self.heap.capacity() as u64)
+                            .saturating_mul(size_of::<RankedRow>() as u64)
+                            .saturating_add(self.heap_payload),
+                    )?;
+                }
                 *self.heap.peek_mut().unwrap() = ranked;
             }
         } else {
-            self.all.push(ranked);
+            self.all.push(ranked)?;
         }
         Ok(())
     }
 
-    fn finish(mut self) -> Vec<RankedRow<'a>> {
+    fn finish(mut self) -> Result<(Vec<RankedRow<'a>>, Reservation), DatabaseError> {
         if self.capacity.is_some() {
-            self.heap.into_sorted_vec()
+            self.execution
+                .work(sort_work(self.heap.len(), self.order.len()))?;
+            Ok((self.heap.into_sorted_vec(), self.heap_memory))
         } else {
-            self.all.sort_unstable();
-            self.all
+            self.execution
+                .work(sort_work(self.all.len(), self.order.len()))?;
+            let _scratch = self.execution.workspace(|| {
+                (self.all.len() as u64).saturating_mul(size_of::<RankedRow>() as u64)
+            })?;
+            self.all.sort_by(Ord::cmp);
+            Ok(self.all.into_parts())
         }
     }
 }
@@ -440,7 +553,8 @@ mod tests {
             variable: "v".into(),
             descending: false,
         }];
-        let mut rows = OrderedRows::new(&order, Some(3));
+        let execution = ExecutionOptions::default().resolve("").unwrap();
+        let mut rows = OrderedRows::new(&order, Some(3), &execution);
         for i in 0..100 {
             let mut binding = Binding::default();
             binding
@@ -466,6 +580,6 @@ mod tests {
             rows.push(incompatible, Vec::new()),
             Err(DatabaseError::Comparison(_))
         ));
-        assert_eq!(rows.finish().len(), 4);
+        assert_eq!(rows.finish().unwrap().0.len(), 4);
     }
 }

@@ -8,9 +8,25 @@ import positorium
 
 
 class PositoriumPythonTests(unittest.TestCase):
+    def test_query_budgets_fail_without_fallback_and_reset_per_execution(self):
+        with positorium.Database.memory() as database:
+            database.execute("add role value;")
+            script = (
+                "search [{(?x, value)}, *, *] return ?x "
+                "or add posit [{(+x, value)}, 1, '2024'];"
+            )
+            for limit in ({"max_work_units": 0}, {"max_memory_bytes": 1}):
+                with self.assertRaises(positorium.ResourceLimitError):
+                    database.execute(script, **limit)
+                self.assertEqual(database.execute_one(
+                    "search [{(*, value)}, ?v, *] return ?v;"
+                ).row_count, 0)
+            result = database.execute_one(script, max_work_units=1000, max_memory_bytes=65536)
+            self.assertEqual(result.row_count, 1)
+
     def test_distribution_and_contract_versions_match(self):
-        self.assertEqual(positorium.__version__, "0.1.4b3")
-        self.assertEqual(positorium.RUST_PACKAGE_VERSION, "0.1.4-beta.3")
+        self.assertEqual(positorium.__version__, "0.2.0b3")
+        self.assertEqual(positorium.RUST_PACKAGE_VERSION, "0.2.0-beta.3")
         self.assertEqual(positorium.PYTHON_INTERFACE_VERSION, 1)
         self.assertEqual(positorium.TRAQULA_VERSION, 1)
         self.assertEqual(positorium.TERRAIN_VERSION, 1)

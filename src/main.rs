@@ -124,6 +124,12 @@ async fn real_main() -> Result<()> {
     if let Some(value) = setting(&settings_lookup, "http_default_timeout_ms")? {
         server_config.default_timeout = std::time::Duration::from_millis(value);
     }
+    if let Some(value) = setting(&settings_lookup, "http_max_query_work_units")? {
+        server_config.max_query_work_units = value;
+    }
+    if let Some(value) = setting(&settings_lookup, "http_max_query_memory_bytes")? {
+        server_config.max_query_memory_bytes = value;
+    }
     if let Some(origins) = settings_lookup.get("cors_allowed_origins") {
         for origin in origins.split(',').map(str::trim).filter(|s| !s.is_empty()) {
             server_config = server_config.allow_loopback_origin(origin)?;

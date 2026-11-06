@@ -436,6 +436,67 @@ not a reusable prepared-query handle.
 
 `explain` is contextual and does not reserve an existing mutation-variable name.
 
+## Execution budgets
+
+`ExecutionOptions::query_limits` accepts `QueryLimits { max_work_units,
+max_memory_bytes }`. Both fields are optional unsigned 64-bit integers. Rust,
+Python, and WASM default to unlimited query budgets; zero is a valid cap. HTTP
+applies server caps even when the request omits these fields.
+
+```rust
+use positorium::{ExecutionOptions, QueryLimits};
+
+let options = ExecutionOptions {
+    query_limits: QueryLimits {
+        max_work_units: Some(1_000_000),
+        max_memory_bytes: Some(64 * 1024 * 1024),
+    },
+    ..ExecutionOptions::default()
+};
+// Pass options to Engine::execute_collect_with_options or a streaming method.
+```
+
+Work units accumulate across all searches in one script. They charge candidate
+visits, structural matching attempts, join and filter steps, temporal reduction,
+projection, and batched index/sort work. Bitmap operations are charged from
+their input cardinalities before running; comparison sorts prepay
+`rows * ceil(log2(rows)) * key_count`. These are logical units, not elapsed time
+or exact CPU comparisons. Counts depend on the plan and implementation and may
+change between releases. Use a deadline as well when wall-clock time matters.
+
+The memory cap bounds **simultaneously reserved query workspace**. Accounting
+includes owned bindings and literal tokens, candidate postings and full-scan
+identities, materialized relations, distinct seen-state, ordering buffers,
+temporal scratch, fallback identity sets, and retained effective-cut cache
+entries. Reservations are released as operators finish, so memory can be reused
+by the next search. Vector capacity and owned payload are charged explicitly;
+trees, hash sets, bitmaps, and temporal scratch use conservative per-entry
+allowances. This is an accounting model, not a measurement or hard limit on
+process RSS or every allocator request.
+
+Shared database objects, parsing/planning, mutation staging, and caller-owned
+output buffers are outside these query budgets. Built-in collecting APIs also
+retain their output outside the workspace cap. Combine budgets with result row
+limits or streaming when output could be large. `EXPLAIN` does not execute its
+query and does not consume query work or workspace budgets.
+
+Exhaustion returns `DatabaseError::ResourceLimit`, identifying `query work units`
+or `query memory bytes` and the configured cap. It aborts the script: a failed
+search never triggers `or add` or subsequent mutations. Earlier successful
+mutation commands remain committed. A stream may already have emitted metadata
+or rows before a budget fails; those rows are a partial result, not successful
+completion. A new execution starts with fresh budgets.
+
+HTTP requests use a `query_limits` object with `max_work_units` and
+`max_memory_bytes`; clients may only lower the configured server caps. See
+[operational limits](../guides/OPERATIONS.md#trusted-interface-and-resource-limits).
+WASM callers use `engine.execute_with_query_options(script, { query_limits:
+{ max_work_units: 1000000, max_memory_bytes: 67108864 } })`; the same options
+object also accepts `parameters` and `max_rows_per_search`. Existing WASM
+execution methods retain their defaults. Python exposes `max_work_units` and
+`max_memory_bytes` as execution keywords; see
+[execution controls](../guides/PYTHON.md#execution-controls).
+
 ## Typed parameters
 
 `$name` denotes a value supplied separately by the Rust, HTTP, or WASM API.

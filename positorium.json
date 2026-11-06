@@ -1,6 +1,8 @@
 {
     "listen_interface": "127.0.0.1",
     "listen_port": 8080,
+    "http_max_query_work_units": 20000000,
+    "http_max_query_memory_bytes": 268435456,
     "database_file_and_path": "positorium.store",
     "enable_persistence": true,
     "recreate_database_on_startup": false,

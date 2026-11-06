@@ -12,8 +12,8 @@ It is an experimental embedded evidence database with an immutable posit model,
 the Traqula query language, an append-only native store, Python bindings, a
 trusted-local HTTP service, and an in-browser WASM testbed.
 
-The repository is preparing `0.1.4-beta.3`; see the
-[milestone notes](docs/releases/v0.1.4-beta.3.md). Tagged releases are available
+The current version is `0.2.0-beta.3`; see the
+[release notes](docs/releases/v0.2.0-beta.3.md). Tagged releases are available
 on the [releases page](https://github.com/Roenbaeck/positorium/releases).
 Beta means the documented language, storage, transfer, and interface versions
 have explicit compatibility rules; it does not mean an Internet-facing or
@@ -26,14 +26,14 @@ production-ready service.
 ## Python
 
 The source tree contains an embedded Python package for CPython 3.9+ on Linux,
-macOS, and Windows. It needs no separate Positorium server. Until beta.2 is
-published to PyPI, install it from a source checkout with Rust available:
+macOS, and Windows. It needs no separate Positorium server. Install from a source
+checkout with Rust available:
 
 ```sh
 python -m pip install .
 ```
 
-After beta.2 is published, the prerelease install will be:
+Or allow prereleases when installing from PyPI:
 
 ```sh
 python -m pip install --pre positorium
@@ -115,6 +115,8 @@ checks, backup, Query Studio setup, and troubleshooting, follow
 - Lossless literal tokens and precision-aware temporal relations
 - Traqula joins, union, safe `not exists`, snapshots, typed predicates,
   `in effect`, parameters, distinctness, ordering, and limits
+- Typed execution plans and `EXPLAIN`, shared temporal reduction, incremental
+  queries, bounded top-k ordering, and explicit work/workspace budgets
 - Atomic durable mutation batches with deterministic replay and recovery
 - Inspection, physical backup, logical export/import, and identity remapping
 - Structured Rust, buffered HTTP, SSE, and WASM results

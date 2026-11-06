@@ -158,8 +158,19 @@ pub(crate) fn resolve(
     limits: EffectLimits,
     mut check: impl FnMut() -> Result<(), DatabaseError>,
 ) -> Result<EffectiveSlice, DatabaseError> {
-    check()?;
-    let assertion_identities = assertion_candidates(database)?;
+    resolve_budgeted(database, cut, limits, |_| check(), |_| Ok(()))
+}
+
+pub(crate) fn resolve_budgeted(
+    database: &Database,
+    cut: EffectCut,
+    limits: EffectLimits,
+    mut check: impl FnMut(u64) -> Result<(), DatabaseError>,
+    mut reserve: impl FnMut(u64) -> Result<(), DatabaseError>,
+) -> Result<EffectiveSlice, DatabaseError> {
+    check(1)?;
+    let (assertion_identities, mut workspace) =
+        assertion_candidates(database, &mut check, &mut reserve)?;
     let mut counters = EffectCounters {
         assertion_candidates: assertion_identities.len(),
         ..EffectCounters::default()
@@ -177,7 +188,7 @@ pub(crate) fn resolve(
     let mut eligible = Vec::new();
 
     for identity in assertion_identities {
-        check()?;
+        check(1)?;
         let assertion = keeper.posit::<LiteralValue>(identity).ok_or_else(|| {
             DatabaseError::Invariant(format!(
                 "assertion index contains identity {identity} without a literal posit"
@@ -226,6 +237,12 @@ pub(crate) fn resolve(
         if certainty_percent == 0 {
             counters.retractions += 1;
         }
+        // Per eligible row: evidence vectors, worst-case group/frontier state,
+        // retraction maps, stable-sort scratch, and copied literal group keys.
+        workspace = workspace
+            .saturating_add(1536)
+            .saturating_add((target.value().token().len() as u64).saturating_mul(2));
+        reserve(workspace)?;
         eligible.push(EffectiveAssertion {
             assertion,
             target,
@@ -236,7 +253,7 @@ pub(crate) fn resolve(
     drop(keeper);
 
     let mut work = |work| {
-        check()?;
+        check(1)?;
         if work == Work::Comparison {
             count_comparison(&mut counters, limits)?;
         }
@@ -293,7 +310,15 @@ pub(crate) fn resolve(
         |row| row.assertion.time(),
         &mut work,
     )?;
-    check()?;
+    let rows = effective.len();
+    let sort_units = if rows < 2 {
+        0
+    } else {
+        (rows as u64)
+            .saturating_mul((usize::BITS - (rows - 1).leading_zeros()) as u64)
+            .saturating_mul(7)
+    };
+    check(sort_units)?;
     effective.sort_by(|left, right| {
         (
             left.positor,
@@ -314,7 +339,7 @@ pub(crate) fn resolve(
                 right.assertion.posit(),
             ))
     });
-    check()?;
+    check(1)?;
     counters.effective_assertions = effective.len() as u64;
     Ok(EffectiveSlice {
         cut,
@@ -323,17 +348,26 @@ pub(crate) fn resolve(
     })
 }
 
-fn assertion_candidates(database: &Database) -> Result<RoaringTreemap, DatabaseError> {
+fn assertion_candidates(
+    database: &Database,
+    check: &mut impl FnMut(u64) -> Result<(), DatabaseError>,
+    reserve: &mut impl FnMut(u64) -> Result<(), DatabaseError>,
+) -> Result<(RoaringTreemap, u64), DatabaseError> {
     let lookup = database.role_to_posit_thing_lookup();
     let lookup = lookup
         .lock()
         .map_err(|error| DatabaseError::Lock(error.to_string()))?;
-    let mut candidates = lookup.lookup(&POSIT_ROLE_ID).cloned().unwrap_or_default();
-    candidates &= lookup
-        .lookup(&ASCERTAINS_ROLE_ID)
-        .cloned()
-        .unwrap_or_default();
-    Ok(candidates)
+    let targets = lookup.lookup(&POSIT_ROLE_ID);
+    let sources = lookup.lookup(&ASCERTAINS_ROLE_ID);
+    let count = targets
+        .map_or(0, RoaringTreemap::len)
+        .saturating_add(sources.map_or(0, RoaringTreemap::len));
+    check(count.saturating_mul(2))?;
+    let workspace = count.saturating_mul(512).saturating_add(256);
+    reserve(workspace)?;
+    let mut candidates = targets.cloned().unwrap_or_default();
+    candidates &= sources.cloned().unwrap_or_default();
+    Ok((candidates, workspace))
 }
 
 fn count_comparison(

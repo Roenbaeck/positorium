@@ -32,6 +32,8 @@ class _Database:
         now: Optional[str] = ...,
         timeout: Optional[float] = ...,
         max_rows: Optional[int] = ...,
+        max_work_units: Optional[int] = ...,
+        max_memory_bytes: Optional[int] = ...,
     ) -> str: ...
     def terrain_json(
         self,

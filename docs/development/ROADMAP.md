@@ -107,8 +107,9 @@ follow-up work.
         - Use the same witness rule for source/target-local retractions. Preserve
             reassertions, equal-time evidence, source-local bags, and work limits.
 - [ ] **Index and bound effective-slice reuse.**
-        - Index resolved effective slices for correlated joins, bound cut-cache
-            growth, and retain all evidence required for retraction and maxima.
+        - Query workspace budgets now cap retained cut-cache growth. Add indexes
+            for correlated joins and eviction/reuse within the cap; retain all
+            evidence required for retraction and maxima.
 - [x] **Benchmark temporal reduction before incremental execution.**
         - Add 45 end-to-end cases at 128, 512, and 2,048 rows: independent sets,
             ordered and skewed histories, equal and overlapping times, latest
@@ -133,9 +134,18 @@ follow-up work.
         - Add 33 before/after cases for full/limited scans, first-row delivery,
             joins, exact filters, distinctness, top-k, absence, and a comparison
             validation control. Record measurements in [BENCHMARKS.md](BENCHMARKS.md).
-- [ ] **Bound remaining work and memory, and improve join representation.**
-        - Add explicit work/memory budgets, hash joins, bounded effective-cut reuse,
-            and incremental validation strategies for currently materialized plans.
+- [x] **Enforce explicit query work and workspace budgets.**
+        - Share cumulative work and live workspace accounting across a script,
+            including scans, joins, distinctness, sorting, temporal reduction,
+            fallback identities, and retained effective cuts. Release reservations
+            as operators finish and fail before fallback or subsequent mutations.
+        - Expose controls in Rust, Python, WASM, and HTTP/SSE; HTTP clients can
+            lower server caps. Document the accounting model and exclusions,
+            and cover exhaustion, exact boundaries, reuse, partial streams, and
+            mutation safety with regression tests.
+- [ ] **Improve join representation and incremental validation.**
+        - Add hash joins, indexed/evicting effective-cut reuse, and incremental
+            validation strategies for currently materialized plans.
         - Use compact binding slots, reuse parsed literal interpretations, and
             replace linear staged-posit duplicate searches with a command-local
             hash index.

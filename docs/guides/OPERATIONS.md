@@ -97,12 +97,44 @@ Defaults and hard boundaries are:
 | Script commands | 1,000 | 1,000 |
 | Execution time | 5 seconds | 30 seconds |
 | Rows per search | 100,000 | 100,000 |
+| Query work units per script | 20,000,000 | 20,000,000 |
+| Live accounted query workspace | 256 MiB | 256 MiB |
 | Complete storage frame | 16 MiB | 16 MiB |
 
 `timeout_ms` may lower the configured deadline but cannot raise it. Buffered and
 SSE responses expose actual row truncation through `limited`. Timeouts and
 cancellation are cooperative and never publish a command that failed before its
 durable commit.
+
+`ServerConfig::max_query_work_units` and `max_query_memory_bytes` can lower the
+built-in query caps. The native server reads the same caps from
+`http_max_query_work_units` and `http_max_query_memory_bytes` in `positorium.json`;
+configured caps must be positive. Requests can lower them further:
+
+```json
+{
+  "traqula_version": 1,
+  "script": "search [*, ?value, *] return ?value limit 100;",
+  "query_limits": {
+    "max_work_units": 1000000,
+    "max_memory_bytes": 67108864
+  }
+}
+```
+
+Omitted or null individual limits use the server cap; larger values are clamped
+to it. Zero is a valid request cap. Work accumulates across searches; workspace
+reservations are released between operators and searches. Workspace accounting
+excludes database storage, parsing/planning, mutation staging, and collected
+output buffers; it does not cap process RSS. See the
+[budget contract](../reference/TRAQULA.md#execution-budgets) for the accounting
+model and exclusions.
+
+Budget exhaustion returns HTTP `413` for buffered requests. An already-open
+SSE response emits an `error` event followed by `end` with `status: "error"`;
+previously delivered rows are partial results. The failed search cannot run its
+`or add` fallback, and later commands do not execute. Earlier committed commands
+are retained.
 
 ## Release artifacts
 

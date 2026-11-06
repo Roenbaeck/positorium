@@ -1,0 +1,933 @@
+{
+  "date": "2026-11-06",
+  "baseline_commit": "e512e5bd155248ac4ae62970f174b01eaf91840b",
+  "baseline": "before-query-budgets",
+  "environment": {
+    "cpu": "Apple M1 Pro",
+    "logical_cpus": 10,
+    "memory_gib": 16,
+    "os": "Darwin 27.2.0 arm64",
+    "rustc": "1.98.0 (88d9e12ae 2026-08-18)",
+    "features": "--no-default-features",
+    "profile": "bench"
+  },
+  "criterion": {
+    "sample_size": 20,
+    "warm_up_seconds": 0.2,
+    "requested_measurement_seconds": 0.5
+  },
+  "enabled_limits": {
+    "max_work_units": 20000000,
+    "max_memory_bytes": 268435456
+  },
+  "notes": [
+    "The baseline copies the incremental executor measurements recorded in INCREMENTAL_BENCHMARK_RESULTS.json; every baseline mean was verified against that report.",
+    "Identical fixtures, queries, row-count checks, and timing settings. Fixtures and assertions are outside timing.",
+    "Disabled and enabled budgets ran sequentially without concurrent compilation or tests; timings include parsing, planning, execution, and result cleanup.",
+    "Mean ratios are indicative, not paired confidence intervals. Each mean includes its own 95% confidence interval.",
+    "Earlier first-row and exact-filter baseline measurements had wider intervals; decreases do not establish an optimization from budget accounting.",
+    "Workspace limits are an accounting model, not allocator or RSS measurements."
+  ],
+  "source_sha256": {
+    "src/traqula.rs": "ef0e0dcd06912d866242d1010d38619958f25a32fa2f015aaf559f05d0103f88",
+    "src/traqula/budget.rs": "0abafeb204140263778e36d1d0c4394013839b51d79349cfd35c56e23b6d4ba7",
+    "src/traqula/query.rs": "73fd5732e5055dce96516a56787eb1a3d82958c1f8a34db8259cd46a6f191026",
+    "src/traqula/query/pipeline.rs": "6c591541f50bdd5395422e3729e352e0028f8e030d92bb6dcc18c61113926dca",
+    "src/traqula/query/plan.rs": "b6d74c4a31f56692d4e0b83465ab9f33178e817e82703d4fda6cebe82a594f8b",
+    "src/effect.rs": "aa0a946947a919b99463949e5ea7b05a1ef985f40e9faca0ce695847723da2a8",
+    "benches/incremental.rs": "37ab0e433c40e72f42487b5386c2cc77f74a600f6ea6741cf054e7a1f7e5e1d4"
+  },
+  "measurements": [
+    {
+      "workload": "anti_join",
+      "rows_per_role": 16,
+      "before": {
+        "mean_ns": 32456.100393895038,
+        "confidence_interval_95_ns": [
+          30693.92923644444,
+          34517.595537482055
+        ]
+      },
+      "budgets_disabled": {
+        "mean_ns": 29647.64080925886,
+        "confidence_interval_95_ns": [
+          29487.018255817373,
+          29801.100387692466
+        ]
+      },
+      "budgets_enabled": {
+        "mean_ns": 31765.034386207553,
+        "confidence_interval_95_ns": [
+          31647.278044586885,
+          31895.87392006966
+        ]
+      },
+      "disabled_relative_change": -0.08653102346098385,
+      "enabled_overhead_relative_to_disabled": 0.07141861946355732
+    },
+    {
+      "workload": "anti_join",
+      "rows_per_role": 256,
+      "before": {
+        "mean_ns": 330753.71750512696,
+        "confidence_interval_95_ns": [
+          328745.11932889686,
+          333022.9973179166
+        ]
+      },
+      "budgets_disabled": {
+        "mean_ns": 335143.2205631106,
+        "confidence_interval_95_ns": [
+          333038.1779312057,
+          337095.1647328612
+        ]
+      },
+      "budgets_enabled": {
+        "mean_ns": 364990.6964339244,
+        "confidence_interval_95_ns": [
+          363543.89901733544,
+          366603.91464468435
+        ]
+      },
+      "disabled_relative_change": 0.013271213067818755,
+      "enabled_overhead_relative_to_disabled": 0.08905886808828711
+    },
+    {
+      "workload": "anti_join",
+      "rows_per_role": 64,
+      "before": {
+        "mean_ns": 88673.87477378563,
+        "confidence_interval_95_ns": [
+          87974.78186080605,
+          89350.84095654565
+        ]
+      },
+      "budgets_disabled": {
+        "mean_ns": 89747.0438611338,
+        "confidence_interval_95_ns": [
+          89162.1570870607,
+          90467.86735290187
+        ]
+      },
+      "budgets_enabled": {
+        "mean_ns": 97262.36766338574,
+        "confidence_interval_95_ns": [
+          96633.26042948404,
+          97963.5219331895
+        ]
+      },
+      "disabled_relative_change": 0.012102426899534002,
+      "enabled_overhead_relative_to_disabled": 0.08373895650402097
+    },
+    {
+      "workload": "comparison_barrier",
+      "rows_per_role": 128,
+      "before": {
+        "mean_ns": 87938.01645246916,
+        "confidence_interval_95_ns": [
+          87670.2584657149,
+          88190.44820714496
+        ]
+      },
+      "budgets_disabled": {
+        "mean_ns": 112554.0534143856,
+        "confidence_interval_95_ns": [
+          103339.70256780296,
+          125554.47202797387
+        ]
+      },
+      "budgets_enabled": {
+        "mean_ns": 120552.97781410864,
+        "confidence_interval_95_ns": [
+          119985.09890391721,
+          121119.95170862641
+        ]
+      },
+      "disabled_relative_change": 0.27992486020220286,
+      "enabled_overhead_relative_to_disabled": 0.07106740412336565
+    },
+    {
+      "workload": "comparison_barrier",
+      "rows_per_role": 2048,
+      "before": {
+        "mean_ns": 1324838.1434459367,
+        "confidence_interval_95_ns": [
+          1312874.271149732,
+          1337054.063089218
+        ]
+      },
+      "budgets_disabled": {
+        "mean_ns": 1379580.8559130873,
+        "confidence_interval_95_ns": [
+          1369672.9539522529,
+          1389306.7150726735
+        ]
+      },
+      "budgets_enabled": {
+        "mean_ns": 1857265.803858399,
+        "confidence_interval_95_ns": [
+          1845646.9636488047,
+          1869058.1593036382
+        ]
+      },
+      "disabled_relative_change": 0.04132030221047489,
+      "enabled_overhead_relative_to_disabled": 0.3462536798027338
+    },
+    {
+      "workload": "comparison_barrier",
+      "rows_per_role": 512,
+      "before": {
+        "mean_ns": 322048.47022348637,
+        "confidence_interval_95_ns": [
+          320476.4476711583,
+          323642.44297248457
+        ]
+      },
+      "budgets_disabled": {
+        "mean_ns": 359960.90899415885,
+        "confidence_interval_95_ns": [
+          357234.1281957069,
+          363105.52914183424
+        ]
+      },
+      "budgets_enabled": {
+        "mean_ns": 497343.8194101936,
+        "confidence_interval_95_ns": [
+          460005.98054145917,
+          560097.3642591874
+        ]
+      },
+      "disabled_relative_change": 0.11772277242727802,
+      "enabled_overhead_relative_to_disabled": 0.38166063865080435
+    },
+    {
+      "workload": "join_distinct_limit",
+      "rows_per_role": 16,
+      "before": {
+        "mean_ns": 155751.19616940746,
+        "confidence_interval_95_ns": [
+          154013.1147690295,
+          158067.00483654093
+        ]
+      },
+      "budgets_disabled": {
+        "mean_ns": 145578.46829467447,
+        "confidence_interval_95_ns": [
+          145006.27577808127,
+          146302.37971099492
+        ]
+      },
+      "budgets_enabled": {
+        "mean_ns": 160279.16060985552,
+        "confidence_interval_95_ns": [
+          159011.36040894678,
+          161802.99663171163
+        ]
+      },
+      "disabled_relative_change": -0.06531396307010262,
+      "enabled_overhead_relative_to_disabled": 0.10098122673900134
+    },
+    {
+      "workload": "join_distinct_limit",
+      "rows_per_role": 256,
+      "before": {
+        "mean_ns": 2149834.6316613266,
+        "confidence_interval_95_ns": [
+          2125693.8784508766,
+          2179213.389986808
+        ]
+      },
+      "budgets_disabled": {
+        "mean_ns": 2106319.989253349,
+        "confidence_interval_95_ns": [
+          2066632.858475009,
+          2165309.5012012236
+        ]
+      },
+      "budgets_enabled": {
+        "mean_ns": 2188756.969055525,
+        "confidence_interval_95_ns": [
+          2174728.224247704,
+          2202095.601569453
+        ]
+      },
+      "disabled_relative_change": -0.020240925402876586,
+      "enabled_overhead_relative_to_disabled": 0.039137918370797165
+    },
+    {
+      "workload": "join_distinct_limit",
+      "rows_per_role": 64,
+      "before": {
+        "mean_ns": 810311.9781580258,
+        "confidence_interval_95_ns": [
+          726637.2592171258,
+          906096.3972759194
+        ]
+      },
+      "budgets_disabled": {
+        "mean_ns": 515753.6845584142,
+        "confidence_interval_95_ns": [
+          513345.1696226207,
+          518173.82879153464
+        ]
+      },
+      "budgets_enabled": {
+        "mean_ns": 565361.9253063239,
+        "confidence_interval_95_ns": [
+          561646.4824957044,
+          569399.6359244712
+        ]
+      },
+      "disabled_relative_change": -0.3635122046069116,
+      "enabled_overhead_relative_to_disabled": 0.09618591632628681
+    },
+    {
+      "workload": "join_filter",
+      "rows_per_role": 16,
+      "before": {
+        "mean_ns": 30910.159070089274,
+        "confidence_interval_95_ns": [
+          30691.17355216391,
+          31147.829617750955
+        ]
+      },
+      "budgets_disabled": {
+        "mean_ns": 30902.01673773037,
+        "confidence_interval_95_ns": [
+          30650.695404459904,
+          31159.697866731018
+        ]
+      },
+      "budgets_enabled": {
+        "mean_ns": 33059.93731711655,
+        "confidence_interval_95_ns": [
+          32837.51239904252,
+          33260.10207653704
+        ]
+      },
+      "disabled_relative_change": -0.00026341929656337193,
+      "enabled_overhead_relative_to_disabled": 0.06983105982048832
+    },
+    {
+      "workload": "join_filter",
+      "rows_per_role": 256,
+      "before": {
+        "mean_ns": 454528.03242856904,
+        "confidence_interval_95_ns": [
+          342100.5364791707,
+          641190.2540179093
+        ]
+      },
+      "budgets_disabled": {
+        "mean_ns": 293596.28894765483,
+        "confidence_interval_95_ns": [
+          291901.30880488653,
+          295479.57118641806
+        ]
+      },
+      "budgets_enabled": {
+        "mean_ns": 323597.1645618297,
+        "confidence_interval_95_ns": [
+          320615.7832712127,
+          327001.9018345907
+        ]
+      },
+      "disabled_relative_change": -0.3540634064329251,
+      "enabled_overhead_relative_to_disabled": 0.10218411043854747
+    },
+    {
+      "workload": "join_filter",
+      "rows_per_role": 64,
+      "before": {
+        "mean_ns": 81422.24291536066,
+        "confidence_interval_95_ns": [
+          80571.60125964045,
+          82466.8778640699
+        ]
+      },
+      "budgets_disabled": {
+        "mean_ns": 83481.94883856984,
+        "confidence_interval_95_ns": [
+          83000.51429115013,
+          83975.11466652145
+        ]
+      },
+      "budgets_enabled": {
+        "mean_ns": 89394.51122879043,
+        "confidence_interval_95_ns": [
+          88803.43004996053,
+          89960.25675900656
+        ]
+      },
+      "disabled_relative_change": 0.025296600160600535,
+      "enabled_overhead_relative_to_disabled": 0.07082444136101573
+    },
+    {
+      "workload": "join_first_row",
+      "rows_per_role": 16,
+      "before": {
+        "mean_ns": 12359.866821876038,
+        "confidence_interval_95_ns": [
+          12294.911559314634,
+          12444.316022889167
+        ]
+      },
+      "budgets_disabled": {
+        "mean_ns": 12270.731457080306,
+        "confidence_interval_95_ns": [
+          12227.183603816029,
+          12315.379942633384
+        ]
+      },
+      "budgets_enabled": {
+        "mean_ns": 12647.016370380907,
+        "confidence_interval_95_ns": [
+          12586.194577666776,
+          12711.130703601573
+        ]
+      },
+      "disabled_relative_change": -0.007211676798812183,
+      "enabled_overhead_relative_to_disabled": 0.030665239037847236
+    },
+    {
+      "workload": "join_first_row",
+      "rows_per_role": 256,
+      "before": {
+        "mean_ns": 19878.017424864087,
+        "confidence_interval_95_ns": [
+          13821.363755700824,
+          27803.094668156853
+        ]
+      },
+      "budgets_disabled": {
+        "mean_ns": 13271.711834959464,
+        "confidence_interval_95_ns": [
+          12367.687336341629,
+          14575.87485813282
+        ]
+      },
+      "budgets_enabled": {
+        "mean_ns": 12809.608995141465,
+        "confidence_interval_95_ns": [
+          12746.823529528396,
+          12885.584321250895
+        ]
+      },
+      "disabled_relative_change": -0.33234227783909853,
+      "enabled_overhead_relative_to_disabled": -0.03481863120330553
+    },
+    {
+      "workload": "join_first_row",
+      "rows_per_role": 64,
+      "before": {
+        "mean_ns": 12464.328252551632,
+        "confidence_interval_95_ns": [
+          12311.584533166248,
+          12676.087613619702
+        ]
+      },
+      "budgets_disabled": {
+        "mean_ns": 12328.879112603101,
+        "confidence_interval_95_ns": [
+          12269.44474794717,
+          12398.185426999049
+        ]
+      },
+      "budgets_enabled": {
+        "mean_ns": 12561.714364765512,
+        "confidence_interval_95_ns": [
+          12475.604639019779,
+          12648.033927003302
+        ]
+      },
+      "disabled_relative_change": -0.010866942622503761,
+      "enabled_overhead_relative_to_disabled": 0.018885354462142123
+    },
+    {
+      "workload": "join_limit",
+      "rows_per_role": 16,
+      "before": {
+        "mean_ns": 20932.858258585256,
+        "confidence_interval_95_ns": [
+          20816.235570873476,
+          21053.38613940231
+        ]
+      },
+      "budgets_disabled": {
+        "mean_ns": 21204.324785856756,
+        "confidence_interval_95_ns": [
+          21073.955295118885,
+          21333.62386029563
+        ]
+      },
+      "budgets_enabled": {
+        "mean_ns": 21780.814983720466,
+        "confidence_interval_95_ns": [
+          21670.10788368024,
+          21893.957856575285
+        ]
+      },
+      "disabled_relative_change": 0.012968440521502256,
+      "enabled_overhead_relative_to_disabled": 0.027187387652552353
+    },
+    {
+      "workload": "join_limit",
+      "rows_per_role": 256,
+      "before": {
+        "mean_ns": 20993.870730870018,
+        "confidence_interval_95_ns": [
+          20897.217359831764,
+          21104.483511305833
+        ]
+      },
+      "budgets_disabled": {
+        "mean_ns": 21051.22357805791,
+        "confidence_interval_95_ns": [
+          20795.218714808478,
+          21464.70898688852
+        ]
+      },
+      "budgets_enabled": {
+        "mean_ns": 22313.331937179442,
+        "confidence_interval_95_ns": [
+          22184.042788990202,
+          22441.941029350102
+        ]
+      },
+      "disabled_relative_change": 0.0027318853165823054,
+      "enabled_overhead_relative_to_disabled": 0.05995415679481231
+    },
+    {
+      "workload": "join_limit",
+      "rows_per_role": 64,
+      "before": {
+        "mean_ns": 20910.893246982796,
+        "confidence_interval_95_ns": [
+          20802.360102669227,
+          21014.110914418925
+        ]
+      },
+      "budgets_disabled": {
+        "mean_ns": 21009.782453511245,
+        "confidence_interval_95_ns": [
+          20907.132447776963,
+          21140.637258263097
+        ]
+      },
+      "budgets_enabled": {
+        "mean_ns": 22175.288440907432,
+        "confidence_interval_95_ns": [
+          22073.06231423764,
+          22274.029248016534
+        ]
+      },
+      "disabled_relative_change": 0.0047290761499496625,
+      "enabled_overhead_relative_to_disabled": 0.05547444339203067
+    },
+    {
+      "workload": "join_top_k",
+      "rows_per_role": 16,
+      "before": {
+        "mean_ns": 283211.6231044152,
+        "confidence_interval_95_ns": [
+          281767.31562776805,
+          284676.0514139894
+        ]
+      },
+      "budgets_disabled": {
+        "mean_ns": 287700.2325820175,
+        "confidence_interval_95_ns": [
+          285171.88684592006,
+          290924.1325434919
+        ]
+      },
+      "budgets_enabled": {
+        "mean_ns": 317784.18429838965,
+        "confidence_interval_95_ns": [
+          315993.80492189486,
+          319549.33959010633
+        ]
+      },
+      "disabled_relative_change": 0.01584895926374963,
+      "enabled_overhead_relative_to_disabled": 0.10456700519974671
+    },
+    {
+      "workload": "join_top_k",
+      "rows_per_role": 256,
+      "before": {
+        "mean_ns": 70250876.95,
+        "confidence_interval_95_ns": [
+          68184392.65875,
+          73452710.54625
+        ]
+      },
+      "budgets_disabled": {
+        "mean_ns": 67702073.0,
+        "confidence_interval_95_ns": [
+          67482818.95,
+          67915521.62750001
+        ]
+      },
+      "budgets_enabled": {
+        "mean_ns": 77072618.65,
+        "confidence_interval_95_ns": [
+          74250518.075,
+          82437813.12375
+        ]
+      },
+      "disabled_relative_change": -0.03628145385023562,
+      "enabled_overhead_relative_to_disabled": 0.13840854843543715
+    },
+    {
+      "workload": "join_top_k",
+      "rows_per_role": 64,
+      "before": {
+        "mean_ns": 4173950.4282903112,
+        "confidence_interval_95_ns": [
+          4142032.4944812474,
+          4210374.248245184
+        ]
+      },
+      "budgets_disabled": {
+        "mean_ns": 4236502.4956061,
+        "confidence_interval_95_ns": [
+          4211962.374873904,
+          4258732.957750161
+        ]
+      },
+      "budgets_enabled": {
+        "mean_ns": 4635570.9567872565,
+        "confidence_interval_95_ns": [
+          4613059.288067188,
+          4660692.083244897
+        ]
+      },
+      "disabled_relative_change": 0.014986298565460077,
+      "enabled_overhead_relative_to_disabled": 0.0941976221175489
+    },
+    {
+      "workload": "scan_all",
+      "rows_per_role": 128,
+      "before": {
+        "mean_ns": 64383.49851834269,
+        "confidence_interval_95_ns": [
+          64120.32821410116,
+          64643.767519536916
+        ]
+      },
+      "budgets_disabled": {
+        "mean_ns": 67879.04122534144,
+        "confidence_interval_95_ns": [
+          67434.19237072623,
+          68359.98248593924
+        ]
+      },
+      "budgets_enabled": {
+        "mean_ns": 73652.27963808436,
+        "confidence_interval_95_ns": [
+          73199.07607044633,
+          74179.70897488762
+        ]
+      },
+      "disabled_relative_change": 0.0542925250637456,
+      "enabled_overhead_relative_to_disabled": 0.08505185560263318
+    },
+    {
+      "workload": "scan_all",
+      "rows_per_role": 2048,
+      "before": {
+        "mean_ns": 956572.670796846,
+        "confidence_interval_95_ns": [
+          948729.1788619327,
+          965317.8116267079
+        ]
+      },
+      "budgets_disabled": {
+        "mean_ns": 1000009.9015826242,
+        "confidence_interval_95_ns": [
+          991828.9223118542,
+          1008262.117467675
+        ]
+      },
+      "budgets_enabled": {
+        "mean_ns": 1127560.4858512655,
+        "confidence_interval_95_ns": [
+          1120836.1517862596,
+          1133849.0034739415
+        ]
+      },
+      "disabled_relative_change": 0.0454092324732569,
+      "enabled_overhead_relative_to_disabled": 0.1275493213284975
+    },
+    {
+      "workload": "scan_all",
+      "rows_per_role": 512,
+      "before": {
+        "mean_ns": 240107.28986659096,
+        "confidence_interval_95_ns": [
+          238921.3407169607,
+          241362.49512008124
+        ]
+      },
+      "budgets_disabled": {
+        "mean_ns": 253664.09358184988,
+        "confidence_interval_95_ns": [
+          252097.70902217,
+          255234.02577598757
+        ]
+      },
+      "budgets_enabled": {
+        "mean_ns": 282351.0845121912,
+        "confidence_interval_95_ns": [
+          279321.50807660527,
+          287282.7674697894
+        ]
+      },
+      "disabled_relative_change": 0.05646144156135957,
+      "enabled_overhead_relative_to_disabled": 0.11309046749687046
+    },
+    {
+      "workload": "scan_first_row",
+      "rows_per_role": 128,
+      "before": {
+        "mean_ns": 6925.4395964969135,
+        "confidence_interval_95_ns": [
+          6889.552138251351,
+          6960.754410613328
+        ]
+      },
+      "budgets_disabled": {
+        "mean_ns": 7035.296030791824,
+        "confidence_interval_95_ns": [
+          6968.224051055119,
+          7135.994849705251
+        ]
+      },
+      "budgets_enabled": {
+        "mean_ns": 7110.587003207851,
+        "confidence_interval_95_ns": [
+          7056.992885042364,
+          7165.474735395499
+        ]
+      },
+      "disabled_relative_change": 0.015862738063657122,
+      "enabled_overhead_relative_to_disabled": 0.010701891162290256
+    },
+    {
+      "workload": "scan_first_row",
+      "rows_per_role": 2048,
+      "before": {
+        "mean_ns": 6958.610867698575,
+        "confidence_interval_95_ns": [
+          6927.597184389463,
+          6984.581479269824
+        ]
+      },
+      "budgets_disabled": {
+        "mean_ns": 7068.411753003767,
+        "confidence_interval_95_ns": [
+          7033.863931108668,
+          7106.7610973875235
+        ]
+      },
+      "budgets_enabled": {
+        "mean_ns": 7393.457398342014,
+        "confidence_interval_95_ns": [
+          7313.791329415406,
+          7489.450688763307
+        ]
+      },
+      "disabled_relative_change": 0.01577913859429625,
+      "enabled_overhead_relative_to_disabled": 0.04598566929835646
+    },
+    {
+      "workload": "scan_first_row",
+      "rows_per_role": 512,
+      "before": {
+        "mean_ns": 6979.872871554608,
+        "confidence_interval_95_ns": [
+          6930.898955649106,
+          7022.738490836515
+        ]
+      },
+      "budgets_disabled": {
+        "mean_ns": 7052.139418180144,
+        "confidence_interval_95_ns": [
+          6988.0134910843635,
+          7130.9592363231295
+        ]
+      },
+      "budgets_enabled": {
+        "mean_ns": 8183.299208641259,
+        "confidence_interval_95_ns": [
+          7284.3362145226265,
+          9396.12052915564
+        ]
+      },
+      "disabled_relative_change": 0.0103535620140085,
+      "enabled_overhead_relative_to_disabled": 0.1603995218167451
+    },
+    {
+      "workload": "scan_limit",
+      "rows_per_role": 128,
+      "before": {
+        "mean_ns": 12085.545541290572,
+        "confidence_interval_95_ns": [
+          11960.127623189857,
+          12245.073727092582
+        ]
+      },
+      "budgets_disabled": {
+        "mean_ns": 12631.943839180673,
+        "confidence_interval_95_ns": [
+          12427.262976615959,
+          12950.786200186096
+        ]
+      },
+      "budgets_enabled": {
+        "mean_ns": 12964.819071478318,
+        "confidence_interval_95_ns": [
+          12876.989722632316,
+          13036.15590990351
+        ]
+      },
+      "disabled_relative_change": 0.04521089230298436,
+      "enabled_overhead_relative_to_disabled": 0.02635186132360423
+    },
+    {
+      "workload": "scan_limit",
+      "rows_per_role": 2048,
+      "before": {
+        "mean_ns": 12068.066453397241,
+        "confidence_interval_95_ns": [
+          12019.927082274082,
+          12116.095892882644
+        ]
+      },
+      "budgets_disabled": {
+        "mean_ns": 12455.569953636408,
+        "confidence_interval_95_ns": [
+          12285.572823990311,
+          12699.545290239561
+        ]
+      },
+      "budgets_enabled": {
+        "mean_ns": 13172.770644295984,
+        "confidence_interval_95_ns": [
+          12991.489320871435,
+          13392.484364991624
+        ]
+      },
+      "disabled_relative_change": 0.03210982486180147,
+      "enabled_overhead_relative_to_disabled": 0.057580720378852535
+    },
+    {
+      "workload": "scan_limit",
+      "rows_per_role": 512,
+      "before": {
+        "mean_ns": 12127.964891728472,
+        "confidence_interval_95_ns": [
+          12035.317559931505,
+          12222.167730539291
+        ]
+      },
+      "budgets_disabled": {
+        "mean_ns": 12312.240836463254,
+        "confidence_interval_95_ns": [
+          12250.090742738439,
+          12377.393699202206
+        ]
+      },
+      "budgets_enabled": {
+        "mean_ns": 13304.624358333656,
+        "confidence_interval_95_ns": [
+          13202.417329441456,
+          13417.817689059944
+        ]
+      },
+      "disabled_relative_change": 0.015194300641524938,
+      "enabled_overhead_relative_to_disabled": 0.08060137346659224
+    },
+    {
+      "workload": "scan_top_k",
+      "rows_per_role": 128,
+      "before": {
+        "mean_ns": 86092.47693425503,
+        "confidence_interval_95_ns": [
+          85681.75705412378,
+          86542.661128858
+        ]
+      },
+      "budgets_disabled": {
+        "mean_ns": 90039.14203063832,
+        "confidence_interval_95_ns": [
+          89619.90267202584,
+          90489.86356647548
+        ]
+      },
+      "budgets_enabled": {
+        "mean_ns": 100070.53250229912,
+        "confidence_interval_95_ns": [
+          99438.56857625696,
+          100716.5914451462
+        ]
+      },
+      "disabled_relative_change": 0.04584215992992258,
+      "enabled_overhead_relative_to_disabled": 0.11141144001846803
+    },
+    {
+      "workload": "scan_top_k",
+      "rows_per_role": 2048,
+      "before": {
+        "mean_ns": 1327212.3303425647,
+        "confidence_interval_95_ns": [
+          1318269.0598195032,
+          1336835.1816556873
+        ]
+      },
+      "budgets_disabled": {
+        "mean_ns": 1390991.4967446693,
+        "confidence_interval_95_ns": [
+          1376182.936883988,
+          1405134.6816448264
+        ]
+      },
+      "budgets_enabled": {
+        "mean_ns": 1606237.245823722,
+        "confidence_interval_95_ns": [
+          1589870.2724072554,
+          1623296.3677173594
+        ]
+      },
+      "disabled_relative_change": 0.04805498332406444,
+      "enabled_overhead_relative_to_disabled": 0.1547426778544596
+    },
+    {
+      "workload": "scan_top_k",
+      "rows_per_role": 512,
+      "before": {
+        "mean_ns": 323667.694967131,
+        "confidence_interval_95_ns": [
+          321828.0376736688,
+          325352.25128349965
+        ]
+      },
+      "budgets_disabled": {
+        "mean_ns": 349810.9031135853,
+        "confidence_interval_95_ns": [
+          346255.3489686394,
+          354092.8216264649
+        ]
+      },
+      "budgets_enabled": {
+        "mean_ns": 395393.6089170318,
+        "confidence_interval_95_ns": [
+          392424.42733393173,
+          398819.109022467
+        ]
+      },
+      "disabled_relative_change": 0.08077175619614807,
+      "enabled_overhead_relative_to_disabled": 0.13030670398699828
+    }
+  ]
+}

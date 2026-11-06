@@ -150,7 +150,8 @@ impl PyDatabase {
         })
     }
 
-    #[pyo3(signature = (script, parameters=None, now=None, timeout=None, max_rows=None))]
+    #[pyo3(signature = (script, parameters=None, now=None, timeout=None, max_rows=None, max_work_units=None, max_memory_bytes=None))]
+    #[allow(clippy::too_many_arguments)] // Mirrors the public Python keyword options.
     fn execute_json(
         &self,
         py: Python<'_>,
@@ -159,6 +160,8 @@ impl PyDatabase {
         now: Option<String>,
         timeout: Option<f64>,
         max_rows: Option<usize>,
+        max_work_units: Option<u64>,
+        max_memory_bytes: Option<u64>,
     ) -> PyResult<String> {
         if max_rows == Some(0) {
             return Err(PyValueError::new_err("max_rows must be positive"));
@@ -171,6 +174,10 @@ impl PyDatabase {
             timeout: positive_duration(timeout, "timeout")?,
             max_rows_per_search: max_rows,
             parameters: execution_parameters(parameters)?,
+            query_limits: crate::traqula::QueryLimits {
+                max_work_units,
+                max_memory_bytes,
+            },
             ..ExecutionOptions::default()
         };
 

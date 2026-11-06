@@ -1,3 +1,4 @@
+use super::budget::{BudgetVec, Reservation, Workspace, sort_work};
 use super::*;
 use crate::construct::{Appearance, AppearanceSet, Posit, Role};
 use crate::effect::{EffectCut, EffectiveSlice};
@@ -71,6 +72,55 @@ impl BoundValue {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 struct Binding(BTreeMap<String, BoundValue>);
+
+impl Workspace for BoundValue {
+    fn heap_bytes(&self) -> u64 {
+        match self {
+            Self::Literal(value) => value.token().len() as u64,
+            _ => 0,
+        }
+    }
+}
+
+impl Workspace for Binding {
+    fn heap_bytes(&self) -> u64 {
+        self.0
+            .iter()
+            .map(|(name, value)| {
+                (size_of::<(String, BoundValue)>() as u64 + 48)
+                    .saturating_add(name.len() as u64)
+                    .saturating_add(value.heap_bytes())
+            })
+            .fold(0, u64::saturating_add)
+    }
+}
+
+impl Workspace for ResultCell {
+    fn heap_bytes(&self) -> u64 {
+        self.text.capacity() as u64
+    }
+}
+
+fn projection_bytes(binding: &Binding, columns: &[String]) -> u64 {
+    columns
+        .iter()
+        .map(|name| {
+            let text = match binding.get(name) {
+                Some(BoundValue::Thing(_) | BoundValue::Posit(_)) => 20,
+                Some(BoundValue::Role(role)) => role.name().len() as u64,
+                Some(BoundValue::AppearanceSet(set)) => set
+                    .appearances()
+                    .iter()
+                    .map(|a| a.role().name().len() as u64 + 32)
+                    .fold(2, u64::saturating_add),
+                Some(BoundValue::Literal(value)) => value.token().len() as u64,
+                Some(BoundValue::Time(_)) => 64,
+                None => 0,
+            };
+            (size_of::<ResultCell>() as u64).saturating_add(text)
+        })
+        .fold(0, u64::saturating_add)
+}
 
 impl Binding {
     fn get(&self, name: &str) -> Option<&BoundValue> {
@@ -245,6 +295,7 @@ pub(super) struct SearchOutcome {
     pub identity_bindings: HashMap<String, IdentityBinding, OtherHasher>,
     pub has_return: bool,
     pub sink_stopped: bool,
+    pub _identity_memory: Reservation,
 }
 
 #[derive(Clone)]
@@ -253,7 +304,18 @@ struct StructuralMatch {
     binding: Binding,
 }
 
-type EffectCache = HashMap<EffectCut, Arc<EffectiveSlice>>;
+impl Workspace for StructuralMatch {
+    fn heap_bytes(&self) -> u64 {
+        self.binding.heap_bytes()
+    }
+}
+
+struct CachedSlice {
+    slice: Arc<EffectiveSlice>,
+    _memory: Reservation,
+}
+
+type EffectCache = HashMap<EffectCut, CachedSlice>;
 
 pub(super) fn execute(
     database: &Database,
@@ -305,6 +367,7 @@ fn execute_plan(
     return_columns: &mut Option<Vec<String>>,
     execution: &ExecutionContext,
 ) -> Result<SearchOutcome, DatabaseError> {
+    execution.work(1)?;
     if query.materialization_reason.is_none() {
         pipeline::execute(database, &query, sink, return_columns, execution)
     } else {
@@ -325,13 +388,14 @@ fn execute_materialized(
     let domains = &query.domains;
     let mut effect_cache = EffectCache::new();
 
-    let mut bindings = Vec::new();
+    let mut bindings = BudgetVec::new(&execution.budget);
     for branch in &query.branches {
-        let mut branch_bindings = vec![Binding::default()];
+        let mut branch_bindings = BudgetVec::new(&execution.budget);
+        branch_bindings.push(Binding::default())?;
         for pattern in &branch.patterns {
-            let mut joined = Vec::new();
+            let mut joined = BudgetVec::new(&execution.budget);
             for binding in &branch_bindings {
-                execution.check()?;
+                execution.work(1)?;
                 joined.extend(evaluate_pattern(
                     database,
                     pattern,
@@ -339,7 +403,7 @@ fn execute_materialized(
                     domains,
                     execution,
                     &mut effect_cache,
-                )?);
+                )?)?;
             }
             branch_bindings = joined;
             if branch_bindings.is_empty() {
@@ -350,14 +414,15 @@ fn execute_materialized(
             // Union branches export only their common schema. Private bindings
             // must not enter correlations or later mutation-variable promotion.
             binding.0.retain(|name, _| domains.contains_key(name));
-            bindings.push(binding);
+            bindings.push(binding)?;
         }
     }
 
     for absence in &query.not_exists {
-        let mut retained = Vec::with_capacity(bindings.len());
+        let mut retained = BudgetVec::new(&execution.budget);
         for binding in bindings {
-            execution.check()?;
+            execution.work(1)?;
+            let _working = execution.workspace(|| binding.heap_bytes().saturating_add(128))?;
             if !block_has_match(
                 absence,
                 &binding,
@@ -366,18 +431,19 @@ fn execute_materialized(
                 execution,
                 &mut effect_cache,
             )? {
-                retained.push(binding);
+                retained.push(binding)?;
             }
         }
         bindings = retained;
     }
 
     for predicate in &query.predicates {
-        let mut selected = Vec::with_capacity(bindings.len());
+        let mut selected = BudgetVec::new(&execution.budget);
         for binding in bindings {
-            execution.check()?;
+            execution.work(1)?;
+            let _working = execution.workspace(|| binding.heap_bytes().saturating_add(128))?;
             if evaluate_predicate(predicate, &binding)? {
-                selected.push(binding);
+                selected.push(binding)?;
             }
         }
         bindings = selected;
@@ -385,8 +451,10 @@ fn execute_materialized(
 
     let matched_rows = bindings.len();
     let mut identity_bindings: HashMap<String, IdentityBinding, OtherHasher> = HashMap::default();
+    let mut identity_memory = execution.workspace(|| 0)?;
     for binding in &bindings {
         for (name, value) in &binding.0 {
+            execution.work(1)?;
             let (domain, identity) = match value {
                 BoundValue::Thing(identity) => (IdentityDomain::Thing, *identity),
                 BoundValue::Posit(identity) => (IdentityDomain::Posit, *identity),
@@ -397,11 +465,21 @@ fn execute_materialized(
             };
             match identity_bindings.entry(name.clone()) {
                 std::collections::hash_map::Entry::Vacant(entry) => {
+                    identity_memory.grow(512 + name.len() as u64)?;
                     let mut values = ResultSet::new();
                     values.insert(identity);
                     entry.insert(IdentityBinding { domain, values });
                 }
                 std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    let values = &entry.get().values;
+                    if values.thing != Some(identity)
+                        && !values
+                            .multi
+                            .as_ref()
+                            .is_some_and(|values| values.contains(identity))
+                    {
+                        identity_memory.grow(256)?;
+                    }
                     if entry.get().domain != domain {
                         return Err(DatabaseError::VariableDomain {
                             name: name.clone(),
@@ -428,31 +506,48 @@ fn execute_materialized(
             identity_bindings,
             has_return,
             sink_stopped: false,
+            _identity_memory: identity_memory,
         });
     }
 
-    let mut projected = bindings
-        .into_iter()
-        .map(|binding| {
-            let row = query
-                .returns
-                .iter()
-                .map(|name| {
-                    binding
-                        .get(name)
-                        .map(BoundValue::result_cell)
-                        .ok_or_else(|| DatabaseError::UnknownVariable(name.clone()))
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok((binding, row))
-        })
-        .collect::<Result<Vec<_>, DatabaseError>>()?;
+    let mut projected = BudgetVec::new(&execution.budget);
+    for binding in bindings {
+        execution.work(1)?;
+        let _working = execution.workspace(|| binding.heap_bytes().saturating_add(128))?;
+        let _row = execution.workspace(|| projection_bytes(&binding, &query.returns))?;
+        let row = query
+            .returns
+            .iter()
+            .map(|name| {
+                binding
+                    .get(name)
+                    .map(BoundValue::result_cell)
+                    .ok_or_else(|| DatabaseError::UnknownVariable(name.clone()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        projected.push((binding, row))?;
+    }
     if query.distinct {
         let mut seen = std::collections::BTreeSet::new();
-        projected.retain(|(_, row)| seen.insert(row.clone()));
+        let mut seen_memory = execution.workspace(|| 0)?;
+        let mut unique = BudgetVec::new(&execution.budget);
+        for (binding, row) in projected {
+            execution.work(1)?;
+            if !seen.contains(&row) {
+                seen_memory.grow(row.heap_bytes().saturating_add(96))?;
+                seen.insert(row.clone());
+                unique.push((binding, row))?;
+            }
+        }
+        projected = unique;
     }
     if !query.order.is_empty() {
+        execution.work((projected.len() as u64).saturating_mul(query.order.len() as u64))?;
         validate_order_values(&projected, &query.order)?;
+        execution.work(sort_work(projected.len(), query.order.len()))?;
+        let _scratch = execution.workspace(|| {
+            (projected.len() as u64).saturating_mul(size_of::<(Binding, Vec<ResultCell>)>() as u64)
+        })?;
         projected.sort_by(|(left, _), (right, _)| compare_order(left, right, &query.order));
     }
 
@@ -464,11 +559,12 @@ fn execute_materialized(
             identity_bindings,
             has_return,
             sink_stopped: true,
+            _identity_memory: identity_memory,
         });
     }
     let mut sink_stopped = false;
     for (_, row) in projected {
-        execution.check()?;
+        execution.work(1)?;
         if let SinkFlow::Stop = sink.push(row) {
             sink_stopped = true;
             break;
@@ -479,6 +575,7 @@ fn execute_materialized(
         identity_bindings,
         has_return,
         sink_stopped,
+        _identity_memory: identity_memory,
     })
 }
 
@@ -1387,7 +1484,7 @@ fn evaluate_pattern(
     domains: &HashMap<String, Domain>,
     execution: &ExecutionContext,
     effect_cache: &mut EffectCache,
-) -> Result<Vec<Binding>, DatabaseError> {
+) -> Result<BudgetVec<Binding>, DatabaseError> {
     let pattern = &planned.pattern;
     if let Some(effect) = &pattern.effect {
         return evaluate_effect_pattern(
@@ -1409,6 +1506,13 @@ fn evaluate_pattern(
     // A temporal pattern produces its own relation before joining external
     // posit/value/time bindings. Otherwise whichever pattern happens to run
     // first can hide a successor and resurrect an older matching state.
+    let _reduction_memory = execution.workspace(|| {
+        if pattern.cutoff.is_some() {
+            input.heap_bytes().saturating_add(128)
+        } else {
+            0
+        }
+    })?;
     let reduction_input = pattern
         .cutoff
         .as_ref()
@@ -1421,9 +1525,9 @@ fn evaluate_pattern(
         &planned.access,
         execution,
     )?;
-    let mut structural = Vec::new();
+    let mut structural = BudgetVec::new(&execution.budget);
     for posit in &posits {
-        execution.check()?;
+        execution.work(1)?;
         if cutoff
             .as_ref()
             .is_some_and(|cutoff| !posit.time().definitely_at_or_before(cutoff))
@@ -1440,40 +1544,54 @@ fn evaluate_pattern(
             structural.push(StructuralMatch {
                 posit: Arc::clone(posit),
                 binding,
-            });
+            })?;
         }
     }
 
     let candidates = if pattern.cutoff.is_some() && !pattern.latest_matching {
-        maximal(structural, || execution.check())?
+        reduce_matches(structural, execution)?
     } else {
         structural
     };
-    let mut matched = Vec::new();
+    let mut matched = BudgetVec::new(&execution.budget);
     for candidate in candidates {
-        execution.check()?;
+        execution.work(1)?;
+        let _working = execution.workspace(|| {
+            candidate
+                .binding
+                .heap_bytes()
+                .saturating_add(candidate.posit.value().token().len() as u64)
+                .saturating_add(256)
+        })?;
         if let Some(binding) = match_fields(pattern, &candidate.posit, candidate.binding)? {
             matched.push(StructuralMatch {
                 posit: candidate.posit,
                 binding,
-            });
+            })?;
         }
     }
     let matched = if pattern.cutoff.is_some() && pattern.latest_matching {
-        maximal(matched, || execution.check())?
+        reduce_matches(matched, execution)?
     } else {
         matched
     };
-    let mut bindings = Vec::new();
+    let mut bindings = BudgetVec::new(&execution.budget);
     'row: for candidate in matched {
-        execution.check()?;
+        execution.work(1)?;
+        let _working = execution.workspace(|| {
+            candidate
+                .binding
+                .heap_bytes()
+                .saturating_add(input.heap_bytes())
+                .saturating_add(256)
+        })?;
         let mut binding = candidate.binding;
         for (name, value) in &input.0 {
             if !binding.bind(name, value.clone())? {
                 continue 'row;
             }
         }
-        bindings.push(binding);
+        bindings.push(binding)?;
     }
     Ok(bindings)
 }
@@ -1529,27 +1647,40 @@ fn evaluate_effect_pattern(
     domains: &HashMap<String, Domain>,
     execution: &ExecutionContext,
     effect_cache: &mut EffectCache,
-) -> Result<Vec<Binding>, DatabaseError> {
+) -> Result<BudgetVec<Binding>, DatabaseError> {
     let cut = EffectCut::new(
         resolve_cutoff(&effect.assertion_cutoff, input)?,
         resolve_cutoff(&effect.appearance_cutoff, input)?,
     );
     let slice = if let Some(slice) = effect_cache.get(&cut) {
-        Arc::clone(slice)
+        Arc::clone(&slice.slice)
     } else {
-        let resolved = Arc::new(crate::effect::resolve(
+        let mut memory = execution.workspace(|| 0)?;
+        let resolved = Arc::new(crate::effect::resolve_budgeted(
             database,
             cut.clone(),
             crate::effect::EffectLimits::default(),
-            || execution.check(),
+            |units| execution.work(units),
+            |bytes| memory.resize(bytes),
         )?);
-        effect_cache.insert(cut, Arc::clone(&resolved));
+        memory.resize(
+            (resolved.assertions().len() as u64)
+                .saturating_mul(2 * size_of::<crate::effect::EffectiveAssertion>() as u64)
+                .saturating_add(256),
+        )?;
+        effect_cache.insert(
+            cut,
+            CachedSlice {
+                slice: Arc::clone(&resolved),
+                _memory: memory,
+            },
+        );
         resolved
     };
 
-    let mut matched = Vec::new();
+    let mut matched = BudgetVec::new(&execution.budget);
     for evidence in slice.assertions() {
-        execution.check()?;
+        execution.work(1)?;
         let target = evidence.target();
         for binding in match_appearance_set(
             &pattern.appearances,
@@ -1558,11 +1689,17 @@ fn evaluate_effect_pattern(
             domains,
             execution,
         )? {
+            let _working = execution.workspace(|| {
+                binding
+                    .heap_bytes()
+                    .saturating_add(target.value().token().len() as u64)
+                    .saturating_add(256)
+            })?;
             let Some(binding) = match_fields(pattern, &target, binding)? else {
                 continue;
             };
             let Some(via) = effect.via.as_deref() else {
-                matched.push(binding);
+                matched.push(binding)?;
                 continue;
             };
             let assertion = evidence.assertion();
@@ -1573,8 +1710,14 @@ fn evaluate_effect_pattern(
                 domains,
                 execution,
             )? {
+                let _via = execution.workspace(|| {
+                    via_binding
+                        .heap_bytes()
+                        .saturating_add(assertion.value().token().len() as u64)
+                        .saturating_add(256)
+                })?;
                 if let Some(via_binding) = match_fields(via, &assertion, via_binding)? {
-                    matched.push(via_binding);
+                    matched.push(via_binding)?;
                 }
             }
         }
@@ -1603,22 +1746,35 @@ fn candidate_posits(
     input: &Binding,
     access: &plan::PlanAccess,
     execution: &ExecutionContext,
-) -> Result<Vec<Arc<Posit<LiteralValue>>>, DatabaseError> {
-    let identities = candidate_identities(database, pattern, input, access)?;
+) -> Result<BudgetVec<Arc<Posit<LiteralValue>>>, DatabaseError> {
+    let identities = candidate_identities(database, pattern, input, access, execution)?;
     let keeper = database.posit_keeper();
     let mut keeper = keeper
         .lock()
         .map_err(|error| DatabaseError::Lock(error.to_string()))?;
-    identities
-        .map(|identity| {
-            execution.check()?;
-            keeper.posit::<LiteralValue>(identity).ok_or_else(|| {
-                DatabaseError::Invariant(format!(
-                    "posit index contains identity {identity} without a literal posit"
-                ))
-            })
-        })
-        .collect()
+    let mut posits = BudgetVec::new(&execution.budget);
+    for identity in identities {
+        execution.work(1)?;
+        let posit = keeper.posit::<LiteralValue>(identity).ok_or_else(|| {
+            DatabaseError::Invariant(format!(
+                "posit index contains identity {identity} without a literal posit"
+            ))
+        })?;
+        posits.push(posit)?;
+    }
+    Ok(posits)
+}
+
+struct CandidateIds {
+    identities: Box<dyn Iterator<Item = Thing>>,
+    _memory: Reservation,
+}
+
+impl Iterator for CandidateIds {
+    type Item = Thing;
+    fn next(&mut self) -> Option<Thing> {
+        self.identities.next()
+    }
 }
 
 fn candidate_identities(
@@ -1626,9 +1782,12 @@ fn candidate_identities(
     pattern: &PositPattern,
     input: &Binding,
     access: &plan::PlanAccess,
-) -> Result<Box<dyn Iterator<Item = Thing>>, DatabaseError> {
+    execution: &ExecutionContext,
+) -> Result<CandidateIds, DatabaseError> {
     let candidates = match access {
-        plan::PlanAccess::Bitmap { .. } => indexed_candidate_identities(database, pattern, input)?,
+        plan::PlanAccess::Bitmap { .. } => {
+            indexed_candidate_identities(database, pattern, input, execution)?
+        }
         plan::PlanAccess::FullScan => None,
         plan::PlanAccess::EffectiveSlice => {
             return Err(DatabaseError::Invariant(
@@ -1637,33 +1796,84 @@ fn candidate_identities(
         }
     };
     if let Some(candidates) = candidates {
-        Ok(Box::new(candidates.into_iter()))
+        Ok(CandidateIds {
+            identities: Box::new(candidates.posting.into_iter()),
+            _memory: candidates.memory,
+        })
     } else {
         let reverse = database.posit_thing_to_appearance_set_lookup();
-        let mut identities = reverse
+        let reverse = reverse
             .lock()
-            .map_err(|error| DatabaseError::Lock(error.to_string()))?
-            .keys()
-            .copied()
-            .collect::<Vec<_>>();
+            .map_err(|error| DatabaseError::Lock(error.to_string()))?;
+        execution.work((reverse.len() as u64).saturating_add(sort_work(reverse.len(), 1)))?;
+        let memory = execution
+            .workspace(|| (reverse.len() as u64).saturating_mul(size_of::<Thing>() as u64))?;
+        let mut identities = reverse.keys().copied().collect::<Vec<_>>();
         identities.sort_unstable();
-        Ok(Box::new(identities.into_iter()))
+        Ok(CandidateIds {
+            identities: Box::new(identities.into_iter()),
+            _memory: memory,
+        })
     }
+}
+
+struct BudgetBitmap {
+    posting: RoaringTreemap,
+    memory: Reservation,
+}
+
+impl Workspace for BudgetBitmap {
+    fn heap_bytes(&self) -> u64 {
+        0
+    }
+}
+
+impl std::ops::Deref for BudgetBitmap {
+    type Target = RoaringTreemap;
+    fn deref(&self) -> &RoaringTreemap {
+        &self.posting
+    }
+}
+
+fn bitmap_bytes(identities: u64) -> u64 {
+    if identities == 0 {
+        0
+    } else {
+        identities.saturating_mul(256).saturating_add(128)
+    }
+}
+
+fn clone_posting(
+    posting: Option<&RoaringTreemap>,
+    execution: &ExecutionContext,
+) -> Result<BudgetBitmap, DatabaseError> {
+    let count = posting.map_or(0, RoaringTreemap::len);
+    execution.work(count)?;
+    let memory = execution.workspace(|| bitmap_bytes(count))?;
+    Ok(BudgetBitmap {
+        posting: posting.cloned().unwrap_or_default(),
+        memory,
+    })
 }
 
 fn indexed_candidate_identities(
     database: &Database,
     pattern: &PositPattern,
     input: &Binding,
-) -> Result<Option<RoaringTreemap>, DatabaseError> {
-    let mut postings = Vec::new();
+    execution: &ExecutionContext,
+) -> Result<Option<BudgetBitmap>, DatabaseError> {
+    let mut postings = BudgetVec::new(&execution.budget);
 
     if let Some(name) = &pattern.posit
         && (pattern.cutoff.is_none() || pattern.latest_matching)
     {
         match input.get(name) {
             Some(BoundValue::Thing(identity) | BoundValue::Posit(identity)) => {
-                postings.push(singleton(*identity));
+                let memory = execution.workspace(|| bitmap_bytes(1))?;
+                postings.push(BudgetBitmap {
+                    posting: singleton(*identity),
+                    memory,
+                })?;
             }
             Some(other) => {
                 return Err(DatabaseError::VariableDomain {
@@ -1680,13 +1890,10 @@ fn indexed_candidate_identities(
         match input.get(name) {
             Some(BoundValue::AppearanceSet(appearance_set)) => {
                 let lookup = database.appearance_set_to_posit_thing_lookup();
-                let posting = lookup
+                let lookup = lookup
                     .lock()
-                    .map_err(|error| DatabaseError::Lock(error.to_string()))?
-                    .lookup(appearance_set)
-                    .cloned()
-                    .unwrap_or_default();
-                postings.push(posting);
+                    .map_err(|error| DatabaseError::Lock(error.to_string()))?;
+                postings.push(clone_posting(lookup.lookup(appearance_set), execution)?)?;
             }
             Some(other) => {
                 return Err(DatabaseError::VariableDomain {
@@ -1700,33 +1907,36 @@ fn indexed_candidate_identities(
     }
 
     for member in &pattern.appearances.members {
+        execution.work(1)?;
         let (role_is_constrained, role) = indexed_role(database, &member.role, input)?;
         if role_is_constrained {
             let Some(role) = role.as_ref() else {
-                return Ok(Some(RoaringTreemap::new()));
+                return Ok(Some(clone_posting(None, execution)?));
             };
             let lookup = database.role_to_posit_thing_lookup();
-            let posting = lookup
+            let lookup = lookup
                 .lock()
-                .map_err(|error| DatabaseError::Lock(error.to_string()))?
-                .lookup(&role.role())
-                .cloned()
-                .unwrap_or_default();
-            postings.push(posting);
+                .map_err(|error| DatabaseError::Lock(error.to_string()))?;
+            postings.push(clone_posting(lookup.lookup(&role.role()), execution)?)?;
         }
 
         if let Some(things) = indexed_things(&member.thing, input)? {
-            let posting = posit_posting_for_things(database, &things, role.as_ref())?;
-            postings.push(posting);
+            let _things = execution.workspace(|| things.len() as u64 * 8)?;
+            let posting = posit_posting_for_things(database, &things, role.as_ref(), execution)?;
+            postings.push(posting)?;
         }
     }
-    postings.sort_unstable_by_key(RoaringTreemap::len);
+    execution.work(sort_work(postings.len(), 1))?;
+    let _sort = execution.workspace(|| postings.len() as u64 * size_of::<BudgetBitmap>() as u64)?;
+    postings.sort_by(|left, right| left.len().cmp(&right.len()));
     let mut postings = postings.into_iter();
     let Some(mut candidates) = postings.next() else {
         return Ok(None);
     };
     for posting in postings {
-        candidates &= posting;
+        execution.work(candidates.len().saturating_add(posting.len()))?;
+        let _scratch = execution.workspace(|| bitmap_bytes(candidates.len().min(posting.len())))?;
+        candidates.posting &= posting.posting;
         if candidates.is_empty() {
             break;
         }
@@ -1801,22 +2011,25 @@ fn posit_posting_for_things(
     database: &Database,
     things: &[Thing],
     role: Option<&Arc<Role>>,
-) -> Result<RoaringTreemap, DatabaseError> {
+    execution: &ExecutionContext,
+) -> Result<BudgetBitmap, DatabaseError> {
     let appearance_lookup = database.thing_to_appearance_lookup();
     let appearance_lookup = appearance_lookup
         .lock()
         .map_err(|error| DatabaseError::Lock(error.to_string()))?;
-    let mut appearances = HashSet::new();
+    let mut appearances: HashSet<_, OtherHasher> = HashSet::default();
+    let mut appearance_memory = execution.workspace(|| 0)?;
     for thing in things {
         if let Some(found) = appearance_lookup.lookup(thing) {
-            appearances.extend(
-                found
-                    .iter()
-                    .filter(|appearance| {
-                        role.is_none_or(|role| appearance.role().role() == role.role())
-                    })
-                    .cloned(),
-            );
+            for appearance in found {
+                execution.work(1)?;
+                if role.is_none_or(|role| appearance.role().role() == role.role())
+                    && !appearances.contains(appearance)
+                {
+                    appearance_memory.grow(96)?;
+                    appearances.insert(Arc::clone(appearance));
+                }
+            }
         }
     }
     drop(appearance_lookup);
@@ -1825,10 +2038,17 @@ fn posit_posting_for_things(
     let set_lookup = set_lookup
         .lock()
         .map_err(|error| DatabaseError::Lock(error.to_string()))?;
-    let mut appearance_sets = HashSet::new();
+    let mut appearance_sets: HashSet<_, OtherHasher> = HashSet::default();
+    let mut set_memory = execution.workspace(|| 0)?;
     for appearance in appearances {
         if let Some(found) = set_lookup.lookup(&appearance) {
-            appearance_sets.extend(found.iter().cloned());
+            for set in found {
+                execution.work(1)?;
+                if !appearance_sets.contains(set) {
+                    set_memory.grow(96)?;
+                    appearance_sets.insert(Arc::clone(set));
+                }
+            }
         }
     }
     drop(set_lookup);
@@ -1838,12 +2058,16 @@ fn posit_posting_for_things(
         .lock()
         .map_err(|error| DatabaseError::Lock(error.to_string()))?;
     let mut posting = RoaringTreemap::new();
+    let mut memory = execution.workspace(|| 0)?;
     for appearance_set in appearance_sets {
         if let Some(found) = posit_lookup.lookup(&appearance_set) {
+            let combined = posting.len().saturating_add(found.len());
+            execution.work(combined)?;
+            memory.resize(bitmap_bytes(combined))?;
             posting |= found;
         }
     }
-    Ok(posting)
+    Ok(BudgetBitmap { posting, memory })
 }
 
 fn singleton(identity: Thing) -> RoaringTreemap {
@@ -1858,10 +2082,10 @@ fn match_appearance_set(
     input: &Binding,
     _domains: &HashMap<String, Domain>,
     execution: &ExecutionContext,
-) -> Result<Vec<Binding>, DatabaseError> {
-    let mut matches = Vec::new();
+) -> Result<BudgetVec<Binding>, DatabaseError> {
+    let mut matches = BudgetVec::new(&execution.budget);
     visit_appearance_set(pattern, stored, input, execution, &mut |binding| {
-        matches.push(binding);
+        matches.push(binding)?;
         Ok(SinkFlow::Continue)
     })?;
     Ok(matches)
@@ -1874,7 +2098,8 @@ fn visit_appearance_set(
     execution: &ExecutionContext,
     visitor: &mut dyn FnMut(Binding) -> Result<SinkFlow, DatabaseError>,
 ) -> Result<SinkFlow, DatabaseError> {
-    execution.check()?;
+    execution.work(1)?;
+    let _binding = execution.workspace(|| input.heap_bytes().saturating_add(128))?;
     let mut binding = input.clone();
     if let Some(name) = &pattern.binding
         && !binding.bind(name, BoundValue::AppearanceSet(Arc::clone(stored)))?
@@ -1891,6 +2116,8 @@ fn visit_appearance_set(
         return Ok(SinkFlow::Continue);
     }
     let mut unique: HashSet<Binding, OtherHasher> = HashSet::default();
+    let mut unique_memory = execution.workspace(|| 0)?;
+    let _used = execution.workspace(|| stored.appearances().len() as u64)?;
     match_members(
         &pattern.members,
         stored.appearances(),
@@ -1898,8 +2125,12 @@ fn visit_appearance_set(
         &mut vec![false; stored.appearances().len()],
         binding,
         &mut |binding| {
-            if stored.appearances().len() > 1 && !unique.insert(binding.clone()) {
-                return Ok(SinkFlow::Continue);
+            if stored.appearances().len() > 1 {
+                if unique.contains(&binding) {
+                    return Ok(SinkFlow::Continue);
+                }
+                unique_memory.grow(binding.heap_bytes().saturating_add(96))?;
+                unique.insert(binding.clone());
             }
             visitor(binding)
         },
@@ -1916,12 +2147,13 @@ fn match_members(
     visitor: &mut dyn FnMut(Binding) -> Result<SinkFlow, DatabaseError>,
     execution: &ExecutionContext,
 ) -> Result<SinkFlow, DatabaseError> {
-    execution.check()?;
+    execution.work(1)?;
+    let _binding = execution.workspace(|| binding.heap_bytes().saturating_add(128))?;
     if index == patterns.len() {
         return visitor(binding);
     }
     for (stored_index, appearance) in stored.iter().enumerate() {
-        execution.check()?;
+        execution.work(1)?;
         if used[stored_index] {
             continue;
         }
@@ -2025,6 +2257,18 @@ fn maximal(
     )
 }
 
+fn reduce_matches(
+    rows: BudgetVec<StructuralMatch>,
+    execution: &ExecutionContext,
+) -> Result<BudgetVec<StructuralMatch>, DatabaseError> {
+    // Worst case: every row owns a group, frontier, membership slot, and output
+    // slot. Store objects referenced by group keys remain shared.
+    let _scratch = execution.workspace(|| (rows.len() as u64).saturating_mul(1024))?;
+    let (rows, _input) = rows.into_parts();
+    let reduced = maximal(rows, || execution.work(1))?;
+    BudgetVec::from_vec(reduced, &execution.budget)
+}
+
 fn block_has_match(
     plan: &plan::PlannedBranch,
     outer: &Binding,
@@ -2033,11 +2277,12 @@ fn block_has_match(
     execution: &ExecutionContext,
     effect_cache: &mut EffectCache,
 ) -> Result<bool, DatabaseError> {
-    let mut bindings = vec![outer.clone()];
+    let mut bindings = BudgetVec::new(&execution.budget);
+    bindings.push(outer.clone())?;
     for pattern in &plan.patterns {
-        let mut joined = Vec::new();
+        let mut joined = BudgetVec::new(&execution.budget);
         for binding in &bindings {
-            execution.check()?;
+            execution.work(1)?;
             joined.extend(evaluate_pattern(
                 database,
                 pattern,
@@ -2045,7 +2290,7 @@ fn block_has_match(
                 domains,
                 execution,
                 effect_cache,
-            )?);
+            )?)?;
         }
         bindings = joined;
         if bindings.is_empty() {
@@ -2295,9 +2540,14 @@ mod tests {
             ThingSlot::Variable("entity".to_string()),
             RoleSlot::Named("rare".to_string()),
         );
-        let rare_candidates = indexed_candidate_identities(&database, &rare, &Binding::default())
-            .unwrap()
-            .unwrap();
+        let rare_candidates = indexed_candidate_identities(
+            &database,
+            &rare,
+            &Binding::default(),
+            &ExecutionOptions::default().resolve("").unwrap(),
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(rare_candidates.len(), 2);
 
         let pattern_order = [
@@ -2325,9 +2575,14 @@ mod tests {
             ThingSlot::Variable("entity".to_string()),
             RoleSlot::Named("common".to_string()),
         );
-        let bound_candidates = indexed_candidate_identities(&database, &common, &binding)
-            .unwrap()
-            .unwrap();
+        let bound_candidates = indexed_candidate_identities(
+            &database,
+            &common,
+            &binding,
+            &ExecutionOptions::default().resolve("").unwrap(),
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(bound_candidates.len(), 1);
 
         let unconstrained = PositPattern {
@@ -2345,9 +2600,14 @@ mod tests {
             effect: None,
         };
         assert!(
-            indexed_candidate_identities(&database, &unconstrained, &Binding::default())
-                .unwrap()
-                .is_none()
+            indexed_candidate_identities(
+                &database,
+                &unconstrained,
+                &Binding::default(),
+                &ExecutionOptions::default().resolve("").unwrap()
+            )
+            .unwrap()
+            .is_none()
         );
     }
 }

@@ -12,6 +12,71 @@ floor across several atomic batch sizes, physical size at two scales, warm
 startup replay, full and selective query shapes, historical selection, and both
 dense and sparse bitmap construction.
 
+## 2026-11-06 query budget accounting
+
+The same 33 incremental workloads now also run as `query_budgets/*` with both
+query limits enabled: 20,000,000 work units and 256 MiB of accounted workspace.
+Every case verifies its result count before measurement and completes within
+those budgets. The `incremental/*` group retains unlimited budgets to measure
+the default-path overhead against the previous incremental implementation.
+
+Environment and timing settings match the incremental measurements below. The
+`before-query-budgets` baseline preserves the measurements of `e512e5b` already
+recorded in `INCREMENTAL_BENCHMARK_RESULTS.json`; each copied mean was verified
+against that report. Disabled and enabled runs were measured sequentially,
+without concurrent compilation or tests. Setup stays outside timing; parsing,
+planning, execution, and result cleanup remain included.
+
+```sh
+# On the incremental implementation, before adding budget accounting:
+cargo bench --offline --no-default-features --bench benchmark -- 'incremental/' \
+  --sample-size 20 --warm-up-time 0.2 --measurement-time 0.5 \
+  --save-baseline before-query-budgets --noplot
+
+# With budget accounting implemented, first disabled and then enabled:
+cargo bench --offline --no-default-features --bench benchmark -- 'incremental/' \
+  --sample-size 20 --warm-up-time 0.2 --measurement-time 0.5 \
+  --baseline before-query-budgets --noplot
+cargo bench --offline --no-default-features --bench benchmark -- 'query_budgets/' \
+  --sample-size 20 --warm-up-time 0.2 --measurement-time 0.5 \
+  --save-baseline configured-query-budgets --noplot
+```
+
+All times below are **mean microseconds** at the largest scale. The final
+column compares enabled accounting with the new unlimited path, not the older
+baseline. [All 33 measurements](QUERY_BUDGET_BENCHMARK_RESULTS.json) include
+95% confidence intervals for each mean, source hashes, and the configured caps.
+
+| Workload | Rows per role | Before budgets | Disabled | Enabled | Accounting overhead |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Scan, limit 10 | 2,048 | 12.07 | 12.46 | 13.17 | +5.8% |
+| Scan, first row and stop | 2,048 | 6.96 | 7.07 | 7.39 | +4.6% |
+| Scan, all rows | 2,048 | 956.57 | 1,000.01 | 1,127.56 | +12.8% |
+| Scan, ordered top 10 | 2,048 | 1,327.21 | 1,390.99 | 1,606.24 | +15.5% |
+| Fallible-comparison control, limit 10 | 2,048 | 1,324.84 | 1,379.58 | 1,857.27 | +34.6% |
+| Cartesian join, limit 10 | 256 | 20.99 | 21.05 | 22.31 | +6.0% |
+| Cartesian join, first row and stop | 256 | 19.88 | 13.27 | 12.81 | −3.5% |
+| Join with early exact filter | 256 | 454.53 | 293.60 | 323.60 | +10.2% |
+| Join, distinct left values, limit 10 | 256 | 2,149.83 | 2,106.32 | 2,188.76 | +3.9% |
+| Join, ordered top 10 | 256 | 70,250.88 | 67,702.07 | 77,072.62 | +13.8% |
+| Absence with an early witness | 256 | 330.75 | 335.14 | 364.99 | +8.9% |
+
+With budgets disabled, the largest full-scan, sort, and comparison-control
+cases cost about 4–5% more than the saved baseline. Active accounting adds
+roughly 4–16% on most of these cases and about 35% on the materialized
+comparison control, which repeatedly tracks owned intermediate bindings.
+The earlier first-row and exact-filter measurements had wider intervals;
+their decreases do not establish a speedup from accounting. The negative
+first-row accounting overhead likewise reflects measurement variation.
+
+These measurements preserve the large early-limit and join gains from
+incremental execution, while making the cost of enforcing budgets explicit.
+Workspace reservations use an accounting model; neither allocator use nor
+peak RSS was measured. Regression tests separately verify exact cap boundaries,
+release/reuse, top-k versus full-sort workspace, temporal and effective-cut
+buffers, cumulative work, partial streams, and failure without fallback
+mutations. Reducing intermediate binding allocations remains roadmap work.
+
 ## 2026-11-06 incremental execution
 
 Eligible searches now use candidate iterators and depth-first nested-loop joins,
@@ -93,9 +158,10 @@ absence witness per outer row, and a top-k buffer of at most `k + 1` rows.
 
 Peak RSS, total query memory, and production per-operator counters were not
 measured. The heap bound excludes distinct seen-state, bitmap candidate postings,
-sorted full-scan identities, and temporal reduction buffers. Hard work/memory
-budgets, hash joins, effective-slice indexing/cache bounds, and incremental
-validation for currently materialized plans remain roadmap work.
+sorted full-scan identities, and temporal reduction buffers. Query work/workspace
+budgets and retained effective-cut cache accounting are covered by the subsequent
+budget measurements above. Hash joins, effective-slice indexing/eviction, and
+incremental validation for currently materialized plans remain roadmap work.
 
 ## 2026-11-06 shared temporal reduction
 

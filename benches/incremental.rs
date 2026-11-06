@@ -2,7 +2,9 @@
 //! Identical fixtures and queries run against the materializing baseline.
 
 use criterion::{BenchmarkId, Criterion};
-use positorium::{Database, Engine, PersistenceMode, ResultCell, RowSink, SinkFlow};
+use positorium::{
+    Database, Engine, ExecutionOptions, PersistenceMode, QueryLimits, ResultCell, RowSink, SinkFlow,
+};
 use std::cell::OnceCell;
 use std::hint::black_box;
 
@@ -35,7 +37,19 @@ impl RowSink for FirstRow {
 }
 
 pub fn benchmarks(c: &mut Criterion) {
-    let mut group = c.benchmark_group("incremental");
+    benchmark_limits(c, "incremental", QueryLimits::default());
+    benchmark_limits(
+        c,
+        "query_budgets",
+        QueryLimits {
+            max_work_units: Some(20_000_000),
+            max_memory_bytes: Some(256 * 1024 * 1024),
+        },
+    );
+}
+
+fn benchmark_limits(c: &mut Criterion, group: &str, query_limits: QueryLimits) {
+    let mut group = c.benchmark_group(group);
     for (name, pattern, suffix, join, first_row) in [
         (
             "scan_limit",
@@ -125,6 +139,10 @@ pub fn benchmarks(c: &mut Criterion) {
             group.bench_with_input(BenchmarkId::new(name, rows), &rows, |b, &rows| {
                 let database = database.get_or_init(|| fixture(rows));
                 let engine = Engine::new(database);
+                let options = || ExecutionOptions {
+                    query_limits,
+                    ..ExecutionOptions::default()
+                };
                 let expected = match name {
                     "scan_all" | "join_filter" => rows,
                     "scan_first_row" | "join_first_row" => 1,
@@ -133,18 +151,36 @@ pub fn benchmarks(c: &mut Criterion) {
                 };
                 if first_row {
                     let mut sink = FirstRow::default();
-                    engine.execute_stream_single(&script, &mut sink).unwrap();
+                    engine
+                        .execute_stream_single_with_options(&script, &mut sink, options())
+                        .unwrap();
                     assert!(sink.0);
                     b.iter(|| {
                         let mut sink = FirstRow::default();
                         engine
-                            .execute_stream_single(black_box(&script), &mut sink)
+                            .execute_stream_single_with_options(
+                                black_box(&script),
+                                &mut sink,
+                                options(),
+                            )
                             .unwrap();
                         black_box(sink.0)
                     });
                 } else {
-                    assert_eq!(engine.execute_collect(&script).unwrap().row_count, expected);
-                    b.iter(|| black_box(engine.execute_collect(black_box(&script)).unwrap()));
+                    assert_eq!(
+                        engine
+                            .execute_collect_with_options(&script, options())
+                            .unwrap()
+                            .row_count,
+                        expected,
+                    );
+                    b.iter(|| {
+                        black_box(
+                            engine
+                                .execute_collect_with_options(black_box(&script), options())
+                                .unwrap(),
+                        )
+                    });
                 }
             });
         }

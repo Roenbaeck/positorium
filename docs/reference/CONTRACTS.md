@@ -6,7 +6,7 @@ SQLite prototype is deliberately excluded by D031.
 
 | Contract | Current version | Where it is carried |
 | --- | ---: | --- |
-| Crate API | `0.1` | Cargo package version; 0.x minor releases may contain documented beta breaks |
+| Crate API | `0.2` | Cargo package version; 0.x minor releases may contain documented beta breaks |
 | Store | `1.0` | Manifest and every log-segment header; specified by [STORAGE.md](STORAGE.md) |
 | Traqula | `1` | Execution metadata, required HTTP request field, HTTP response, and WASM response |
 | HTTP | `v1` | `/v1/query` and every buffered response |
@@ -57,6 +57,17 @@ Query plan 2 adds `incremental` and `materialization_reason`, the `top_k` and
 reports `presentation_only: false`. Consumers of plan 1 must accept these new
 operators and fields before reading plan 2; result-cell, language, and storage
 contracts remain unchanged.
+
+Explicit query budgets add optional execution controls without changing
+Traqula 1, store 1.0, query plan 2, or result-cell formats. HTTP v1 accepts
+`query_limits` and enforces server caps; SSE 1 uses its existing error/end
+framing on exhaustion. WASM interface 1 adds `execute_with_query_options`, and
+Python interface 1 adds `max_work_units` and `max_memory_bytes` keywords.
+Rust `ExecutionOptions` gains `query_limits`; callers using explicit struct
+literals must supply it or use `..ExecutionOptions::default()`. Logical work
+units and workspace allowances are operational controls, not stable plan cost
+estimates or process-memory measurements; see
+[Execution budgets](TRAQULA.md#execution-budgets).
 
 Every published store-format break must preserve logical data through a direct
 or stepwise offline migration that writes and validates a new store beside the

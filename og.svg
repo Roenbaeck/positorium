@@ -1,70 +1,135 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title description">
   <title id="title">Positorium — A database for facts that disagree</title>
-  <desc id="description">Two sources retain different assessments of the same organisation, each with certainty and provenance.</desc>
+  <desc id="description">An editorial composition showing two sourced assessments of the same organisation, each retaining its own certainty and provenance.</desc>
+
   <defs>
-    <linearGradient id="paper" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#fbf8f1"/>
-      <stop offset="1" stop-color="#eee7dc"/>
+    <linearGradient id="canvas" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fbf9f4"/>
+      <stop offset="0.58" stop-color="#f4efe7"/>
+      <stop offset="1" stop-color="#e9e0d4"/>
     </linearGradient>
-    <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%">
-      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#463d34" flood-opacity="0.14"/>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#282320"/>
+      <stop offset="1" stop-color="#171513"/>
+    </linearGradient>
+    <linearGradient id="redEdge" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#b23a47"/>
+      <stop offset="1" stop-color="#7b202b"/>
+    </linearGradient>
+    <pattern id="microGrid" width="28" height="28" patternUnits="userSpaceOnUse">
+      <path d="M28 0H0V28" fill="none" stroke="#b8aa99" stroke-width="0.7"/>
+    </pattern>
+    <filter id="panelShadow" x="-25%" y="-20%" width="160%" height="170%">
+      <feDropShadow dx="0" dy="22" stdDeviation="24" flood-color="#40352d" flood-opacity="0.23"/>
     </filter>
+    <filter id="cardShadow" x="-15%" y="-20%" width="130%" height="150%">
+      <feDropShadow dx="0" dy="5" stdDeviation="7" flood-color="#050403" flood-opacity="0.18"/>
+    </filter>
+    <clipPath id="panelClip">
+      <rect x="708" y="47" width="432" height="536" rx="30"/>
+    </clipPath>
   </defs>
 
-  <rect width="1200" height="630" fill="url(#paper)"/>
-  <path d="M0 88H1200M0 542H1200M70 0V630M1130 0V630" stroke="#d7cec2" stroke-width="1" opacity="0.55"/>
-  <circle cx="70" cy="88" r="5" fill="#982a35"/>
-  <circle cx="1130" cy="542" r="5" fill="#982a35"/>
+  <!-- Warm editorial canvas -->
+  <rect width="1200" height="630" fill="url(#canvas)"/>
+  <circle cx="586" cy="322" r="436" fill="none" stroke="#d9d0c4" stroke-width="1" opacity="0.72"/>
+  <circle cx="586" cy="322" r="365" fill="none" stroke="#e1d9cf" stroke-width="1" opacity="0.66"/>
+  <path d="M0 541H681" stroke="#d8cec1" stroke-width="1"/>
+  <rect x="620" width="580" height="630" fill="url(#microGrid)" opacity="0.16"/>
+  <path d="M0 0H1200" stroke="#982a35" stroke-width="5"/>
 
-  <g transform="translate(76 66)">
-    <rect width="46" height="46" rx="12" fill="#1d1b19"/>
-    <text x="23" y="32" fill="#fffaf1" font-family="Georgia, 'Times New Roman', serif" font-size="25" font-weight="700" text-anchor="middle">P</text>
-    <text x="62" y="20" fill="#1d1b19" font-family="Georgia, 'Times New Roman', serif" font-size="23" font-weight="700">Positorium</text>
-    <text x="62" y="40" fill="#777067" font-family="Arial, Helvetica, sans-serif" font-size="11" font-weight="700" letter-spacing="2.2">EVIDENCE DATABASE</text>
+  <!-- Brand: given its own clear space, with no competing corner marker -->
+  <g transform="translate(76 58)">
+    <rect width="44" height="44" rx="11" fill="#1d1b19"/>
+    <path d="M13 11.5h9.4c7.1 0 11.2 3.2 11.2 8.8 0 5.8-4.3 9-11.7 9h-2.1v5.2H13zm6.8 5v7.9h2.3c3.4 0 5.2-1.3 5.2-4s-1.8-3.9-5.2-3.9z" fill="#fffaf1"/>
+    <text x="62" y="20" fill="#1d1b19" font-family="Iowan Old Style, Baskerville, Georgia, 'Times New Roman', serif" font-size="23" font-weight="700">Positorium</text>
+    <text x="62" y="40" fill="#756e66" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif" font-size="10.5" font-weight="700" letter-spacing="2.25">EVIDENCE DATABASE</text>
   </g>
 
-  <g transform="translate(76 174)">
-    <text fill="#1d1b19" font-family="Georgia, 'Times New Roman', serif" font-size="61" font-weight="700" letter-spacing="-1.5">
+  <!-- Primary message -->
+  <g transform="translate(76 180)">
+    <text fill="#1d1b19" font-family="Iowan Old Style, Baskerville, Georgia, 'Times New Roman', serif" font-size="63" font-weight="700" letter-spacing="-2.1">
       <tspan x="0" y="0">A database for</tspan>
-      <tspan x="0" y="70">facts that disagree.</tspan>
+      <tspan x="0" y="72">facts that disagree.</tspan>
     </text>
-    <rect x="0" y="102" width="74" height="5" rx="2.5" fill="#982a35"/>
-    <text x="0" y="150" fill="#575149" font-family="Arial, Helvetica, sans-serif" font-size="23">
+    <path d="M0 105H68" stroke="#982a35" stroke-width="5" stroke-linecap="round"/>
+    <text x="0" y="151" fill="#514b45" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif" font-size="22">
       <tspan x="0" dy="0">Preserve every claim with its source,</tspan>
-      <tspan x="0" dy="34">time, and certainty.</tspan>
+      <tspan x="0" dy="33">time, and certainty.</tspan>
     </text>
-    <text x="0" y="263" fill="#777067" font-family="Arial, Helvetica, sans-serif" font-size="17">Corrections append. Evidence remains.</text>
+
+    <g transform="translate(0 242)">
+      <path d="M0 0V58" stroke="#b9ada0" stroke-width="1"/>
+      <circle cx="0" cy="0" r="4" fill="#982a35"/>
+      <text x="18" y="9" fill="#746c64" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif" font-size="15">Corrections append.</text>
+      <text x="18" y="35" fill="#1d1b19" font-family="Iowan Old Style, Baskerville, Georgia, 'Times New Roman', serif" font-size="19" font-weight="700">Evidence remains.</text>
+    </g>
   </g>
 
-  <g transform="translate(720 93)" filter="url(#shadow)">
-    <rect width="404" height="444" rx="24" fill="#ffffff" stroke="#d7cec2"/>
-    <text x="30" y="44" fill="#982a35" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="700" letter-spacing="2">CURRENT EVIDENCE</text>
-    <text x="30" y="78" fill="#1d1b19" font-family="Georgia, 'Times New Roman', serif" font-size="25" font-weight="700">Northstar Trading</text>
-    <line x1="30" y1="101" x2="374" y2="101" stroke="#e4ddd3"/>
+  <!-- Compact evidence vocabulary -->
+  <g transform="translate(76 569)" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif">
+    <text y="0" fill="#8a8178" font-size="10.5" font-weight="700" letter-spacing="1.8">PROVENANCE</text>
+    <circle cx="117" cy="-4" r="2.5" fill="#982a35"/>
+    <text x="132" y="0" fill="#8a8178" font-size="10.5" font-weight="700" letter-spacing="1.8">TIME</text>
+    <circle cx="195" cy="-4" r="2.5" fill="#982a35"/>
+    <text x="210" y="0" fill="#8a8178" font-size="10.5" font-weight="700" letter-spacing="1.8">CERTAINTY</text>
+  </g>
 
-    <g transform="translate(30 128)">
-      <rect width="344" height="101" rx="15" fill="#f7f1ea" stroke="#dfd5c8"/>
-      <circle cx="24" cy="25" r="7" fill="#982a35"/>
-      <text x="43" y="30" fill="#5f5952" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700">Automated screening feed</text>
-      <text x="20" y="67" fill="#1d1b19" font-family="Georgia, 'Times New Roman', serif" font-size="24" font-weight="700">“high risk”</text>
-      <rect x="268" y="54" width="56" height="25" rx="12.5" fill="#f3e4e4"/>
-      <text x="296" y="72" fill="#982a35" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="700" text-anchor="middle">88%</text>
+  <!-- Dark evidence ledger with a restrained burgundy edge -->
+  <rect x="696" y="61" width="432" height="526" rx="29" fill="url(#redEdge)" opacity="0.96"/>
+  <rect x="708" y="47" width="432" height="536" rx="30" fill="url(#panel)" filter="url(#panelShadow)"/>
+  <g clip-path="url(#panelClip)">
+    <circle cx="1110" cy="78" r="122" fill="#982a35" opacity="0.11"/>
+    <circle cx="1110" cy="78" r="80" fill="none" stroke="#d8939a" stroke-width="1" opacity="0.15"/>
+    <path d="M708 460C830 418 958 510 1140 423V583H708Z" fill="#ffffff" opacity="0.025"/>
+  </g>
+
+  <g transform="translate(708 47)">
+    <!-- Panel header -->
+    <g transform="translate(32 30)" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif">
+      <rect width="164" height="29" rx="14.5" fill="#3a2a2b" stroke="#62353a"/>
+      <circle cx="16" cy="14.5" r="4" fill="#d85d69"/>
+      <text x="29" y="19" fill="#eabfc3" font-size="10.5" font-weight="700" letter-spacing="1.35">CURRENT EVIDENCE</text>
+      <rect x="299" width="69" height="29" rx="14.5" fill="#302d2a" stroke="#49433e"/>
+      <text x="333.5" y="19" fill="#beb5ab" font-size="10.5" font-weight="700" text-anchor="middle">2 CLAIMS</text>
+    </g>
+    <text x="32" y="102" fill="#fffaf2" font-family="Iowan Old Style, Baskerville, Georgia, 'Times New Roman', serif" font-size="29" font-weight="700">Northstar Trading</text>
+    <text x="32" y="125" fill="#8f8780" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif" font-size="12.5">One subject · independent source histories</text>
+
+    <!-- Claim 01 -->
+    <g transform="translate(32 150)" filter="url(#cardShadow)">
+      <rect width="368" height="130" rx="18" fill="#f8f3ed"/>
+      <rect width="5" height="130" rx="2.5" fill="#a52f3b"/>
+      <text x="24" y="29" fill="#982a35" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif" font-size="10.5" font-weight="800" letter-spacing="1.35">SOURCE 01</text>
+      <text x="24" y="51" fill="#6b635c" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif" font-size="13" font-weight="600">Automated screening feed</text>
+      <text x="24" y="91" fill="#1d1b19" font-family="Iowan Old Style, Baskerville, Georgia, 'Times New Roman', serif" font-size="27" font-weight="700">“high risk”</text>
+      <rect x="292" y="70" width="53" height="29" rx="14.5" fill="#f1dfe1"/>
+      <text x="318.5" y="89" fill="#982a35" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif" font-size="12.5" font-weight="800" text-anchor="middle">88%</text>
+      <text x="24" y="113" fill="#9a9188" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif" font-size="10.5">CERTAINTY RETAINED WITH CLAIM</text>
     </g>
 
-    <g transform="translate(30 247)">
-      <rect width="344" height="101" rx="15" fill="#f2f5f0" stroke="#d4ddd1"/>
-      <circle cx="24" cy="25" r="7" fill="#3d7855"/>
-      <text x="43" y="30" fill="#5f5952" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700">Human analyst</text>
-      <text x="20" y="67" fill="#1d1b19" font-family="Georgia, 'Times New Roman', serif" font-size="24" font-weight="700">“needs review”</text>
-      <rect x="268" y="54" width="56" height="25" rx="12.5" fill="#e5efe8"/>
-      <text x="296" y="72" fill="#3d7855" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="700" text-anchor="middle">96%</text>
+    <!-- Claim 02 -->
+    <g transform="translate(32 296)" filter="url(#cardShadow)">
+      <rect width="368" height="130" rx="18" fill="#f0f4ef"/>
+      <rect width="5" height="130" rx="2.5" fill="#3d7855"/>
+      <text x="24" y="29" fill="#3d7855" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif" font-size="10.5" font-weight="800" letter-spacing="1.35">SOURCE 02</text>
+      <text x="24" y="51" fill="#626a62" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif" font-size="13" font-weight="600">Human analyst</text>
+      <text x="24" y="91" fill="#1d1b19" font-family="Iowan Old Style, Baskerville, Georgia, 'Times New Roman', serif" font-size="27" font-weight="700">“needs review”</text>
+      <rect x="292" y="70" width="53" height="29" rx="14.5" fill="#deebe2"/>
+      <text x="318.5" y="89" fill="#3d7855" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif" font-size="12.5" font-weight="800" text-anchor="middle">96%</text>
+      <text x="24" y="113" fill="#8e978e" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif" font-size="10.5">CERTAINTY RETAINED WITH CLAIM</text>
     </g>
 
-    <g transform="translate(30 375)">
-      <text x="0" y="17" fill="#9b9389" font-family="Arial, Helvetica, sans-serif" font-size="13">Earlier analyst claim</text>
-      <text x="150" y="17" fill="#9b9389" font-family="Arial, Helvetica, sans-serif" font-size="13" text-decoration="line-through">“low risk”</text>
-      <rect x="281" y="0" width="43" height="23" rx="11.5" fill="#eeeae3"/>
-      <text x="302.5" y="16" fill="#777067" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="700" text-anchor="middle">0%</text>
+    <!-- Superseded history -->
+    <g transform="translate(32 456)" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif">
+      <text y="14" fill="#817a73" font-size="10.5" font-weight="700" letter-spacing="1.2">EARLIER CLAIM</text>
+      <text x="112" y="14" fill="#aaa19a" font-size="13" text-decoration="line-through">“low risk”</text>
+      <path d="M0 32H368" stroke="#3e3935"/>
+      <circle cx="5" cy="57" r="5" fill="none" stroke="#746b64"/>
+      <path d="M3 57l2 2 4-5" fill="none" stroke="#9c928a" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="20" y="61" fill="#8e857e" font-size="11.5">Superseded, never erased</text>
+      <rect x="323" y="44" width="45" height="25" rx="12.5" fill="#302d2a" stroke="#45403c"/>
+      <text x="345.5" y="61" fill="#aaa19a" font-size="11.5" font-weight="700" text-anchor="middle">0%</text>
     </g>
   </g>
 </svg>

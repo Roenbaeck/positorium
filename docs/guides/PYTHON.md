@@ -6,15 +6,13 @@ an in-memory database or an append-only store owned by the Python process.
 
 ## Install
 
-The Python package is part of the beta.2 source tree. Until beta.2 appears on
-PyPI, install it from a source checkout with Rust available:
+Install from a source checkout with Rust available:
 
 ```sh
 python -m pip install .
 ```
 
-After beta.2 is published, allow prereleases when installing the newest
-release:
+Or allow prereleases when installing the newest release from PyPI:
 
 ```sh
 python -m pip install --pre positorium
@@ -134,6 +132,8 @@ result = database.execute(
     now=positorium.time("2025-01-01"),
     timeout=2.0,
     max_rows=10_000,
+    max_work_units=1_000_000,
+    max_memory_bytes=64 * 1024 * 1024,
 )
 ```
 
@@ -142,6 +142,16 @@ is a positive number of seconds, and `max_rows` applies independently to every
 search. A lower Traqula `limit` still wins. Long-running native execution
 releases the Python interpreter lock; Positorium itself serializes scripts for
 one database owner.
+
+`max_work_units` caps cumulative logical query work across every search in the
+script. `max_memory_bytes` caps live accounted query workspace; reservations
+are released when operators finish. Both default to `None` (unlimited), accept
+zero, and raise `positorium.ResourceLimitError` on exhaustion. A failed search
+cannot trigger `or add` or later mutations; earlier committed commands remain.
+The workspace cap excludes shared database storage, parsing/planning, mutation
+staging, and collected results, so use `max_rows` to bound returned row counts.
+It is not a process-memory limit. The accounting model is specified in
+[Execution budgets](../reference/TRAQULA.md#execution-budgets).
 
 ## Terrain
 
@@ -167,7 +177,7 @@ All database exceptions derive from `PositoriumError`. Useful subclasses include
 The package exports `PYTHON_INTERFACE_VERSION`, `TRAQULA_VERSION`, and
 `TERRAIN_VERSION`. Python interface 1 is documented in
 [Contracts](../reference/CONTRACTS.md). The distribution version follows PEP
-440, so Cargo `0.1.4-beta.3` is installed as Python `0.1.4b3`.
+440, so Cargo `0.2.0-beta.3` is installed as Python `0.2.0b3`.
 
 ## Publishing a release
 

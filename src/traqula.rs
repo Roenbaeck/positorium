@@ -943,7 +943,10 @@ use pest_derive::Parser;
 #[grammar = "traqula.pest"] // relative to src
 struct TraqulaParser;
 
+mod budget;
 mod query;
+
+pub use budget::QueryLimits;
 
 pub use query::plan::{
     PlanAccess, PlanBinding, PlanCutoff, PlanDomain, PlanNode, PlanOperator, PlanOrder,
@@ -1112,6 +1115,8 @@ pub struct ExecutionOptions {
     pub max_rows_per_search: Option<usize>,
     /// Typed `$name` values. Names exclude the leading dollar sign.
     pub parameters: HashMap<String, ExecutionParameter>,
+    /// Cumulative query work and live query workspace limits for this script.
+    pub query_limits: QueryLimits,
 }
 
 /// A clonable cooperative cancellation token for one script execution.
@@ -1154,6 +1159,7 @@ struct ExecutionContext {
     cancellation: CancellationToken,
     max_rows_per_search: Option<usize>,
     parameters: HashMap<String, ResolvedParameter>,
+    budget: budget::QueryBudget,
 }
 
 #[derive(Debug, Clone)]
@@ -1206,11 +1212,29 @@ impl ExecutionOptions {
             cancellation: self.cancellation.unwrap_or_default(),
             max_rows_per_search: self.max_rows_per_search,
             parameters,
+            budget: budget::QueryBudget::new(self.query_limits),
         })
     }
 }
 
 impl ExecutionContext {
+    fn work(&self, units: u64) -> Result<(), DatabaseError> {
+        self.check()?;
+        self.budget.work(units)
+    }
+
+    fn workspace(
+        &self,
+        estimate: impl FnOnce() -> u64,
+    ) -> Result<budget::Reservation, DatabaseError> {
+        if self.budget.tracks_memory() {
+            self.check()?;
+            self.budget.memory(estimate())
+        } else {
+            Ok(budget::Reservation::default())
+        }
+    }
+
     fn parameter(&self, token: &str) -> Result<&ResolvedParameter, DatabaseError> {
         let name = token.strip_prefix('$').unwrap_or(token);
         self.parameters
@@ -2017,6 +2041,7 @@ impl<'en> Engine<'en> {
                 identity_bindings: HashMap::default(),
                 has_return: true,
                 sink_stopped,
+                _identity_memory: budget::Reservation::default(),
             });
         }
         let fallback = command

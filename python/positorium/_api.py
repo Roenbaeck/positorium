@@ -386,6 +386,8 @@ class Database:
         now: Optional[Union[Time, str, date, datetime]] = None,
         timeout: Optional[float] = None,
         max_rows: Optional[int] = None,
+        max_work_units: Optional[int] = None,
+        max_memory_bytes: Optional[int] = None,
     ) -> ExecutionResult:
         """Execute a complete Traqula script and return every projected search."""
         if not isinstance(script, str):
@@ -408,6 +410,8 @@ class Database:
             _time_text(now),
             timeout,
             max_rows,
+            max_work_units,
+            max_memory_bytes,
         )
         return _execution_result(_json.loads(payload))
 
