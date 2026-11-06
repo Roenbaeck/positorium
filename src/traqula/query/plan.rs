@@ -7,7 +7,7 @@
 use super::*;
 use serde::Serialize;
 
-pub const QUERY_PLAN_VERSION: u16 = 1;
+pub const QUERY_PLAN_VERSION: u16 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -66,8 +66,7 @@ impl From<&Cutoff> for PlanCutoff {
     }
 }
 
-/// Operators describe current materializing execution. A limit is applied to
-/// presentation; it does not currently bound intermediate work or promotion.
+/// Physical operators, including blocking reductions and bounded ordering.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "operator", rename_all = "snake_case")]
 pub enum PlanOperator {
@@ -119,11 +118,18 @@ pub enum PlanOperator {
     Sort {
         keys: Vec<PlanOrder>,
     },
+    TopK {
+        keys: Vec<PlanOrder>,
+        /// Includes one extra row to determine the result's `limited` flag.
+        rows: usize,
+    },
     Limit {
         rows: usize,
         presentation_only: bool,
     },
     IdentityBindings,
+    /// Evaluate a search with no projection and no mutation bindings to promote.
+    Consume,
     SearchOrAdd {
         fallback: String,
         allocations: Vec<PlanBinding>,
@@ -161,6 +167,10 @@ impl PlanNode {
 pub struct QueryPlan {
     pub version: u16,
     pub resolved_now: String,
+    /// Whether joins, filters, and projection pass rows incrementally.
+    pub incremental: bool,
+    /// Why a plan retains the original full-evaluation barriers, if required.
+    pub materialization_reason: Option<String>,
     pub root: PlanNode,
 }
 
@@ -170,6 +180,7 @@ pub(super) struct PlannedPattern {
     source_pattern: usize,
     estimated_candidates: u64,
     input_domains: HashMap<String, Domain>,
+    pub predicates: Vec<Predicate>,
 }
 
 pub(super) struct PlannedBranch {
@@ -187,6 +198,7 @@ pub(super) struct PhysicalQuery {
     pub order: Vec<OrderItem>,
     pub domains: HashMap<String, Domain>,
     pub limit: Option<usize>,
+    pub materialization_reason: Option<String>,
 }
 
 pub(super) fn compile(
@@ -196,6 +208,7 @@ pub(super) fn compile(
 ) -> Result<PhysicalQuery, DatabaseError> {
     execution.check()?;
     let PreparedQuery { query, domains } = prepared;
+    let materialization_reason = materialization_reason(&query, &domains);
     let mut branches = Vec::new();
     for (index, patterns) in query.branches.into_iter().enumerate() {
         branches.push(compile_branch(
@@ -216,6 +229,29 @@ pub(super) fn compile(
             execution,
         )?);
     }
+    if materialization_reason.is_none() {
+        for branch in &mut branches {
+            // Predicates are total in this mode. Apply each as soon as both
+            // operands exist, always after any temporal reduction in a pattern.
+            let mut available = HashSet::new();
+            let mut remaining: Vec<_> = query.predicates.iter().collect();
+            for pattern in &mut branch.patterns {
+                available.extend(pattern.pattern.introduced());
+                remaining.retain(|predicate| {
+                    let ready = available.contains(predicate.left.as_str())
+                        && match &predicate.right {
+                            Operand::Variable(name) => available.contains(name.as_str()),
+                            _ => true,
+                        };
+                    if ready {
+                        pattern.predicates.push((*predicate).clone());
+                    }
+                    !ready
+                });
+            }
+            debug_assert!(remaining.is_empty());
+        }
+    }
     Ok(PhysicalQuery {
         branches,
         not_exists,
@@ -225,7 +261,37 @@ pub(super) fn compile(
         distinct: query.distinct,
         order: query.order,
         limit: execution.effective_limit(query.limit),
+        materialization_reason,
     })
+}
+
+fn materialization_reason(query: &Query, domains: &HashMap<String, Domain>) -> Option<String> {
+    let reason = if query.has_fallback {
+        "search_or_add_requires_complete_identity_bindings"
+    } else if query
+        .branches
+        .iter()
+        .chain(&query.not_exists)
+        .flatten()
+        .any(|p| p.effect.is_some())
+    {
+        "effective_evidence_requires_complete_validation"
+    } else if query
+        .branches
+        .iter()
+        .chain(&query.not_exists)
+        .flatten()
+        .any(|p| matches!(p.value, ValueSlot::Literal(_)))
+        || query
+            .predicates
+            .iter()
+            .any(|p| domains[&p.left] == Domain::Literal && p.operator != "===")
+    {
+        "literal_comparisons_require_complete_validation"
+    } else {
+        return None;
+    };
+    Some(reason.to_string())
 }
 
 fn compile_branch(
@@ -278,6 +344,7 @@ fn compile_branch(
             source_pattern,
             estimated_candidates,
             input_domains: domains.clone(),
+            predicates: Vec::new(),
         });
         register_pattern(pattern, &mut domains)?;
     }
@@ -496,6 +563,9 @@ impl PlannedPattern {
                 node = node.wrap(PlanOperator::JoinExternalFields { variables });
             }
         }
+        if !self.predicates.is_empty() {
+            node = node.wrap(filter_operator(&self.predicates));
+        }
         node
     }
 }
@@ -553,24 +623,15 @@ impl PhysicalQuery {
                 inputs: vec![root, block.describe()],
             };
         }
-        if !self.predicates.is_empty() {
-            root = root.wrap(PlanOperator::Filter {
-                predicates: self
-                    .predicates
-                    .iter()
-                    .map(|p| {
-                        let right = match &p.right {
-                            Operand::Variable(name) => format!("?{name}"),
-                            Operand::Literal(value) => value.token().to_string(),
-                            Operand::Time(time) => format!("'{time}'"),
-                        };
-                        format!("?{} {} {right}", p.left, p.operator)
-                    })
-                    .collect(),
-            });
+        if self.materialization_reason.is_some() && !self.predicates.is_empty() {
+            root = root.wrap(filter_operator(&self.predicates));
         }
         if self.returns.is_empty() {
-            root = root.wrap(PlanOperator::IdentityBindings);
+            root = root.wrap(if self.materialization_reason.is_none() {
+                PlanOperator::Consume
+            } else {
+                PlanOperator::IdentityBindings
+            });
         } else {
             root = root.wrap(PlanOperator::Project {
                 columns: self.returns.clone(),
@@ -587,28 +648,51 @@ impl PhysicalQuery {
                 root = root.wrap(PlanOperator::Distinct);
             }
             if !self.order.is_empty() {
-                root = root.wrap(PlanOperator::Sort {
-                    keys: self
-                        .order
-                        .iter()
-                        .map(|key| PlanOrder {
-                            variable: key.variable.clone(),
-                            descending: key.descending,
-                        })
-                        .collect(),
+                let keys = self
+                    .order
+                    .iter()
+                    .map(|key| PlanOrder {
+                        variable: key.variable.clone(),
+                        descending: key.descending,
+                    })
+                    .collect();
+                root = root.wrap(match self.limit.and_then(|limit| limit.checked_add(1)) {
+                    Some(rows) if self.materialization_reason.is_none() => {
+                        PlanOperator::TopK { keys, rows }
+                    }
+                    _ => PlanOperator::Sort { keys },
                 });
             }
             if let Some(rows) = self.limit {
                 root = root.wrap(PlanOperator::Limit {
                     rows,
-                    presentation_only: true,
+                    presentation_only: self.materialization_reason.is_some()
+                        || !self.order.is_empty(),
                 });
             }
         }
         QueryPlan {
             version: QUERY_PLAN_VERSION,
             resolved_now: execution.metadata.resolved_now.to_string(),
+            incremental: self.materialization_reason.is_none(),
+            materialization_reason: self.materialization_reason.clone(),
             root,
         }
+    }
+}
+
+fn filter_operator(predicates: &[Predicate]) -> PlanOperator {
+    PlanOperator::Filter {
+        predicates: predicates
+            .iter()
+            .map(|p| {
+                let right = match &p.right {
+                    Operand::Variable(name) => format!("?{name}"),
+                    Operand::Literal(value) => value.token().to_string(),
+                    Operand::Time(time) => format!("'{time}'"),
+                };
+                format!("?{} {} {right}", p.left, p.operator)
+            })
+            .collect(),
     }
 }

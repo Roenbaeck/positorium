@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use unicode_normalization::UnicodeNormalization;
 
+mod pipeline;
 pub(super) mod plan;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,7 +33,7 @@ impl Domain {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum BoundValue {
     Thing(Thing),
     Role(Arc<Role>),
@@ -68,7 +69,7 @@ impl BoundValue {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 struct Binding(BTreeMap<String, BoundValue>);
 
 impl Binding {
@@ -199,6 +200,7 @@ struct Query {
     distinct: bool,
     order: Vec<OrderItem>,
     limit: Option<usize>,
+    has_fallback: bool,
 }
 
 #[derive(Debug)]
@@ -297,6 +299,23 @@ pub(super) fn explain_prepared(
 }
 
 fn execute_plan(
+    database: &Database,
+    query: plan::PhysicalQuery,
+    sink: &mut dyn RowSink,
+    return_columns: &mut Option<Vec<String>>,
+    execution: &ExecutionContext,
+) -> Result<SearchOutcome, DatabaseError> {
+    if query.materialization_reason.is_none() {
+        pipeline::execute(database, &query, sink, return_columns, execution)
+    } else {
+        execute_materialized(database, query, sink, return_columns, execution)
+    }
+}
+
+// Keep the evaluation barriers for data-dependent failures and mutation scope.
+// Moving a filter or stopping a join in these plans could hide a comparison
+// error, invalid evidence, or identities needed by `search ... or add`.
+fn execute_materialized(
     database: &Database,
     query: plan::PhysicalQuery,
     sink: &mut dyn RowSink,
@@ -474,6 +493,7 @@ fn parse_query(
     let mut returns = Vec::new();
     let mut distinct = false;
     let mut order = Vec::new();
+    let mut has_fallback = false;
     for clause in command.into_inner() {
         match clause.as_rule() {
             Rule::search_clause | Rule::union_clause => {
@@ -549,7 +569,7 @@ fn parse_query(
                 }
             }
             Rule::limit_clause => {}
-            Rule::or_add_clause => {}
+            Rule::or_add_clause => has_fallback = true,
             rule => {
                 return Err(DatabaseError::Invariant(format!(
                     "unexpected query clause {rule:?}"
@@ -570,6 +590,7 @@ fn parse_query(
         distinct,
         order,
         limit,
+        has_fallback,
     })
 }
 
@@ -1583,34 +1604,12 @@ fn candidate_posits(
     access: &plan::PlanAccess,
     execution: &ExecutionContext,
 ) -> Result<Vec<Arc<Posit<LiteralValue>>>, DatabaseError> {
-    let candidates = match access {
-        plan::PlanAccess::Bitmap { .. } => indexed_candidate_identities(database, pattern, input)?,
-        plan::PlanAccess::FullScan => None,
-        plan::PlanAccess::EffectiveSlice => {
-            return Err(DatabaseError::Invariant(
-                "effective slice used as a posit scan".into(),
-            ));
-        }
-    };
-    let identities = if let Some(candidates) = candidates {
-        candidates.into_iter().collect::<Vec<_>>()
-    } else {
-        let reverse = database.posit_thing_to_appearance_set_lookup();
-        let mut identities = reverse
-            .lock()
-            .map_err(|error| DatabaseError::Lock(error.to_string()))?
-            .keys()
-            .copied()
-            .collect::<Vec<_>>();
-        identities.sort_unstable();
-        identities
-    };
+    let identities = candidate_identities(database, pattern, input, access)?;
     let keeper = database.posit_keeper();
     let mut keeper = keeper
         .lock()
         .map_err(|error| DatabaseError::Lock(error.to_string()))?;
     identities
-        .into_iter()
         .map(|identity| {
             execution.check()?;
             keeper.posit::<LiteralValue>(identity).ok_or_else(|| {
@@ -1620,6 +1619,36 @@ fn candidate_posits(
             })
         })
         .collect()
+}
+
+fn candidate_identities(
+    database: &Database,
+    pattern: &PositPattern,
+    input: &Binding,
+    access: &plan::PlanAccess,
+) -> Result<Box<dyn Iterator<Item = Thing>>, DatabaseError> {
+    let candidates = match access {
+        plan::PlanAccess::Bitmap { .. } => indexed_candidate_identities(database, pattern, input)?,
+        plan::PlanAccess::FullScan => None,
+        plan::PlanAccess::EffectiveSlice => {
+            return Err(DatabaseError::Invariant(
+                "effective slice used as a posit scan".into(),
+            ));
+        }
+    };
+    if let Some(candidates) = candidates {
+        Ok(Box::new(candidates.into_iter()))
+    } else {
+        let reverse = database.posit_thing_to_appearance_set_lookup();
+        let mut identities = reverse
+            .lock()
+            .map_err(|error| DatabaseError::Lock(error.to_string()))?
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        identities.sort_unstable();
+        Ok(Box::new(identities.into_iter()))
+    }
 }
 
 fn indexed_candidate_identities(
@@ -1830,40 +1859,52 @@ fn match_appearance_set(
     _domains: &HashMap<String, Domain>,
     execution: &ExecutionContext,
 ) -> Result<Vec<Binding>, DatabaseError> {
+    let mut matches = Vec::new();
+    visit_appearance_set(pattern, stored, input, execution, &mut |binding| {
+        matches.push(binding);
+        Ok(SinkFlow::Continue)
+    })?;
+    Ok(matches)
+}
+
+fn visit_appearance_set(
+    pattern: &AppearanceSetPattern,
+    stored: &Arc<AppearanceSet>,
+    input: &Binding,
+    execution: &ExecutionContext,
+    visitor: &mut dyn FnMut(Binding) -> Result<SinkFlow, DatabaseError>,
+) -> Result<SinkFlow, DatabaseError> {
     execution.check()?;
     let mut binding = input.clone();
     if let Some(name) = &pattern.binding
         && !binding.bind(name, BoundValue::AppearanceSet(Arc::clone(stored)))?
     {
-        return Ok(Vec::new());
+        return Ok(SinkFlow::Continue);
     }
     if pattern.any {
-        return Ok(vec![binding]);
+        return visitor(binding);
     }
     if !pattern.open && pattern.members.len() != stored.appearances().len() {
-        return Ok(Vec::new());
+        return Ok(SinkFlow::Continue);
     }
     if pattern.members.len() > stored.appearances().len() {
-        return Ok(Vec::new());
+        return Ok(SinkFlow::Continue);
     }
-    let mut matches = Vec::new();
+    let mut unique: HashSet<Binding, OtherHasher> = HashSet::default();
     match_members(
         &pattern.members,
         stored.appearances(),
         0,
         &mut vec![false; stored.appearances().len()],
         binding,
-        &mut matches,
+        &mut |binding| {
+            if stored.appearances().len() > 1 && !unique.insert(binding.clone()) {
+                return Ok(SinkFlow::Continue);
+            }
+            visitor(binding)
+        },
         execution,
-    )?;
-    let mut unique = Vec::new();
-    for binding in matches {
-        execution.check()?;
-        if !unique.contains(&binding) {
-            unique.push(binding);
-        }
-    }
-    Ok(unique)
+    )
 }
 
 fn match_members(
@@ -1872,13 +1913,12 @@ fn match_members(
     index: usize,
     used: &mut [bool],
     binding: Binding,
-    matches: &mut Vec<Binding>,
+    visitor: &mut dyn FnMut(Binding) -> Result<SinkFlow, DatabaseError>,
     execution: &ExecutionContext,
-) -> Result<(), DatabaseError> {
+) -> Result<SinkFlow, DatabaseError> {
     execution.check()?;
     if index == patterns.len() {
-        matches.push(binding);
-        return Ok(());
+        return visitor(binding);
     }
     for (stored_index, appearance) in stored.iter().enumerate() {
         execution.check()?;
@@ -1887,11 +1927,14 @@ fn match_members(
         }
         if let Some(next) = match_appearance(&patterns[index], appearance, &binding)? {
             used[stored_index] = true;
-            match_members(patterns, stored, index + 1, used, next, matches, execution)?;
+            let flow = match_members(patterns, stored, index + 1, used, next, visitor, execution)?;
             used[stored_index] = false;
+            if let SinkFlow::Stop = flow {
+                return Ok(SinkFlow::Stop);
+            }
         }
     }
-    Ok(())
+    Ok(SinkFlow::Continue)
 }
 
 fn match_appearance(
@@ -2023,24 +2066,33 @@ fn validate_order_values(
                 .get(&item.variable)
                 .ok_or_else(|| DatabaseError::UnknownVariable(item.variable.clone()))?;
             if let BoundValue::Literal(literal) = value {
-                if !matches!(
-                    literal.family(),
-                    LiteralFamily::Integer | LiteralFamily::Decimal | LiteralFamily::Certainty
-                ) {
-                    return Err(DatabaseError::Comparison(format!(
-                        "ORDER BY is unsupported for {:?} literals",
-                        literal.family()
-                    )));
-                }
-                if let Some(first) = first_literal {
-                    first
-                        .semantic_cmp(literal)
-                        .map_err(DatabaseError::Comparison)?;
-                } else {
+                validate_order_literal(literal, first_literal)?;
+                if first_literal.is_none() {
                     first_literal = Some(literal);
                 }
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_order_literal(
+    literal: &LiteralValue,
+    first: Option<&LiteralValue>,
+) -> Result<(), DatabaseError> {
+    if !matches!(
+        literal.family(),
+        LiteralFamily::Integer | LiteralFamily::Decimal | LiteralFamily::Certainty
+    ) {
+        return Err(DatabaseError::Comparison(format!(
+            "ORDER BY is unsupported for {:?} literals",
+            literal.family()
+        )));
+    }
+    if let Some(first) = first {
+        first
+            .semantic_cmp(literal)
+            .map_err(DatabaseError::Comparison)?;
     }
     Ok(())
 }

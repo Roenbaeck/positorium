@@ -43,6 +43,25 @@ pub struct LiteralValue {
     family: LiteralFamily,
 }
 
+/// Query-local sort interpretation. Numeric tokens remain lossless in storage
+/// and results; heap comparisons can reuse this exact parsed value.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum LiteralOrderKey {
+    Number(BigDecimal),
+    Certainty(i8),
+}
+
+impl LiteralOrderKey {
+    /// The query must validate families before comparing prepared keys.
+    pub(crate) fn cmp(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (Self::Number(left), Self::Number(right)) => left.cmp(right),
+            (Self::Certainty(left), Self::Certainty(right)) => left.cmp(right),
+            _ => unreachable!("literal sort families were validated"),
+        }
+    }
+}
+
 impl LiteralValue {
     pub fn new(token: impl Into<String>, family: LiteralFamily) -> Result<Self, String> {
         let token = token.into();
@@ -113,6 +132,21 @@ impl LiteralValue {
             _ => Err(format!(
                 "ordering is unsupported between {:?} and {:?}",
                 self.family, other.family
+            )),
+        }
+    }
+
+    pub(crate) fn order_key(&self) -> Result<LiteralOrderKey, String> {
+        match self.family {
+            LiteralFamily::Integer | LiteralFamily::Decimal => {
+                parse_number(&self.token).map(LiteralOrderKey::Number)
+            }
+            LiteralFamily::Certainty => {
+                parse_certainty(&self.token).map(LiteralOrderKey::Certainty)
+            }
+            _ => Err(format!(
+                "ORDER BY is unsupported for {:?} literals",
+                self.family
             )),
         }
     }

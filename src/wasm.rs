@@ -188,6 +188,31 @@ mod tests {
     }
 
     #[wasm_bindgen_test]
+    fn incremental_wasm_limits_and_top_k_preserve_framing() {
+        let engine = WasmEngine::new().unwrap();
+        engine
+            .execute(
+                "add role value; add posit [{(+a, value)}, 2, '2024'], [{(+b, value)}, 1, '2024'];",
+            )
+            .unwrap();
+        for order in ["", " order by ?v"] {
+            let result = engine
+                .execute(&format!(
+                    "search [{{(*, value)}}, ?v, *] return ?v{order} limit 1;"
+                ))
+                .unwrap();
+            let result: serde_json::Value = serde_wasm_bindgen::from_value(result).unwrap();
+            let set = &result["result_sets"][0];
+            assert_eq!(set["row_count"], 1);
+            assert_eq!(set["limited"], true);
+            assert_eq!(
+                set["rows"][0][0]["text"],
+                if order.is_empty() { "2" } else { "1" }
+            );
+        }
+    }
+
+    #[wasm_bindgen_test]
     fn test_wasm_syntax_error() {
         let engine = WasmEngine::new().expect("Failed to create engine");
         let script = "invalid syntax;";

@@ -14,7 +14,7 @@ SQLite prototype is deliberately excluded by D031.
 | WASM | `1` | `interface_version` in every returned JavaScript object |
 | Python | `1` | `positorium.PYTHON_INTERFACE_VERSION` and every `ExecutionResult` |
 | Terrain | `1` | Rust report, `/v1/terrain`, and WASM Terrain response |
-| Query plan | `1` | Rust `QueryPlan` and the JSON literal returned by `explain search ...;` |
+| Query plan | `2` | Rust `QueryPlan` and the JSON literal returned by `explain search ...;` |
 | Logical export | `1` | JSONL header; specified by [TRANSFER.md](TRANSFER.md) |
 | Identity remap | `1` | JSON remap artifact; specified by [TRANSFER.md](TRANSFER.md) |
 
@@ -51,6 +51,12 @@ query variables remain lexical. Within the compound operation, same-name Thing
 or Posit query/allocation binders are explicitly unified into a script mutation
 binding, with zero matches executing the fallback once and one or many matches
 promoting the complete identity set.
+
+Query plan 2 adds `incremental` and `materialization_reason`, the `top_k` and
+`consume` operators, and early filter placement. An eligible unsorted limit now
+reports `presentation_only: false`. Consumers of plan 1 must accept these new
+operators and fields before reading plan 2; result-cell, language, and storage
+contracts remain unchanged.
 
 Every published store-format break must preserve logical data through a direct
 or stepwise offline migration that writes and validates a new store beside the

@@ -88,11 +88,12 @@ and remaining work are tracked here.
 
 Delivered by the typed physical planner in `src/traqula/query/plan.rs`,
 `Engine::explain[_with_options]`, and `explain search ...;` across native,
-HTTP/SSE, and WASM result paths. Query plans have an independent version (`1`).
-The initial planner selects dependency order and scan access once per command,
-including correlated blocks; execution still materializes intermediate
-relations and applies presentation limits. Incremental operators, reusable
-prepared-query handles, and measured runtime statistics remain follow-up work.
+HTTP/SSE, and WASM result paths. Query plans have an independent version (`2`);
+the initial milestone introduced version 1. The planner selects dependency order
+and scan access once per command, including correlated blocks. Version 2 exposes
+incremental eligibility, validation barriers, early filters, and bounded top-k
+ordering. Reusable prepared-query handles and measured runtime statistics remain
+follow-up work.
 
 ### 3. Temporal reduction and incremental execution
 
@@ -115,11 +116,26 @@ prepared-query handles, and measured runtime statistics remain follow-up work.
         - Record the pairwise baseline, optimized timings, and effective-evidence
             comparison counts in [BENCHMARKS.md](BENCHMARKS.md). Keep setup outside
             the timed loop and verify result counts before measuring.
-- [ ] **Execute incrementally with explicit work and memory budgets.**
-        - Add early safe filters, indexed and hash joins, short-circuit existence,
-            incremental projection, and bounded top-k ordering.
+- [x] **Execute eligible queries incrementally.**
+        - Use lazy candidate scans, indexed nested-loop joins, early safe filters,
+            short-circuit existence, union, incremental projection/distinctness,
+            and stable bounded top-k ordering.
+        - Prepare exact numeric/certainty sort keys once per row and retain only
+            projected rows plus their keys in the ordering buffer.
         - Stop eligible limited queries after establishing whether an additional
-            row exists. Preserve full identity promotion for `search ... or add`.
+            row exists. Preserve full validation and identity promotion for
+            `search ... or add`, fallible literal comparisons, and effective evidence.
+        - Keep temporal reduction before external field joins and filters. Compare
+            bags and row order against the materialized executor; test early work
+            counts, lookahead boundaries, late errors, cancellation, and
+            native/HTTP/SSE/WASM framing.
+- [x] **Benchmark incremental execution against full materialization.**
+        - Add 33 before/after cases for full/limited scans, first-row delivery,
+            joins, exact filters, distinctness, top-k, absence, and a comparison
+            validation control. Record measurements in [BENCHMARKS.md](BENCHMARKS.md).
+- [ ] **Bound remaining work and memory, and improve join representation.**
+        - Add explicit work/memory budgets, hash joins, bounded effective-cut reuse,
+            and incremental validation strategies for currently materialized plans.
         - Use compact binding slots, reuse parsed literal interpretations, and
             replace linear staged-posit duplicate searches with a command-local
             hash index.

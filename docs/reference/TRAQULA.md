@@ -384,7 +384,7 @@ execute an `or add` fallback. It validates the search and fallback binding
 shape before returning a plan. Other commands in the same script still execute
 normally; `explain` applies only to its attached search.
 
-The JSON has an independent `version` (`1`), `resolved_now`, and an operator
+The JSON has an independent `version` (`2`), `resolved_now`, and an operator
 tree under `root`. Each node describes its operation, typed `bindings`, and
 `inputs`. Plans show chosen pattern order, scopes and dependencies, full scans
 or bitmap access, candidate estimates, temporal reduction and field-filter
@@ -392,10 +392,40 @@ placement, effective-evidence cuts, projection, ordering, and limits. Candidate
 estimates come from catalog/index sizes and are upper bounds, not measured
 cardinalities after matching. A changed database may produce a different plan.
 
-Execution currently materializes intermediate relations and applies limits to
-presentation. A `limit` node therefore reports `presentation_only: true`; a
-small limit does not yet imply bounded intermediate work. The explained query's
-limit does not truncate its explanation. `EXPLAIN ANALYZE` is not implemented.
+The plan's `incremental` flag reports whether scans, nested-loop joins, union,
+filters, absence checks, and projection pass rows directly to their consumers.
+For these plans, predicates run as soon as their operands are bound, after any
+temporal reduction in the producing pattern. An absence block stops at its
+first complete match. `distinct` retains the first occurrence of each projected
+row. The unbounded result has the same row order and bag multiplicity as full
+materialization.
+
+An eligible unsorted `limit` reports `presentation_only: false`: execution stops
+after finding one additional projected, distinct-if-requested row, so `limited`
+is true only if an omitted row actually exists. A stopped row sink also stops
+upstream work. An ordered limit still consumes every input row, validates all
+sort keys, and uses `top_k` to retain at most `limit + 1` rows. Numeric sort keys
+are interpreted once per row using exact decimal arithmetic. Equal sort keys
+preserve input order. An unlimited sort retains the full result. A limit of
+the largest supported integer uses the full sort to avoid lookahead overflow.
+
+`materialization_reason` is null for incremental plans. Otherwise it identifies
+the full-evaluation requirement: `literal_comparisons_require_complete_validation`,
+`effective_evidence_requires_complete_validation`, or
+`search_or_add_requires_complete_identity_bindings`. Nominal literal pattern
+matches and non-exact literal predicates can fail on later values; effective
+evidence can also fail during resolution. Such searches retain the original
+evaluation barriers, even with a small limit or stopped sink. `search ... or add`
+always validates and collects all matching identities before presentation or
+fallback mutation. Static query errors and sort comparison errors still occur
+before metadata or rows are emitted.
+
+Incremental execution does not imply a constant-memory query: temporal patterns
+still reduce complete candidate histories, bitmap scans retain their candidate
+postings, full scans sort candidate identities, and `distinct` retains its seen
+rows. Cancellation or operational errors may terminate a stream after earlier
+rows were delivered. The explained query's limit does not truncate its
+explanation. `EXPLAIN ANALYZE` is not implemented.
 
 Rust callers can use `Engine::explain` or `Engine::explain_with_options` to get a
 typed `QueryPlan` directly. These methods accept exactly one search (optionally

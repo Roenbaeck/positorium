@@ -12,6 +12,91 @@ floor across several atomic batch sizes, physical size at two scales, warm
 startup replay, full and selective query shapes, historical selection, and both
 dense and sparse bitmap construction.
 
+## 2026-11-06 incremental execution
+
+Eligible searches now use candidate iterators and depth-first nested-loop joins,
+with filters applied once their operands exist, short-circuit absence checks,
+and incremental projection/distinctness. An unsorted limit stops after its
+one-row lookahead. Ordered limits consume all input but retain at most `limit + 1`
+projected rows and prepared sort keys in a heap. Numeric and certainty keys are
+parsed once per row, using exact values. Temporal reductions remain blocking.
+Plans with nominal literal comparisons, effective evidence, or `or add` retain
+full evaluation so early exit cannot hide errors or omit promoted identities.
+
+### Method and reproduction
+
+Environment: Apple M1 Pro, 10 logical CPUs, 16 GiB RAM, Darwin 27.2.0 arm64,
+`rustc 1.98.0 (88d9e12ae 2026-08-18)`, optimized `--no-default-features` build.
+The baseline is commit `8241a26` (the beta.3 milestone plus its first CI runner
+fix), with the identical new `benches/incremental.rs` harness. Fixtures are warm,
+in-memory databases. Construction and result-count assertions are outside timing;
+parsing, planning, query execution, and result construction/cleanup are included.
+Compilation and other test runs were kept outside measurement runs.
+
+```sh
+# Before replacing materialized execution, with the new harness present:
+cargo bench --offline --no-default-features --bench benchmark -- 'incremental/' \
+  --sample-size 20 --warm-up-time 0.2 --measurement-time 0.5 \
+  --save-baseline before-incremental-execution --noplot
+
+# After the change, with identical fixtures and settings:
+cargo bench --offline --no-default-features --bench benchmark -- 'incremental/' \
+  --sample-size 20 --warm-up-time 0.2 --measurement-time 0.5 \
+  --baseline before-incremental-execution --noplot
+```
+
+The 33 cases use 128, 512, and 2,048 rows per role for scans, and 16, 64, and 256
+rows per role for joins. Unconstrained joins have `N²` possible rows. Limits are
+10. The exact-filter case selects one left-side value before joining; the
+distinct case projects only the left value; the absence case has an uncorrelated
+right-side witness. First-row cases use a sink that stops on its first row;
+their timing includes query cleanup, rather than measuring only callback arrival.
+
+The table reports Criterion **mean latency** at the largest scale. All
+[33 results](INCREMENTAL_BENCHMARK_RESULTS.json) include 95% confidence intervals,
+relative changes, environment, and hashes of the measured source. Raw samples
+remain under `target/criterion/incremental`. Each case has 20 samples, 0.2 seconds
+of warm-up, and a requested 0.5-second measurement window, extended by Criterion
+when necessary.
+
+| Workload | Scale per role | Materialized | Incremental | Speedup |
+| --- | ---: | ---: | ---: | ---: |
+| Scan, limit 10 | 2,048 | 0.941 ms | 0.0121 ms | 78.0× |
+| Scan, first row and stop | 2,048 | 0.981 ms | 0.00696 ms | 140.9× |
+| Scan, all rows | 2,048 | 0.983 ms | 0.957 ms | 1.03× |
+| Scan, ordered top 10 | 2,048 | 1.555 ms | 1.327 ms | 1.17× |
+| Fallible-comparison control, limit 10 | 2,048 | 1.298 ms | 1.325 ms | 0.98× |
+| Cartesian join, limit 10 | 256 | 63.859 ms | 0.0210 ms | 3,041.8× |
+| Cartesian join, first row and stop | 256 | 64.284 ms | 0.0199 ms | 3,233.9× |
+| Join with early exact filter | 256 | 46.746 ms | 0.455 ms | 102.8× |
+| Join, distinct left values, limit 10 | 256 | 72.583 ms | 2.150 ms | 33.8× |
+| Join, ordered top 10 | 256 | 287.991 ms | 70.251 ms | 4.10× |
+| Absence with an early witness | 256 | 27.491 ms | 0.331 ms | 83.1× |
+
+The large ratios come from avoiding most of a Cartesian result and do not
+describe a general engine-wide speedup. Full scans are nearly unchanged. The
+comparison control still uses materialization and was about 2.1% slower at the
+largest size (95% relative-change interval: +0.2% to +3.8%); it receives no early
+limit benefit. First-row and exact-filter measurements had wider confidence
+intervals in this run; the JSON preserves those intervals rather than hiding the
+variation. An initial top-k implementation regressed on monotone numeric input;
+preparing exact sort keys once per row removed the repeated parsing responsible
+for that regression. The table uses the final implementation throughout.
+
+Correctness checks include 52 query/modifier comparisons against the original
+materialized executor, stable ordering across exact numeric ties, union and bag
+semantics, temporal/external-binding joins, distinct lookahead, empty and zero
+limits, maximum-size limits, option caps, cancellation, late comparison errors,
+fallback identity promotion, and native/HTTP/SSE/WASM framing. Deterministic
+tests verify three candidate visits for a two-pattern `limit 1` query, one
+absence witness per outer row, and a top-k buffer of at most `k + 1` rows.
+
+Peak RSS, total query memory, and production per-operator counters were not
+measured. The heap bound excludes distinct seen-state, bitmap candidate postings,
+sorted full-scan identities, and temporal reduction buffers. Hard work/memory
+budgets, hash joins, effective-slice indexing/cache bounds, and incremental
+validation for currently materialized plans remain roadmap work.
+
 ## 2026-11-06 shared temporal reduction
 
 The shared reducer replaces pairwise dominance scans in ordinary and
@@ -95,10 +180,10 @@ retraction case they fell from 2,620,927 to 6,139. Regression tests compare the
 kernel against the public pairwise temporal relation and enforce linear work
 budgets independently of machine timing.
 
-These measurements do not cover peak memory, first-row latency, cache eviction,
-or incremental execution. Limits remain presentation limits. Effective-slice
-indexing, incremental operators, and per-operator runtime profiling remain
-separate roadmap work.
+These temporal measurements predate incremental execution and do not cover peak
+memory, first-row latency, or cache eviction. The incremental measurements above
+cover early limits and first-row delivery. Effective-slice indexing and
+per-operator runtime profiling remain separate roadmap work.
 
 ## 2026-08-27 local baseline
 

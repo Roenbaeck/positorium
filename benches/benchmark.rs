@@ -13,6 +13,7 @@ use std::rc::Rc;
 #[cfg(feature = "persistence")]
 use std::sync::atomic::{AtomicU64, Ordering};
 
+mod incremental;
 mod temporal;
 
 #[cfg(feature = "persistence")]
@@ -440,6 +441,7 @@ criterion_group!(
     replay_benchmarks,
     query_benchmarks,
     temporal::benchmarks,
+    incremental::benchmarks,
     result_set_benchmarks
 );
 #[cfg(not(feature = "persistence"))]
@@ -447,6 +449,7 @@ criterion_group!(
     benches,
     query_benchmarks,
     temporal::benchmarks,
+    incremental::benchmarks,
     result_set_benchmarks
 );
 criterion_main!(benches);

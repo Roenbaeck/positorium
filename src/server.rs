@@ -848,6 +848,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn incremental_limits_and_top_k_keep_http_and_sse_counts_consistent() {
+        let database = Arc::new(Database::new(PersistenceMode::InMemory).unwrap());
+        crate::traqula::Engine::new(&database)
+            .execute(
+                "add role value; add posit [{(+a, value)}, 2, '2024'], [{(+b, value)}, 1, '2024'];",
+            )
+            .unwrap();
+        let state = ServerState {
+            interface: Arc::new(QueryInterface::new(database)),
+            config: ServerConfig::default(),
+        };
+        for order in ["", " order by ?v"] {
+            let script = format!("search [{{(*, value)}}, ?v, *] return ?v{order} limit 1;");
+            let response = query(
+                State(state.clone()),
+                Ok(Json(QueryRequest {
+                    traqula_version: TRAQULA_VERSION,
+                    script: script.clone(),
+                    stream: false,
+                    timeout_ms: None,
+                    parameters: std::collections::HashMap::new(),
+                })),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK);
+            let result = json_body(response).await;
+            assert_eq!(result["row_count"], 1);
+            assert_eq!(result["limited"], true);
+            let response = query(
+                State(state.clone()),
+                Ok(Json(QueryRequest {
+                    traqula_version: TRAQULA_VERSION,
+                    script,
+                    stream: true,
+                    timeout_ms: None,
+                    parameters: std::collections::HashMap::new(),
+                })),
+            )
+            .await;
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let text = String::from_utf8(bytes.to_vec()).unwrap();
+            let events: Vec<serde_json::Value> = text
+                .lines()
+                .filter_map(|line| line.strip_prefix("data: "))
+                .map(|json| serde_json::from_str(json).unwrap())
+                .collect();
+            let row = events.iter().find(|event| event["event"] == "row").unwrap();
+            assert_eq!(row["row"], result["rows"][0]);
+            let end = events.iter().find(|event| event["event"] == "end").unwrap();
+            assert_eq!(end["row_count"], 1);
+            assert_eq!(end["limited"], true);
+        }
+    }
+
+    #[tokio::test]
     async fn validation_errors_keep_their_http_status() {
         let state = ServerState {
             interface: Arc::new(QueryInterface::new(Arc::new(
