@@ -8,7 +8,8 @@ fn query_algebra_reference_example_executes() {
     let reference = include_str!("../docs/reference/TRAQULA.md");
     let section = reference.split("## Query algebra").nth(1).unwrap();
     let script = section
-        .split("```traqula\n")
+        // The parser trims whitespace; leave either LF or CRLF after the fence.
+        .split("```traqula")
         .nth(1)
         .unwrap()
         .split("```")
