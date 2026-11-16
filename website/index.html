@@ -1,0 +1,551 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#101917" />
+    <title>Positorium — A database for facts that disagree</title>
+    <meta
+      name="description"
+      content="Keep conflicting claims, their sources, and the history behind them. Explore Positorium, an open-source evidence database, and run Traqula in your browser."
+    />
+    <link rel="canonical" href="https://positorium.com/" />
+    <meta property="og:type" content="website" />
+    <meta
+      property="og:title"
+      content="Positorium — A database for facts that disagree"
+    />
+    <meta
+      property="og:description"
+      content="Conflicting claims. Changing minds. One complete history. Meet the open-source evidence database."
+    />
+    <meta property="og:url" content="https://positorium.com/" />
+    <meta
+      property="og:image"
+      content="https://positorium.com/assets/social.png"
+    />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="Positorium: a database for facts that disagree. Two sources retain different assessments of the same organisation."
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
+    <link
+      rel="preload"
+      href="assets/fonts/SpaceGrotesk.ttf"
+      as="font"
+      type="font/ttf"
+      crossorigin
+    />
+    <link rel="stylesheet" href="site.css" />
+    <script type="module" src="site.js"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header">
+      <div class="wrap header-inner">
+        <a class="wordmark" href="#" aria-label="Positorium home"
+          ><svg class="brand-mark" viewBox="0 0 32 36" aria-hidden="true">
+            <path d="M3 33V3h14l12 8v9l-12 8H3M3 12h14l12 8M17 3v25" /></svg
+          >positorium<span class="brand-dot">.</span></a
+        >
+        <nav aria-label="Main navigation">
+          <a href="#model">The idea</a>
+          <a href="#playground">Playground</a>
+          <a
+            href="https://github.com/Roenbaeck/positorium/blob/master/docs/README.md"
+            >Docs <span aria-hidden="true">↗</span></a
+          >
+        </nav>
+        <a class="header-studio" href="studio.html"
+          >Open Studio <span aria-hidden="true">↗</span></a
+        >
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero wrap" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <a
+            class="release-link mono"
+            href="https://github.com/Roenbaeck/positorium/releases/tag/v{{VERSION}}"
+            ><span class="status-dot"></span> v{{VERSION}}
+            <span class="release-divider">/</span> OPEN SOURCE
+            <span aria-hidden="true">↗</span></a
+          >
+          <h1 id="hero-title">
+            A database<br />for facts that<br /><span>disagree.</span>
+          </h1>
+          <p class="hero-description">
+            Conflicting claims. Changing minds. One complete history. Give your
+            data room for all of it.
+          </p>
+          <div class="hero-actions">
+            <a class="button button-lime" href="#playground"
+              >Try it in your browser <span aria-hidden="true">↗</span></a
+            >
+            <a class="text-link" href="#model"
+              >Meet Positorium <span aria-hidden="true">↓</span></a
+            >
+          </div>
+          <p class="hero-footnote mono">
+            BUILT IN RUST <span>·</span> RUNS RIGHT HERE IN WASM
+          </p>
+        </div>
+
+        <div
+          class="evidence-visual"
+          aria-label="Illustrative evidence for the fictional Northstar Trading organisation"
+        >
+          <div class="diagram-caption mono">
+            <span><i class="status-dot"></i> EVIDENCE IN MOTION</span
+            ><span>FIG. 001</span>
+          </div>
+          <div class="evidence-map" data-revised="true">
+            <div class="orbit orbit-one"></div>
+            <div class="orbit orbit-two"></div>
+            <svg
+              class="evidence-paths"
+              viewBox="0 0 560 450"
+              fill="none"
+              aria-hidden="true"
+            >
+              <path
+                class="path-base"
+                d="M280 205V114Q280 91 303 91H345M280 205V305Q280 326 255 326H211M280 205H455V385H370"
+              />
+              <path
+                class="path-flow path-feed"
+                d="M280 205V114Q280 91 303 91H345"
+              />
+              <path
+                class="path-flow path-analyst"
+                d="M280 205V305Q280 326 255 326H211"
+              />
+              <circle cx="280" cy="205" r="70" class="core-ring" />
+            </svg>
+            <div class="entity-node">
+              <svg viewBox="0 0 32 36" aria-hidden="true">
+                <path d="M3 33V3h14l12 8v9l-12 8H3M3 12h14l12 8M17 3v25" /></svg
+              ><span class="entity-label mono">NORTHSTAR TRADING</span>
+            </div>
+            <div class="claim claim-feed">
+              <div class="claim-source mono">
+                <span class="source-icon">↗</span> SCREENING FEED
+                <span class="claim-dot"></span>
+              </div>
+              <div class="claim-value">
+                “high risk” <span>88<small>%</small></span>
+              </div>
+              <div class="claim-footer mono">
+                <span>ASSERTED 09:00</span><span>01</span>
+              </div>
+            </div>
+            <div class="claim claim-analyst">
+              <div class="claim-source mono">
+                <span class="source-icon">↗</span> HUMAN ANALYST
+                <span class="claim-dot"></span>
+              </div>
+              <div class="claim-value">
+                <span id="diagram-value">“needs review”</span
+                ><span id="diagram-certainty">96<small>%</small></span>
+              </div>
+              <div class="claim-footer mono">
+                <span id="diagram-time">ASSERTED 09:31</span><span>02</span>
+              </div>
+            </div>
+            <div class="retained-claim mono" id="retained-claim">
+              <span>“low risk”</span><span>0% · RETRACTED</span
+              ><small>Still part of the story.</small>
+            </div>
+            <span class="map-coordinate mono" aria-hidden="true"
+              >THING / SOURCE / TIME</span
+            >
+          </div>
+          <div class="diagram-timeline">
+            <div class="mono timeline-label">
+              REWIND THE EVIDENCE <span aria-hidden="true">↔</span>
+            </div>
+            <div
+              class="timeline-track"
+              role="group"
+              aria-label="Illustrative assertion time"
+            >
+              <button type="button" data-moment="original" aria-pressed="false">
+                <i></i><span class="mono">09:05</span
+                ><small>Original claims</small>
+              </button>
+              <span class="timeline-line"></span>
+              <button type="button" data-moment="revised" aria-pressed="true">
+                <i></i><span class="mono">09:31</span
+                ><small>After correction</small>
+              </button>
+            </div>
+            <p id="diagram-summary" class="sr-only" aria-live="polite">
+              The screening feed says high risk at 88%. The analyst now says
+              needs review at 96%. The earlier low risk assertion is retained at
+              0%.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <div class="principle-strip">
+        <div class="wrap mono">
+          <span><b>01</b> KEEP EVERY CLAIM</span
+          ><span><b>02</b> KNOW THE SOURCE</span
+          ><span><b>03</b> QUERY THROUGH TIME</span
+          ><span class="strip-symbol" aria-hidden="true">↗</span>
+        </div>
+      </div>
+
+      <section class="model-section" id="model" aria-labelledby="model-title">
+        <div class="wrap">
+          <div class="section-heading">
+            <p class="eyebrow mono">01 / A DIFFERENT STARTING POINT</p>
+            <div class="section-intro">
+              <h2 id="model-title">
+                The world changes.<br />The evidence stays.
+              </h2>
+              <p>
+                Two sources can disagree about the same thing. An assessment can
+                change. Positorium preserves the claims and their context, so
+                you can decide what is in effect—and see how you got there.
+              </p>
+            </div>
+          </div>
+          <div class="principles">
+            <article>
+              <span class="principle-number mono">[01—03]</span
+              ><svg viewBox="0 0 64 48" aria-hidden="true">
+                <path d="M5 13h34v22H5zM25 4h34v22H25zM17 13v22M39 4v22" />
+              </svg>
+              <h3>Disagreement is data.</h3>
+              <p>
+                Keep “high risk” and “low risk” together. An immutable
+                <em>posit</em> records a claim without forcing a single version
+                of the truth.
+              </p>
+            </article>
+            <article>
+              <span class="principle-number mono">[02—03]</span
+              ><svg viewBox="0 0 64 48" aria-hidden="true">
+                <circle cx="32" cy="24" r="9" />
+                <circle cx="8" cy="8" r="5" />
+                <circle cx="56" cy="8" r="5" />
+                <circle cx="32" cy="43" r="4" />
+                <path d="m12 11 13 8m14 0 13-8M32 33v6" />
+              </svg>
+              <h3>Context comes with it.</h3>
+              <p>
+                An assertion adds who said it, when they said it, and their
+                certainty. Sources can revise their own assertions without
+                erasing the trail.
+              </p>
+            </article>
+            <article>
+              <span class="principle-number mono">[03—03]</span
+              ><svg viewBox="0 0 64 48" aria-hidden="true">
+                <path
+                  d="M8 36V8m0 28h49M18 29l12-9 12 4 15-16M18 10v26m24-26v26"
+                />
+                <circle cx="30" cy="20" r="3" />
+              </svg>
+              <h3>Time has two sides.</h3>
+              <p>
+                Ask when a claim applies and when it was asserted. Reconstruct
+                an earlier perspective with explicit temporal queries in
+                Traqula.
+              </p>
+            </article>
+          </div>
+          <a
+            class="underlined-link"
+            href="https://github.com/Roenbaeck/positorium/blob/master/docs/reference/MODEL.md"
+            >Explore the data model <span aria-hidden="true">↗</span></a
+          >
+        </div>
+      </section>
+
+      <section
+        class="playground-section wrap"
+        id="playground"
+        aria-labelledby="playground-title"
+      >
+        <div class="section-heading">
+          <p class="eyebrow mono">02 / LESS READING. MORE RUNNING.</p>
+          <div class="section-intro">
+            <h2 id="playground-title">
+              Make room for<br /><span class="lime">both sides.</span>
+            </h2>
+            <p>
+              One organisation. Two sources. A change of mind. Query this
+              fictional evidence trail with the real Positorium engine, right in
+              your browser.
+            </p>
+          </div>
+        </div>
+        <div class="playground-shell">
+          <div class="playground-toolbar">
+            <div class="mono">
+              <span class="status-dot"></span> TRAQULA PLAYGROUND
+            </div>
+            <a href="studio.html"
+              >Full Query Studio <span aria-hidden="true">↗</span></a
+            >
+          </div>
+          <div
+            class="example-tabs"
+            role="group"
+            aria-label="Choose a sample query"
+          >
+            <button
+              type="button"
+              class="selected"
+              data-example="current"
+              aria-pressed="true"
+            >
+              <span>01</span> Current view
+            </button>
+            <button type="button" data-example="rewind" aria-pressed="false">
+              <span>02</span> Rewind time
+            </button>
+            <button type="button" data-example="history" aria-pressed="false">
+              <span>03</span> Evidence trail
+            </button>
+            <button type="button" data-example="plan" aria-pressed="false">
+              <span>04</span> Query plan
+            </button>
+          </div>
+          <div class="runner-grid">
+            <div class="editor-pane">
+              <div class="pane-title mono">
+                <label for="query-editor">QUERY.TRAQULA</label
+                ><button
+                  id="reset-query"
+                  type="button"
+                  title="Restore the selected example"
+                >
+                  Reset <span aria-hidden="true">↺</span>
+                </button>
+              </div>
+              <div class="code-editor">
+                <pre id="query-highlight" aria-hidden="true"><code></code></pre>
+                <textarea
+                  id="query-editor"
+                  spellcheck="false"
+                  autocapitalize="off"
+                  autocomplete="off"
+                  autocorrect="off"
+                  aria-describedby="query-help"
+                  aria-label="Traqula query editor"
+                  maxlength="100000"
+                >
+Loading example…</textarea
+                >
+              </div>
+              <div class="editor-actions">
+                <span id="query-help"
+                  >Edit it. Run it. Follow the evidence.</span
+                ><button
+                  type="button"
+                  id="stop-query"
+                  class="button button-stop"
+                  hidden
+                >
+                  Stop</button
+                ><button
+                  type="button"
+                  id="run-query"
+                  class="button button-lime"
+                  disabled
+                >
+                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="m5 3 8 5-8 5z" /></svg
+                  >Run query
+                </button>
+              </div>
+            </div>
+            <div class="results-pane">
+              <div class="pane-title mono">
+                <span>RESULTS</span>
+                <div
+                  class="result-view-buttons"
+                  role="group"
+                  aria-label="Result format"
+                >
+                  <button
+                    type="button"
+                    data-result-view="table"
+                    aria-pressed="true"
+                  >
+                    Table</button
+                  ><button
+                    type="button"
+                    data-result-view="json"
+                    aria-pressed="false"
+                  >
+                    JSON
+                  </button>
+                </div>
+              </div>
+              <div id="result-set-control" hidden>
+                <label for="result-set">Result set</label
+                ><select id="result-set"></select>
+              </div>
+              <div
+                class="result-content"
+                id="result-content"
+                aria-busy="false"
+                tabindex="0"
+                aria-label="Query results"
+              >
+                <div class="result-placeholder" id="result-placeholder">
+                  <span class="empty-glyph" aria-hidden="true">[ ↗ ]</span>
+                  <h3>Let the evidence speak.</h3>
+                  <p>Run a query to see what each source says.</p>
+                  <span class="mono">LOCAL ENGINE · REAL RESULTS</span>
+                </div>
+                <div id="table-result" hidden></div>
+                <pre id="json-result" hidden></pre>
+                <pre id="query-error" hidden></pre>
+              </div>
+              <div class="result-footer">
+                <span id="query-status" role="status" aria-live="polite"
+                  >Ready when you are.</span
+                ><span id="query-timing" class="mono"></span>
+              </div>
+            </div>
+          </div>
+          <div class="playground-note">
+            <span
+              ><svg viewBox="0 0 16 16" aria-hidden="true">
+                <rect x="3" y="7" width="10" height="7" rx="1" />
+                <path d="M5 7V5a3 3 0 0 1 6 0v2" /></svg
+              >Your queries run on your device.</span
+            ><span
+              >Fresh sample data on every run. Up to 100 rows per result.</span
+            ><a href="examples/seed.traqula" download
+              >View sample data <span aria-hidden="true">↓</span></a
+            >
+          </div>
+        </div>
+        <p id="example-description" class="example-description">
+          <span class="mono">THE QUESTION</span> What is in effect after the
+          analyst’s correction?
+        </p>
+        <noscript
+          ><p class="noscript-message">
+            The playground needs JavaScript and WebAssembly. You can still
+            explore the documentation and download Positorium using the links
+            below.
+          </p></noscript
+        >
+      </section>
+
+      <section class="build-section" id="build" aria-labelledby="build-title">
+        <div class="wrap build-layout">
+          <div class="build-copy">
+            <p class="eyebrow mono">03 / SMALL CORE. OPEN POSSIBILITIES.</p>
+            <h2 id="build-title">
+              An evidence layer.<br />Your next building block.
+            </h2>
+            <p>
+              Built in Rust. Queryable in Traqula. Use Positorium alongside your
+              existing systems wherever conflicting and evolving information
+              matters.
+            </p>
+            <p class="beta-note">
+              Experimental and open source. Explore the beta, test the model,
+              and help shape what comes next.
+            </p>
+            <a
+              class="underlined-link"
+              href="https://github.com/Roenbaeck/positorium/blob/master/docs/GETTING_STARTED.md"
+              >Start building <span aria-hidden="true">↗</span></a
+            >
+          </div>
+          <div class="build-details">
+            <div class="install-block">
+              <div class="mono">
+                <span>START WITH PYTHON</span
+                ><button
+                  type="button"
+                  id="copy-install"
+                  aria-label="Copy Python installation command"
+                >
+                  Copy <span aria-hidden="true">⧉</span>
+                </button>
+              </div>
+              <code>pip install --pre positorium</code
+              ><span class="copy-status" id="copy-status" role="status"></span>
+            </div>
+            <a
+              class="build-row"
+              href="https://github.com/Roenbaeck/positorium/blob/master/docs/guides/PYTHON.md"
+              ><span class="mono">01</span>
+              <div>
+                <h3>Embed it.</h3>
+                <p>Python bindings. No separate server required.</p>
+              </div>
+              <span aria-hidden="true">↗</span></a
+            >
+            <a
+              class="build-row"
+              href="https://github.com/Roenbaeck/positorium/blob/master/docs/reference/STORAGE.md"
+              ><span class="mono">02</span>
+              <div>
+                <h3>Keep the history.</h3>
+                <p>Native append-only storage and logical transfer.</p>
+              </div>
+              <span aria-hidden="true">↗</span></a
+            >
+            <a class="build-row" href="studio.html"
+              ><span class="mono">03</span>
+              <div>
+                <h3>Explore the structure.</h3>
+                <p>Query Studio and the Terrain data explorer.</p>
+              </div>
+              <span aria-hidden="true">↗</span></a
+            >
+          </div>
+        </div>
+      </section>
+
+      <section class="closing-section wrap">
+        <p class="eyebrow mono">THERE’S MORE THAN ONE SIDE TO A STORY.</p>
+        <div>
+          <h2>Keep the whole thing.</h2>
+          <a
+            class="button button-lime"
+            href="https://github.com/Roenbaeck/positorium"
+            >Explore on GitHub <span aria-hidden="true">↗</span></a
+          >
+        </div>
+        <div class="closing-rule" aria-hidden="true">
+          <span></span><i></i><span></span><i></i><span></span>
+        </div>
+      </section>
+    </main>
+
+    <footer class="wrap site-footer">
+      <a href="#" class="wordmark"
+        >positorium<span class="brand-dot">.</span></a
+      >
+      <p>Evidence deserves a memory.</p>
+      <nav aria-label="Footer navigation">
+        <a
+          href="https://github.com/Roenbaeck/positorium/blob/master/docs/README.md"
+          >Documentation ↗</a
+        ><a href="https://github.com/Roenbaeck/positorium/releases"
+          >Releases ↗</a
+        ><a href="https://github.com/Roenbaeck/positorium#license"
+          >MIT / Apache 2.0 ↗</a
+        >
+      </nav>
+      <span class="mono">© {{YEAR}} POSITORIUM</span>
+    </footer>
+  </body>
+</html>

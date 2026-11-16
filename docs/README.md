@@ -13,6 +13,7 @@ contracts that define compatibility and the design record used by maintainers.
 | [The Blackthorn Ruby](guides/BLACKTHORN_CASE.md) | Run an interactive detective story showcasing contradictions, retractions, classifications, and Terrain |
 | [Operations](guides/OPERATIONS.md) | Configuration, durability, backup, restore, failure handling, and resource limits |
 | [Cookbook](guides/COOKBOOK.md) | Worked modeling, correction, assertion, identification, backup, and transfer recipes |
+| [Website](../website/README.md) | Build and upload the static homepage, WASM playground, and full Query Studio |
 
 ## Reference
 

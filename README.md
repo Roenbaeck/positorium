@@ -137,6 +137,7 @@ checks, backup, Query Studio setup, and troubleshooting, follow
 | [Storage](https://github.com/Roenbaeck/positorium/blob/master/docs/reference/STORAGE.md) | Append-only format contract |
 | [Transfer](https://github.com/Roenbaeck/positorium/blob/master/docs/reference/TRANSFER.md) | Backup, export, import, and identity remapping |
 | [Terrain](https://github.com/Roenbaeck/positorium/blob/master/docs/reference/TERRAIN.md) | Structural report and visualization contract |
+| [Self-hosted website](website/README.md) | Build and upload the homepage, WASM playground, and Query Studio to static hosting |
 | [Theory](https://github.com/Roenbaeck/positorium/blob/master/docs/design/THEORY.md) | Philosophical foundations |
 | [Roadmap](https://github.com/Roenbaeck/positorium/blob/master/docs/development/ROADMAP.md) | Remaining and post-beta work |
 

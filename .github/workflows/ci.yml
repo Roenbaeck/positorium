@@ -55,3 +55,22 @@ jobs:
         run: cargo install wasm-pack --locked --version 0.14.0
       - name: Run browser smoke tests
         run: wasm-pack test --headless --chrome . --no-default-features --features wasm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Build the self-hosted website and deployment bundles
+        run: python3 scripts/build_website.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - name: Install website test dependencies
+        working-directory: website
+        run: npm ci
+      - name: Install website test browser
+        working-directory: website
+        run: npx playwright install --with-deps chromium
+      - name: Test the website and WASM playground
+        working-directory: website
+        run: npm run test:all

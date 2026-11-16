@@ -1,0 +1,24 @@
+# Initial HTTP configuration: use this until the certificate has been issued.
+# Install as /etc/apache2/virtual.d/http.www.positorium.com.conf.
+# Keep only one active Positorium virtual host on port 80.
+<VirtualHost *:80>
+    ServerName positorium.com
+    ServerAlias www.positorium.com
+    ServerAdmin root@subside.com
+
+    DocumentRoot /var/www/www.positorium.com
+    DirectoryIndex index.html
+
+    <Directory /var/www/www.positorium.com>
+        Options -Indexes -MultiViews +FollowSymLinks
+        AllowOverride None
+        Require all granted
+    </Directory>
+
+    AddType application/wasm .wasm
+    AddType text/javascript .js
+
+    LogLevel warn
+    ErrorLog /var/log/apache2/http.www.positorium.com-error.log
+    CustomLog /var/log/apache2/http.www.positorium.com.log combined
+</VirtualHost>
