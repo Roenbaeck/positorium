@@ -25,8 +25,8 @@ class PositoriumPythonTests(unittest.TestCase):
             self.assertEqual(result.row_count, 1)
 
     def test_distribution_and_contract_versions_match(self):
-        self.assertEqual(positorium.__version__, "0.2.0b3")
-        self.assertEqual(positorium.RUST_PACKAGE_VERSION, "0.2.0-beta.3")
+        self.assertEqual(positorium.__version__, "0.2.1b4")
+        self.assertEqual(positorium.RUST_PACKAGE_VERSION, "0.2.1-beta.4")
         self.assertEqual(positorium.PYTHON_INTERFACE_VERSION, 1)
         self.assertEqual(positorium.TRAQULA_VERSION, 1)
         self.assertEqual(positorium.TERRAIN_VERSION, 1)

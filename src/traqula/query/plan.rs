@@ -190,6 +190,7 @@ pub(super) struct PlannedBranch {
 }
 
 pub(super) struct PhysicalQuery {
+    pub has_fallback: bool,
     pub branches: Vec<PlannedBranch>,
     pub not_exists: Vec<PlannedBranch>,
     pub predicates: Vec<Predicate>,
@@ -202,7 +203,7 @@ pub(super) struct PhysicalQuery {
 }
 
 pub(super) fn compile(
-    database: &Database,
+    view: &ReadView,
     prepared: PreparedQuery,
     execution: &ExecutionContext,
 ) -> Result<PhysicalQuery, DatabaseError> {
@@ -212,7 +213,7 @@ pub(super) fn compile(
     let mut branches = Vec::new();
     for (index, patterns) in query.branches.into_iter().enumerate() {
         branches.push(compile_branch(
-            database,
+            view,
             patterns,
             HashMap::new(),
             format!("branch_{}", index + 1),
@@ -222,7 +223,7 @@ pub(super) fn compile(
     let mut not_exists = Vec::new();
     for (index, patterns) in query.not_exists.into_iter().enumerate() {
         not_exists.push(compile_branch(
-            database,
+            view,
             patterns,
             domains.clone(),
             format!("not_exists_{}", index + 1),
@@ -253,6 +254,7 @@ pub(super) fn compile(
         }
     }
     Ok(PhysicalQuery {
+        has_fallback: query.has_fallback,
         branches,
         not_exists,
         domains,
@@ -295,14 +297,14 @@ fn materialization_reason(query: &Query, domains: &HashMap<String, Domain>) -> O
 }
 
 fn compile_branch(
-    database: &Database,
+    view: &ReadView,
     patterns: Vec<PositPattern>,
     mut domains: HashMap<String, Domain>,
     scope: String,
     execution: &ExecutionContext,
 ) -> Result<PlannedBranch, DatabaseError> {
     let initially_available = domains.keys().map(String::as_str).collect();
-    let ordered = plan_patterns(database, &patterns, &initially_available)?;
+    let ordered = plan_patterns(view, &patterns, &initially_available)?;
     let mut planned = Vec::new();
     for pattern in ordered {
         execution.check()?;
@@ -314,26 +316,18 @@ fn compile_branch(
         let available = domains.keys().map(String::as_str).collect();
         let access = access_path(pattern, &available);
         let estimated_candidates = if pattern.effect.is_some() {
-            let lookup = database.role_to_posit_thing_lookup();
-            let lookup = lookup
-                .lock()
-                .map_err(|e| DatabaseError::Lock(e.to_string()))?;
             [
                 crate::construct::POSIT_ROLE_ID,
                 crate::construct::ASCERTAINS_ROLE_ID,
             ]
             .iter()
-            .map(|role| lookup.lookup(role).map_or(0, RoaringTreemap::len))
+            .map(|role| view.role_posting(*role).map_or(0, RoaringTreemap::len))
             .min()
             .unwrap_or(0)
         } else {
-            let estimate = estimated_candidate_count(database, pattern)?;
+            let estimate = estimated_candidate_count(view, pattern);
             if estimate == u64::MAX {
-                database
-                    .posit_keeper()
-                    .lock()
-                    .map_err(|e| DatabaseError::Lock(e.to_string()))?
-                    .len() as u64
+                view.posit_count() as u64
             } else {
                 estimate
             }

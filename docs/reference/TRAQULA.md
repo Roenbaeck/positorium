@@ -66,6 +66,32 @@ add posit [{(p, posit), (person, ascertains)}, 100%, @NOW];
 Each `add role` or `add posit` command commits atomically. Earlier successful
 commands remain committed if a later command fails.
 
+### Script visibility
+
+A script containing only ordinary `search` and `explain` commands acquires one
+published view before executing any commands. Read-only scripts can run concurrently
+with each other and with a writer. `explain search ... or add posit ...` also
+uses a read view because it only describes the fallback.
+
+Scripts consisting entirely of `add role` and `add posit` commands can prepare
+concurrently. Each script expands its own bindings, appearance sets, and
+assertions using private identities. At commit, one writer resolves roles and
+identities against the current store and applies the commands in script order.
+An assertion points to the canonical identity of its target, including when a
+proposition occurs several times in the script.
+
+A standalone `search ... or add posit ...` starts on a published view. A hit
+can finish while a writer is active. On a miss the command acquires the writer
+lock and repeats the search if the published view changed. Both evaluations
+share the original clock, parameters, deadline, and work budget. The caller
+receives metadata and rows for the final branch once.
+
+Scripts that combine queries and mutations retain the writer lock for the
+whole script and see their own earlier changes. For every mutating script,
+completed commands become visible to new readers when the script exits,
+including after an error or cancellation. A streaming mutation script may emit
+rows before publication. Readers already running keep their original view.
+
 ### Adding and asserting atomically
 
 `and assert` creates the assertion envelope together with its target posit:
@@ -111,9 +137,9 @@ script mutation binding: here `?registry` or `+registry` both establish
 posit construction fans out over that set. Cardinality aggregation and
 conditions on aggregates are deliberately deferred.
 
-The search, zero-match decision, and optional fallback mutation execute under
-one script owner, so concurrent scripts cannot both observe absence and create
-the fallback. An `and assert` suffix on the fallback belongs only to that add
+The writer confirms absence against the current store and holds the lock
+through the fallback. When the fallback supplies a match for the missing key,
+concurrent callers create it once. An `and assert` suffix belongs to the fallback's add
 branch and shares its atomic durable batch.
 
 `return` is optional. Omitting it emits no result set; it does not prevent the

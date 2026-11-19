@@ -106,9 +106,9 @@ impl QueryInterface {
 }
 ```
 
-`Database::terrain_with_options` owns lock acquisition. `QueryInterface` simply
-forwards to the shared `Database`; separately created interfaces must not bypass
-serialization.
+`Database::terrain_with_options` owns lock acquisition. `QueryInterface` forwards
+to the shared `Database` so capture coordinates with mutation scripts from any
+interface.
 
 ### Report DTOs
 
@@ -704,7 +704,9 @@ Allocations:
 
 - A concurrent writer yields an entirely old or entirely new report, never a
   mixed capture.
-- Separate `QueryInterface`s sharing one Database serialize with Terrain.
+- Commits and mixed mutation scripts submitted through separate `QueryInterface`s
+  sharing one Database serialize with Terrain capture. Snapshot lookups and
+  private append preparation can proceed during capture.
 - Timeout/cancel while waiting for owner.
 - Timeout/cancel during capture and aggregation.
 - Every hard limit fails without partial core data.

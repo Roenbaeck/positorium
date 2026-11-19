@@ -12,8 +12,8 @@ It is an experimental embedded evidence database with an immutable posit model,
 the Traqula query language, an append-only native store, Python bindings, a
 trusted-local HTTP service, and an in-browser WASM testbed.
 
-The current version is `0.2.0-beta.3`; see the
-[release notes](docs/releases/v0.2.0-beta.3.md). Tagged releases are available
+The current version is `0.2.1-beta.4`. Read the
+[release notes](docs/releases/v0.2.1-beta.4.md). Tagged releases are available
 on the [releases page](https://github.com/Roenbaeck/positorium/releases).
 Beta means the documented language, storage, transfer, and interface versions
 have explicit compatibility rules; it does not mean an Internet-facing or
@@ -101,7 +101,10 @@ checks, backup, Query Studio setup, and troubleshooting, follow
 
 - The native server binds to `127.0.0.1` by default and has no authentication.
   Never expose it to an untrusted network.
-- One process owns a store and executes scripts serially.
+- One process owns each persistent store. Read-only scripts run concurrently
+  against consistent snapshots.
+  Standalone get-or-create hits can run alongside a writer, and unconditional
+  append scripts prepare in parallel. One writer orders and persists changes.
 - The append-only store detects committed corruption but is not a tamper-proof
   audit log.
 - Authentication, replication, distributed execution, and container packaging

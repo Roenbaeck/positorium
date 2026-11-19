@@ -1,6 +1,6 @@
 [package]
 name = "positorium"
-version = "0.2.0-beta.3"
+version = "0.2.1-beta.4"
 edition = "2024"
 authors = ["Lars Rönnbäck <lars@positorium.com>"]
 license = "MIT OR Apache-2.0"
@@ -31,6 +31,7 @@ thiserror = "2.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 roaring = "0.11"
+rpds = "1.2.1"
 seahash = "4.1.0"
 bigdecimal = "0.4"
 jsondata = "0.8.1"

@@ -4,7 +4,9 @@
 //! appearance cutoffs. It deliberately does not fuse sources, rank certainty,
 //! or select an accepted truth.
 
-use crate::construct::{ASCERTAINS_ROLE_ID, Database, OtherHasher, POSIT_ROLE_ID, Posit, Thing};
+use crate::construct::{
+    ASCERTAINS_ROLE_ID, Database, OtherHasher, POSIT_ROLE_ID, Posit, ReadView, Thing,
+};
 use crate::datatype::Time;
 use crate::datatype::temporal::{Frontier, Work, retain_maximal_by_key};
 use crate::error::DatabaseError;
@@ -144,25 +146,12 @@ impl Database {
         cut: EffectCut,
         limits: EffectLimits,
     ) -> Result<EffectiveSlice, DatabaseError> {
-        let _owner = self
-            .execution_owner
-            .lock()
-            .map_err(|error| DatabaseError::Lock(error.to_string()))?;
-        resolve(self, cut, limits, || Ok(()))
+        resolve_budgeted(&self.read_view(), cut, limits, |_| Ok(()), |_| Ok(()))
     }
 }
 
-pub(crate) fn resolve(
-    database: &Database,
-    cut: EffectCut,
-    limits: EffectLimits,
-    mut check: impl FnMut() -> Result<(), DatabaseError>,
-) -> Result<EffectiveSlice, DatabaseError> {
-    resolve_budgeted(database, cut, limits, |_| check(), |_| Ok(()))
-}
-
 pub(crate) fn resolve_budgeted(
-    database: &Database,
+    view: &ReadView,
     cut: EffectCut,
     limits: EffectLimits,
     mut check: impl FnMut(u64) -> Result<(), DatabaseError>,
@@ -170,7 +159,7 @@ pub(crate) fn resolve_budgeted(
 ) -> Result<EffectiveSlice, DatabaseError> {
     check(1)?;
     let (assertion_identities, mut workspace) =
-        assertion_candidates(database, &mut check, &mut reserve)?;
+        assertion_candidates(view, &mut check, &mut reserve)?;
     let mut counters = EffectCounters {
         assertion_candidates: assertion_identities.len(),
         ..EffectCounters::default()
@@ -181,15 +170,11 @@ pub(crate) fn resolve_budgeted(
             limit: limits.assertion_candidates,
         });
     }
-    let keeper = database.posit_keeper();
-    let mut keeper = keeper
-        .lock()
-        .map_err(|error| DatabaseError::Lock(error.to_string()))?;
     let mut eligible = Vec::new();
 
     for identity in assertion_identities {
         check(1)?;
-        let assertion = keeper.posit::<LiteralValue>(identity).ok_or_else(|| {
+        let assertion = view.posit(identity).ok_or_else(|| {
             DatabaseError::Invariant(format!(
                 "assertion index contains identity {identity} without a literal posit"
             ))
@@ -225,7 +210,7 @@ pub(crate) fn resolve_budgeted(
                     "malformed assertion posit {identity}: exact {{posit, ascertains}} envelopes require a certainty literal"
                 ))
             })?;
-        let target = keeper.posit::<LiteralValue>(target_identity).ok_or_else(|| {
+        let target = view.posit(target_identity).ok_or_else(|| {
             DatabaseError::Execution(format!(
                 "dangling assertion posit {identity}: target posit {target_identity} does not exist"
             ))
@@ -250,7 +235,6 @@ pub(crate) fn resolve_budgeted(
             certainty_percent,
         });
     }
-    drop(keeper);
 
     let mut work = |work| {
         check(1)?;
@@ -349,16 +333,12 @@ pub(crate) fn resolve_budgeted(
 }
 
 fn assertion_candidates(
-    database: &Database,
+    view: &ReadView,
     check: &mut impl FnMut(u64) -> Result<(), DatabaseError>,
     reserve: &mut impl FnMut(u64) -> Result<(), DatabaseError>,
 ) -> Result<(RoaringTreemap, u64), DatabaseError> {
-    let lookup = database.role_to_posit_thing_lookup();
-    let lookup = lookup
-        .lock()
-        .map_err(|error| DatabaseError::Lock(error.to_string()))?;
-    let targets = lookup.lookup(&POSIT_ROLE_ID);
-    let sources = lookup.lookup(&ASCERTAINS_ROLE_ID);
+    let targets = view.role_posting(POSIT_ROLE_ID);
+    let sources = view.role_posting(ASCERTAINS_ROLE_ID);
     let count = targets
         .map_or(0, RoaringTreemap::len)
         .saturating_add(sources.map_or(0, RoaringTreemap::len));

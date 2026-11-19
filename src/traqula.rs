@@ -46,7 +46,9 @@
 //! NOTE: The search functionality is still evolving; many captured variables
 //! are currently parsed but not yet materialized into final query outputs.
 //! Debug logging is gated behind `cfg(debug_assertions)` where appropriate.
-use crate::construct::{CreatedLiteralPosits, Database, LiteralAssertionSpec, OtherHasher, Thing};
+use crate::construct::{
+    CreatedLiteralPosits, Database, LiteralAssertionSpec, OtherHasher, ReadView, ScriptView, Thing,
+};
 use crate::datatype::Time;
 use crate::error::DatabaseError;
 use crate::literal::{LiteralFamily, LiteralValue};
@@ -669,16 +671,9 @@ fn emit_fallback_rows(
         ));
     }
     let identity_slices = identities.iter().map(Vec::as_slice).collect::<Vec<_>>();
-    let mut emit_error = None;
     let mut rows = Vec::new();
-    for_each_cartesian_indices(&identity_slices, |indices| {
-        if emit_error.is_some() {
-            return;
-        }
-        if let Err(error) = execution.check() {
-            emit_error = Some(error);
-            return;
-        }
+    try_for_each_cartesian_indices(&identity_slices, |indices| {
+        execution.check()?;
         let selected = indices
             .iter()
             .enumerate()
@@ -691,10 +686,8 @@ fn emit_fallback_rows(
             .map(|(unique_index, kind)| ResultCell::new(*kind, selected[*unique_index].to_string()))
             .collect::<Vec<_>>();
         rows.push((selected, row));
-    });
-    if let Some(error) = emit_error {
-        return Err(error);
-    }
+        Ok::<_, DatabaseError>(())
+    })?;
     if plan.distinct {
         let mut seen = std::collections::BTreeSet::new();
         rows.retain(|(_, row)| seen.insert(row.clone()));
@@ -936,13 +929,14 @@ fn parse_time_constant_with_now(value: &str, resolved_now: &Time) -> Option<Time
 
 use pest::Parser;
 use pest::error::ErrorVariant;
-use pest::iterators::Pair;
+use pest::iterators::{Pair, Pairs};
 use pest_derive::Parser;
 
 #[derive(Parser)]
 #[grammar = "traqula.pest"] // relative to src
 struct TraqulaParser;
 
+mod append;
 mod budget;
 mod query;
 
@@ -952,6 +946,32 @@ pub use query::plan::{
     PlanAccess, PlanBinding, PlanCutoff, PlanDomain, PlanNode, PlanOperator, PlanOrder,
     QUERY_PLAN_VERSION, QueryPlan,
 };
+
+fn parse_script(traqula: &str) -> Result<Pairs<'_, Rule>, DatabaseError> {
+    TraqulaParser::parse(Rule::traqula, traqula.trim()).map_err(|error| {
+        let mut message = error.to_string();
+        if let ErrorVariant::ParsingError { positives, .. } = error.variant
+            && !positives.is_empty()
+        {
+            let mut expected: Vec<_> = positives.into_iter().map(friendly_rule_name).collect();
+            expected.sort_unstable();
+            expected.dedup();
+            message.push_str(&format!("\nExpected one of: {}", expected.join(", ")));
+        }
+        DatabaseError::Parse {
+            message,
+            line: None,
+            col: None,
+        }
+    })
+}
+
+fn fallback_clause<'i>(search: &Pair<'i, Rule>) -> Option<Pair<'i, Rule>> {
+    search
+        .clone()
+        .into_inner()
+        .find(|clause| clause.as_rule() == Rule::or_add_clause)
+}
 
 fn search_has_return(search: &Pair<'_, Rule>) -> bool {
     if search.as_rule() == Rule::explain {
@@ -1276,33 +1296,32 @@ impl<'en> Engine<'en> {
     }
 
     /// Explain a search using this invocation's typed parameters and clock.
-    /// Estimates inspect catalog/index sizes under the database owner.
+    /// Estimates inspect the catalog and indexes in the current read view.
     pub fn explain_with_options(
         &self,
         traqula: &str,
         options: ExecutionOptions,
     ) -> Result<QueryPlan, DatabaseError> {
         let execution = options.resolve(traqula)?;
-        let _owner = self.acquire_owner(&execution)?;
         execution.check()?;
-        let commands = TraqulaParser::parse(Rule::traqula, traqula.trim())
-            .map_err(|error| DatabaseError::Parse {
-                message: error.to_string(),
-                line: None,
-                col: None,
-            })?
+        let commands = parse_script(traqula)?
             .filter(|command| command.as_rule() != Rule::EOI)
             .collect::<Vec<_>>();
+        execution.check()?;
         if commands.len() != 1 || !matches!(commands[0].as_rule(), Rule::search | Rule::explain) {
             return Err(DatabaseError::Execution(
                 "EXPLAIN expects exactly one search".into(),
             ));
         }
-        self.explain_command(commands.into_iter().next().unwrap(), &execution)
+        Self::explain_command(
+            &self.database.read_view(),
+            commands.into_iter().next().unwrap(),
+            &execution,
+        )
     }
 
     fn explain_command(
-        &self,
+        view: &ReadView,
         command: Pair<'_, Rule>,
         execution: &ExecutionContext,
     ) -> Result<QueryPlan, DatabaseError> {
@@ -1314,16 +1333,13 @@ impl<'en> Engine<'en> {
         } else {
             command
         };
-        let fallback = command
-            .clone()
-            .into_inner()
-            .find(|part| part.as_rule() == Rule::or_add_clause);
+        let fallback = fallback_clause(&command);
         let prepared = query::prepare(command, execution)?;
         let fallback_plan = fallback
             .as_ref()
             .map(|fallback| prepare_fallback(&prepared, fallback))
             .transpose()?;
-        let mut plan = query::explain_prepared(self.database, prepared, execution)?;
+        let mut plan = query::explain_prepared(view, prepared, execution)?;
         if let (Some(fallback), Some(fallback_plan)) = (fallback, fallback_plan) {
             let mut allocations: Vec<_> = fallback_plan
                 .allocation_domains
@@ -1352,7 +1368,7 @@ impl<'en> Engine<'en> {
     fn acquire_owner(
         &self,
         execution: &ExecutionContext,
-    ) -> Result<MutexGuard<'_, ()>, DatabaseError> {
+    ) -> Result<MutexGuard<'en, ()>, DatabaseError> {
         loop {
             match self.database.execution_owner.try_lock() {
                 Ok(owner) => return Ok(owner),
@@ -1365,6 +1381,31 @@ impl<'en> Engine<'en> {
                 }
             }
         }
+    }
+
+    fn script_view(
+        &self,
+        commands: &Pairs<'_, Rule>,
+        execution: &ExecutionContext,
+    ) -> Result<ScriptView<'en>, DatabaseError> {
+        let mut top_level = commands
+            .clone()
+            .filter(|command| command.as_rule() != Rule::EOI);
+        let standalone_search = top_level
+            .next()
+            .is_some_and(|command| command.as_rule() == Rule::search)
+            && top_level.next().is_none();
+        let writes = commands.clone().any(|command| match command.as_rule() {
+            Rule::search => !standalone_search && fallback_clause(&command).is_some(),
+            Rule::explain | Rule::EOI => false,
+            _ => true,
+        });
+        let owner = if writes {
+            Some(self.acquire_owner(execution)?)
+        } else {
+            None
+        };
+        Ok(ScriptView::new(self.database, owner))
     }
 
     /// Execute a single-search script in streaming fashion using the provided RowSink.
@@ -1385,7 +1426,9 @@ impl<'en> Engine<'en> {
         options: ExecutionOptions,
     ) -> Result<(Vec<String>, bool, usize), crate::error::DatabaseError> {
         let execution = options.resolve(traqula)?;
-        let _owner = self.acquire_owner(&execution)?;
+        execution.check()?;
+        let pairs = parse_script(traqula)?;
+        let mut view = self.script_view(&pairs, &execution)?;
         execution.check()?;
         for warning in &execution.metadata.warnings {
             if let SinkFlow::Stop = sink.on_warning(warning) {
@@ -1393,30 +1436,7 @@ impl<'en> Engine<'en> {
             }
         }
         let mut variables: Variables = Variables::default();
-        let parse_result = TraqulaParser::parse(Rule::traqula, traqula.trim());
-        let pairs = match parse_result {
-            Ok(p) => p,
-            Err(err) => {
-                let mut msg = format!("{}", err);
-                if let ErrorVariant::ParsingError {
-                    positives,
-                    negatives: _,
-                } = err.variant
-                    && !positives.is_empty()
-                {
-                    let mut expected: Vec<&'static str> =
-                        positives.iter().map(|r| friendly_rule_name(*r)).collect();
-                    expected.sort();
-                    expected.dedup();
-                    msg.push_str(&format!("\nExpected one of: {}", expected.join(", ")));
-                }
-                return Err(crate::error::DatabaseError::Parse {
-                    message: msg,
-                    line: None,
-                    col: None,
-                });
-            }
-        };
+
         let search_count = pairs
             .clone()
             .filter(|p| matches!(p.as_rule(), Rule::search | Rule::explain) && search_has_return(p))
@@ -1433,13 +1453,10 @@ impl<'en> Engine<'en> {
         for command in pairs {
             execution.check()?;
             match command.as_rule() {
-                Rule::add_role => self.add_role(command)?,
-                Rule::add_posit => self.add_posit(
-                    command,
-                    &mut variables,
-                    &execution.metadata.resolved_now,
-                    &execution,
-                )?,
+                Rule::add_role => self.add_role(view.write()?, command)?,
+                Rule::add_posit => {
+                    self.add_posit(view.write()?, command, &mut variables, &execution)?
+                }
                 Rule::search | Rule::explain => {
                     let limit = search_limit(&command)?;
                     struct CountingSink<'a, T: RowSink> {
@@ -1475,6 +1492,7 @@ impl<'en> Engine<'en> {
                         limited: false,
                     };
                     self.execute_search_command(
+                        &mut view,
                         command,
                         &mut variables,
                         &mut wrapper,
@@ -1491,14 +1509,19 @@ impl<'en> Engine<'en> {
         Ok((return_columns.unwrap_or_default(), limited, total_rows))
     }
     /// Handle an `add role` command.
-    fn add_role(&self, command: Pair<Rule>) -> Result<(), DatabaseError> {
+    fn add_role(&self, view: &mut ReadView, command: Pair<Rule>) -> Result<(), DatabaseError> {
         let names: Vec<String> = command
             .into_inner()
             .map(|role| parse_role_name(role.as_str()))
             .collect();
-        let kept = self
-            .database
-            .create_roles(names.iter().cloned().map(|name| (name, false)).collect())?;
+        self.add_role_names(view, names)
+    }
+
+    fn add_role_names(&self, view: &mut ReadView, names: Vec<String>) -> Result<(), DatabaseError> {
+        let kept = self.database.create_roles(
+            view,
+            names.iter().cloned().map(|name| (name, false)).collect(),
+        )?;
         let mut added = 0usize;
         for (name, (_role, existed)) in names.iter().zip(kept) {
             if !existed {
@@ -1513,14 +1536,28 @@ impl<'en> Engine<'en> {
         }
         Ok(())
     }
-    /// Handle an `add posit` command producing one or more posits.
     fn add_posit(
         &self,
+        view: &mut ReadView,
         command: Pair<Rule>,
         variables: &mut Variables,
-        resolved_now: &Time,
         execution: &ExecutionContext,
     ) -> Result<(), DatabaseError> {
+        Self::construct_posits(
+            &mut append::Writer::new(self.database, view),
+            command,
+            variables,
+            execution,
+        )
+    }
+
+    fn construct_posits(
+        scope: &mut impl append::AppendScope,
+        command: Pair<Rule>,
+        variables: &mut Variables,
+        execution: &ExecutionContext,
+    ) -> Result<(), DatabaseError> {
+        let resolved_now = &execution.metadata.resolved_now;
         let mut pending = Vec::new();
         let mut result_bindings = Vec::new();
         let mut assertion_specs = Vec::new();
@@ -1568,24 +1605,12 @@ impl<'en> Engine<'en> {
                                                     })?
                                                     .as_str();
                                                 local_variables.push(local_variable);
-                                                let thing = self
-                                                    .database
-                                                    .thing_generator()
-                                                    .lock()
-                                                    .map_err(|error| {
-                                                        DatabaseError::Lock(error.to_string())
-                                                    })?
-                                                    .generate();
-                                                match variables.entry(local_variable.to_string()) {
-                                                    Entry::Vacant(entry) => {
-                                                        let mut result_set = ResultSet::new();
-                                                        result_set.insert(thing);
-                                                        entry.insert(result_set);
-                                                    }
-                                                    Entry::Occupied(mut entry) => {
-                                                        entry.get_mut().insert(thing);
-                                                    }
-                                                }
+                                                let thing = scope.fresh_thing()?;
+                                                bind_identity(
+                                                    variables,
+                                                    local_variable.to_owned(),
+                                                    thing,
+                                                );
                                             }
                                             Rule::recall => {
                                                 local_variables.push(
@@ -1670,53 +1695,18 @@ impl<'en> Engine<'en> {
                             }
                         }
                     }
-                    let mut variable_to_things = HashMap::new();
-                    for local_variable in &local_variables {
-                        variable_to_things.insert(*local_variable, Vec::new());
-                    }
-                    for local_variable in &local_variables {
-                        let things =
-                            variable_to_things.get_mut(local_variable).ok_or_else(|| {
-                                DatabaseError::Invariant(
-                                    "missing variable candidate list".to_string(),
-                                )
+                    let candidates = local_variables
+                        .iter()
+                        .map(|name| {
+                            let bound = variables.get(*name).ok_or_else(|| {
+                                DatabaseError::InvalidRecall(format!(
+                                    "variable '{name}' is not bound in a prior command"
+                                ))
                             })?;
-                        let result_set = variables.get(*local_variable).ok_or_else(|| {
-                            DatabaseError::InvalidRecall(format!(
-                                "variable '{local_variable}' is not bound in a prior command"
-                            ))
-                        })?;
-                        match result_set.mode {
-                            ResultSetMode::Empty => (),
-                            ResultSetMode::Thing => {
-                                things.push(result_set.thing.ok_or_else(|| {
-                                    DatabaseError::Invariant(
-                                        "single result set has no identity".to_string(),
-                                    )
-                                })?);
-                            }
-                            ResultSetMode::Multi => {
-                                let multi = result_set.multi.as_ref().ok_or_else(|| {
-                                    DatabaseError::Invariant(
-                                        "multi result set has no bitmap".to_string(),
-                                    )
-                                })?;
-                                for thing in multi {
-                                    things.push(thing);
-                                }
-                            }
-                        }
-                    }
-                    let mut things_for_roles = Vec::new();
-                    for local_variable in &local_variables {
-                        let things_for_role =
-                            variable_to_things.get(local_variable).ok_or_else(|| {
-                                DatabaseError::Invariant(
-                                    "missing variable candidate list".to_string(),
-                                )
-                            })?;
-                        things_for_roles.push(things_for_role.as_slice());
-                    }
+                            result_set_identities(bound)
+                        })
+                        .collect::<Result<Vec<_>, DatabaseError>>()?;
+                    let things_for_roles = candidates.iter().map(Vec::as_slice).collect::<Vec<_>>();
                     if roles.len() != things_for_roles.len() {
                         return Err(DatabaseError::Invariant(format!(
                             "appearance variables/roles mismatch: {} variables, {} roles",
@@ -1734,51 +1724,15 @@ impl<'en> Engine<'en> {
 
                     // Stream the Cartesian product (indices) to avoid allocating all combinations.
                     let mut appearance_sets = Vec::new();
-                    let mut appearance_error = None;
-                    for_each_cartesian_indices(things_for_roles_ord.as_slice(), |idxs| {
-                        if let Err(error) = execution.check() {
-                            appearance_error = Some(error);
-                            return;
-                        }
-                        if appearance_error.is_some() {
-                            return;
-                        }
-                        let mut appearances = Vec::new();
-                        for i in 0..idxs.len() {
-                            let role_keeper = self.database.role_keeper();
-                            let role = match role_keeper
-                                .lock()
-                                .map_err(|error| DatabaseError::Lock(error.to_string()))
-                                .and_then(|keeper| {
-                                    keeper.get(roles_ord[i]).ok_or_else(|| {
-                                        DatabaseError::UnknownRole(roles_ord[i].to_string())
-                                    })
-                                }) {
-                                Ok(role) => role,
-                                Err(error) => {
-                                    appearance_error = Some(error);
-                                    return;
-                                }
-                            };
-                            let thing = things_for_roles_ord[i][idxs[i]];
-                            match self.database.create_appearance(thing, Arc::clone(&role)) {
-                                Ok((appearance, _)) => appearances.push(appearance),
-                                Err(error) => {
-                                    appearance_error = Some(error);
-                                    return;
-                                }
-                            }
-                        }
-                        match self.database.create_appearance_set(appearances) {
-                            Ok((appearance_set, _)) => appearance_sets.push(appearance_set),
-                            Err(error) => appearance_error = Some(error),
-                        }
-                    });
-                    if let Some(error) = appearance_error {
-                        return Err(error);
-                    }
-
-                    // println!("Appearance sets {:?}", appearance_sets);
+                    try_for_each_cartesian_indices(&things_for_roles_ord, |idxs| {
+                        execution.check()?;
+                        let members = roles_ord
+                            .iter()
+                            .enumerate()
+                            .map(|(i, role)| (*role, things_for_roles_ord[i][idxs[i]]));
+                        appearance_sets.push(scope.appearance_set(members)?);
+                        Ok::<_, DatabaseError>(())
+                    })?;
 
                     let time_value = time.ok_or_else(|| {
                         DatabaseError::Execution(
@@ -1916,12 +1870,7 @@ impl<'en> Engine<'en> {
                         DatabaseError::Invariant("and assert has no source variable".into())
                     })?;
                     if source_allocates {
-                        let source = self
-                            .database
-                            .thing_generator()
-                            .lock()
-                            .map_err(|error| DatabaseError::Lock(error.to_string()))?
-                            .generate();
+                        let source = scope.fresh_thing()?;
                         bind_identity(variables, source_variable.clone(), source);
                     }
                     let sources = variables.get(&source_variable).ok_or_else(|| {
@@ -1968,57 +1917,31 @@ impl<'en> Engine<'en> {
                 }
             }
         }
-        let CreatedLiteralPosits {
-            targets: kept,
-            assertions: kept_assertions,
-        } = self
-            .database
-            .create_literal_posits_with_assertions(pending, assertion_specs)?;
-        for (variable, range) in result_bindings {
+        execution.check()?;
+        let Some(kept) = scope.finish(pending, assertion_specs)? else {
+            return Ok(());
+        };
+        for ((variable, range), posits) in result_bindings
+            .into_iter()
+            .map(|entry| (entry, &kept.targets))
+            .chain(
+                assertion_bindings
+                    .into_iter()
+                    .map(|entry| (entry, &kept.assertions)),
+            )
+        {
             if let Some(variable) = variable {
-                match variables.entry(variable) {
-                    Entry::Vacant(entry) => {
-                        let mut result_set = ResultSet::new();
-                        for posit in &kept[range.clone()] {
-                            result_set.insert(posit.posit());
-                        }
-                        entry.insert(result_set);
-                    }
-                    Entry::Occupied(mut entry) => {
-                        let result_set = entry.get_mut();
-                        for posit in &kept[range] {
-                            result_set.insert(posit.posit());
-                        }
-                    }
+                let bound = variables.entry(variable).or_default();
+                for posit in &posits[range] {
+                    bound.insert(posit.posit());
                 }
             }
-        }
-        for (variable, range) in assertion_bindings {
-            if let Some(variable) = variable {
-                let result_set = variables.entry(variable).or_default();
-                for posit in &kept_assertions[range] {
-                    result_set.insert(posit.posit());
-                }
-            }
-        }
-        let committed = kept.len() + kept_assertions.len();
-        if committed > 0 {
-            info!(target: "positorium::traqula", event="add_posit_commit", count=committed, targets=kept.len(), assertions=kept_assertions.len(), "posit command committed");
         }
         Ok(())
     }
-    fn search(
-        &self,
-        command: Pair<Rule>,
-        sink: &mut dyn RowSink,
-        return_columns: &mut Option<Vec<String>>,
-        execution: &ExecutionContext,
-    ) -> Result<query::SearchOutcome, DatabaseError> {
-        query::execute(self.database, command, sink, return_columns, execution)
-    }
-
     fn execute_search_command(
         &self,
+        view: &mut ScriptView<'en>,
         command: Pair<Rule>,
         variables: &mut Variables,
         sink: &mut dyn RowSink,
@@ -2026,7 +1949,7 @@ impl<'en> Engine<'en> {
         execution: &ExecutionContext,
     ) -> Result<query::SearchOutcome, DatabaseError> {
         if command.as_rule() == Rule::explain {
-            let plan = self.explain_command(command, execution)?;
+            let plan = Self::explain_command(view.read(), command, execution)?;
             let json = serde_json::to_string(&plan)
                 .map_err(|error| DatabaseError::Invariant(error.to_string()))?;
             let columns = vec!["plan".to_string()];
@@ -2044,24 +1967,30 @@ impl<'en> Engine<'en> {
                 _identity_memory: budget::Reservation::default(),
             });
         }
-        let fallback = command
-            .clone()
-            .into_inner()
-            .find(|clause| clause.as_rule() == Rule::or_add_clause);
+        let fallback = fallback_clause(&command);
         let Some(fallback) = fallback else {
-            return self.search(command, sink, return_columns, execution);
+            return query::execute(view.read(), command, sink, return_columns, execution);
         };
-        let prepared = query::prepare(command, execution)?;
+        let prepared = query::prepare(command.clone(), execution)?;
         let fallback_plan = prepare_fallback(&prepared, &fallback)?;
-        let outcome =
-            query::execute_prepared(self.database, prepared, sink, return_columns, execution)?;
+        let mut outcome =
+            query::execute_prepared(view.read(), prepared, sink, return_columns, execution)?;
+        if outcome.matched_rows == 0 && !view.is_writer() {
+            let changed = view.acquire_writer(self.database, self.acquire_owner(execution)?);
+            execution.check()?;
+            if changed {
+                outcome = query::execute(view.read(), command, sink, return_columns, execution)?;
+            }
+        }
         if outcome.matched_rows == 0 {
-            self.add_posit(
-                fallback,
-                variables,
-                &execution.metadata.resolved_now,
-                execution,
-            )?;
+            if outcome.has_return {
+                outcome.sink_stopped = matches!(
+                    sink.on_meta(return_columns.as_deref().unwrap_or_default()),
+                    SinkFlow::Stop
+                );
+            }
+            execution.check()?;
+            self.add_posit(view.write()?, fallback, variables, execution)?;
             if outcome.has_return && !outcome.sink_stopped {
                 emit_fallback_rows(variables, &fallback_plan, sink, execution)?;
             }
@@ -2501,12 +2430,10 @@ impl<'en> Engine<'en> {
                                         };
                                         role_things.push(role.role());
                                     }
-                                    let lk = self.database.role_to_posit_thing_lookup();
-                                    let lk_guard = query_lock!(lk);
+                                    let view = self.database.read_view();
                                     let mut order: Vec<usize> = (0..role_things.len()).collect();
                                     order.sort_unstable_by_key(|i| {
-                                        lk_guard
-                                            .lookup(&role_things[*i])
+                                        view.role_posting(role_things[*i])
                                             .map_or(0, |posting| posting.len())
                                     });
                                     let mut candidates: Option<RoaringTreemap> = None;
@@ -2514,7 +2441,7 @@ impl<'en> Engine<'en> {
                                         if interrupted(execution, exec_error) {
                                             return;
                                         }
-                                        let Some(bm_ref) = lk_guard.lookup(&role_things[idx])
+                                        let Some(bm_ref) = view.role_posting(role_things[idx])
                                         else {
                                             candidates = Some(RoaringTreemap::new());
                                             break;
@@ -3542,7 +3469,18 @@ impl<'en> Engine<'en> {
         options: ExecutionOptions,
     ) -> Result<CollectedResult, DatabaseError> {
         let execution = options.resolve(traqula)?;
-        let _owner = self.acquire_owner(&execution)?;
+        execution.check()?;
+        let pairs = parse_script(traqula)?;
+        if self.execute_appends(&pairs, &execution)? {
+            return Ok(CollectedResult {
+                columns: Vec::new(),
+                rows: Vec::new(),
+                row_count: 0,
+                limited: false,
+                metadata: execution.metadata,
+            });
+        }
+        let mut view = self.script_view(&pairs, &execution)?;
         execution.check()?;
         let metadata = execution.metadata.clone();
         let mut variables: Variables = Variables::default();
@@ -3569,43 +3507,20 @@ impl<'en> Engine<'en> {
             limited: false,
         };
         let mut return_columns: Option<Vec<String>> = None;
-        // grammar now supports optional limit clause; parse directly
-        let parse_result = TraqulaParser::parse(Rule::traqula, traqula.trim());
-        let traqula = match parse_result {
-            Ok(pairs) => pairs,
-            Err(err) => {
-                let mut msg = format!("{}", err);
-                if let ErrorVariant::ParsingError {
-                    positives,
-                    negatives: _,
-                } = err.variant
-                    && !positives.is_empty()
-                {
-                    let mut expected: Vec<&'static str> =
-                        positives.iter().map(|r| friendly_rule_name(*r)).collect();
-                    expected.sort();
-                    expected.dedup();
-                    msg.push_str(&format!("\nExpected one of: {}", expected.join(", ")));
-                }
-                return Err(DatabaseError::Parse {
-                    message: msg,
-                    line: None,
-                    col: None,
-                });
-            }
-        };
+
         let mut search_count = 0usize;
-        for command in traqula {
+        for command in pairs {
             execution.check()?;
             match command.as_rule() {
-                Rule::add_role => self.add_role(command)?,
+                Rule::add_role => self.add_role(view.write()?, command)?,
                 Rule::add_posit => {
-                    self.add_posit(command, &mut variables, &metadata.resolved_now, &execution)?;
+                    self.add_posit(view.write()?, command, &mut variables, &execution)?;
                 }
                 Rule::search | Rule::explain => {
                     let limit = search_limit(&command)?;
                     collector.limit = execution.effective_limit(limit);
                     let outcome = self.execute_search_command(
+                        &mut view,
                         command,
                         &mut variables,
                         &mut collector,
@@ -3648,42 +3563,23 @@ impl<'en> Engine<'en> {
         options: ExecutionOptions,
     ) -> Result<Vec<CollectedResultSet>, DatabaseError> {
         let execution = options.resolve(traqula)?;
-        let _owner = self.acquire_owner(&execution)?;
+        execution.check()?;
+        let pairs = parse_script(traqula)?;
+        if self.execute_appends(&pairs, &execution)? {
+            return Ok(Vec::new());
+        }
+        let mut view = self.script_view(&pairs, &execution)?;
         execution.check()?;
         let metadata = execution.metadata.clone();
         let mut variables: Variables = Variables::default();
-        // Parse once
-        let parse_result = TraqulaParser::parse(Rule::traqula, traqula.trim());
-        let traqula = match parse_result {
-            Ok(pairs) => pairs,
-            Err(err) => {
-                let mut msg = format!("{}", err);
-                if let ErrorVariant::ParsingError {
-                    positives,
-                    negatives: _,
-                } = err.variant
-                    && !positives.is_empty()
-                {
-                    let mut expected: Vec<&'static str> =
-                        positives.iter().map(|r| friendly_rule_name(*r)).collect();
-                    expected.sort();
-                    expected.dedup();
-                    msg.push_str(&format!("\nExpected one of: {}", expected.join(", ")));
-                }
-                return Err(DatabaseError::Parse {
-                    message: msg,
-                    line: None,
-                    col: None,
-                });
-            }
-        };
+
         let mut results: Vec<CollectedResultSet> = Vec::new();
-        for command in traqula {
+        for command in pairs {
             execution.check()?;
             match command.as_rule() {
-                Rule::add_role => self.add_role(command)?,
+                Rule::add_role => self.add_role(view.write()?, command)?,
                 Rule::add_posit => {
-                    self.add_posit(command, &mut variables, &metadata.resolved_now, &execution)?;
+                    self.add_posit(view.write()?, command, &mut variables, &execution)?;
                 }
                 Rule::search | Rule::explain => {
                     struct LocalSink {
@@ -3714,6 +3610,7 @@ impl<'en> Engine<'en> {
                     sink.limit = execution.effective_limit(query_limit);
                     let mut local_return_columns: Option<Vec<String>> = None;
                     let outcome = self.execute_search_command(
+                        &mut view,
                         command,
                         &mut variables,
                         &mut sink,
@@ -3760,48 +3657,25 @@ impl<'en> Engine<'en> {
         options: ExecutionOptions,
     ) -> Result<(), DatabaseError> {
         let execution = options.resolve(traqula)?;
-        let _owner = self.acquire_owner(&execution)?;
         execution.check()?;
+        let pairs = parse_script(traqula)?;
         for warning in &execution.metadata.warnings {
             callbacks.on_warning(warning);
         }
+        if self.execute_appends(&pairs, &execution)? {
+            return Ok(());
+        }
+        let mut view = self.script_view(&pairs, &execution)?;
+        execution.check()?;
         let mut variables: Variables = Variables::default();
-        let parse_result = TraqulaParser::parse(Rule::traqula, traqula.trim());
-        let pairs = match parse_result {
-            Ok(p) => p,
-            Err(err) => {
-                let mut msg = format!("{}", err);
-                if let ErrorVariant::ParsingError {
-                    positives,
-                    negatives: _,
-                } = err.variant
-                    && !positives.is_empty()
-                {
-                    let mut expected: Vec<&'static str> =
-                        positives.iter().map(|r| friendly_rule_name(*r)).collect();
-                    expected.sort();
-                    expected.dedup();
-                    msg.push_str(&format!("\nExpected one of: {}", expected.join(", ")));
-                }
-                return Err(DatabaseError::Parse {
-                    message: msg,
-                    line: None,
-                    col: None,
-                });
-            }
-        };
+
         let mut set_index = 0usize;
         for command in pairs {
             execution.check()?;
             match command.as_rule() {
-                Rule::add_role => self.add_role(command)?,
+                Rule::add_role => self.add_role(view.write()?, command)?,
                 Rule::add_posit => {
-                    self.add_posit(
-                        command,
-                        &mut variables,
-                        &execution.metadata.resolved_now,
-                        &execution,
-                    )?;
+                    self.add_posit(view.write()?, command, &mut variables, &execution)?;
                 }
                 Rule::search | Rule::explain => {
                     // Extract limit for this search
@@ -3869,6 +3743,7 @@ impl<'en> Engine<'en> {
                     };
                     let mut return_columns: Option<Vec<String>> = None; // ignored here beyond meta
                     let outcome = self.execute_search_command(
+                        &mut view,
                         command,
                         &mut variables,
                         &mut sink,
@@ -3932,21 +3807,26 @@ fn friendly_rule_name(rule: Rule) -> &'static str {
 
 /// Streaming Cartesian product (indices): calls `mut f` with the index vector for each tuple, avoiding temporary tuple materialization.
 pub fn for_each_cartesian_indices<F: FnMut(&[usize])>(lists: &[&[impl Copy]], mut f: F) {
-    // Early return on empty input
-    if lists.is_empty() {
-        return;
+    // The public visitor is infallible.
+    let Ok(()) = try_for_each_cartesian_indices(lists, |indices| {
+        f(indices);
+        Ok::<(), std::convert::Infallible>(())
+    });
+}
+
+fn try_for_each_cartesian_indices<E>(
+    lists: &[&[impl Copy]],
+    mut visit: impl FnMut(&[usize]) -> Result<(), E>,
+) -> Result<(), E> {
+    if lists.is_empty() || lists.iter().any(|s| s.is_empty()) {
+        return Ok(());
     }
-    // Track indices for each list; -1 represents uninitialized state for the first increment
     let n = lists.len();
     let mut idx = vec![0usize; n];
-    // Verify no empty inner list; if any are empty, there are no combinations
-    if lists.iter().any(|s| s.is_empty()) {
-        return;
-    }
     // Emit until we overflow the most significant position
     loop {
         // Provide the current indices to the callback
-        f(&idx);
+        visit(&idx)?;
 
         // Increment positions from least significant upwards
         let mut carry_pos = n;
@@ -3960,7 +3840,7 @@ pub fn for_each_cartesian_indices<F: FnMut(&[usize])>(lists: &[&[impl Copy]], mu
             }
         }
         if carry_pos == n {
-            break; // overflowed most significant digit; done
+            return Ok(());
         }
     }
 }
@@ -3970,6 +3850,114 @@ mod boundary_tests {
     use super::*;
     use crate::construct::PersistenceMode;
     use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    const GET_KEY: &str = r#"search [{(?key, code)}, "known", *] return ?key
+        or add posit [{(+key, code)}, "known", '2024'];"#;
+
+    #[test]
+    fn a_standalone_hit_completes_while_the_writer_is_held() {
+        let db = Database::new(PersistenceMode::InMemory).unwrap();
+        let engine = Engine::new(&db);
+        engine
+            .execute(r#"add role code; add posit [{(+k, code)}, "known", '2024'];"#)
+            .unwrap();
+        let owner = db.execution_owner.lock().unwrap();
+        let bounded = || ExecutionOptions {
+            timeout: Some(Duration::from_secs(1)),
+            ..Default::default()
+        };
+        assert_eq!(
+            engine
+                .execute_collect_with_options(GET_KEY, bounded())
+                .unwrap()
+                .row_count,
+            1
+        );
+        let limited = GET_KEY.replace("return ?key", "return ?key limit 0");
+        let result = engine
+            .execute_collect_with_options(&limited, bounded())
+            .unwrap();
+        assert!(result.limited);
+        assert_eq!(result.row_count, 0);
+        assert!(
+            engine
+                .execute_collect_multi_with_options(&GET_KEY.replace("return ?key", ""), bounded())
+                .unwrap()
+                .is_empty()
+        );
+        struct UnexpectedOutput;
+        impl RowSink for UnexpectedOutput {
+            fn on_meta(&mut self, _: &[String]) -> SinkFlow {
+                panic!("speculative miss exposed metadata");
+            }
+            fn push(&mut self, _: Vec<ResultCell>) -> SinkFlow {
+                panic!("speculative miss exposed a row");
+            }
+        }
+        let timeout = ExecutionOptions {
+            timeout: Some(Duration::from_millis(20)),
+            ..Default::default()
+        };
+        let miss = GET_KEY.replace("known", "missing");
+        assert!(matches!(
+            engine.execute_stream_single_with_options(&miss, &mut UnexpectedOutput, timeout),
+            Err(DatabaseError::Timeout)
+        ));
+        drop(owner);
+        assert_eq!(db.read_view().posit_count(), 1);
+    }
+
+    #[test]
+    fn a_stale_miss_presents_only_the_rechecked_branch() {
+        #[derive(Default)]
+        struct Sink {
+            headers: usize,
+            rows: Vec<Vec<ResultCell>>,
+        }
+        impl RowSink for Sink {
+            fn on_meta(&mut self, columns: &[String]) -> SinkFlow {
+                assert_eq!(columns, ["key"]);
+                self.headers += 1;
+                SinkFlow::Continue
+            }
+            fn push(&mut self, row: Vec<ResultCell>) -> SinkFlow {
+                self.rows.push(row);
+                SinkFlow::Continue
+            }
+        }
+        for winner_creates_key in [false, true] {
+            let db = Database::new(PersistenceMode::InMemory).unwrap();
+            let engine = Engine::new(&db);
+            engine.execute("add role code;").unwrap();
+            let execution = ExecutionOptions::default().resolve(GET_KEY).unwrap();
+            let mut commands = parse_script(GET_KEY).unwrap();
+            let mut stale = engine.script_view(&commands, &execution).unwrap();
+            if winner_creates_key {
+                engine.execute(GET_KEY).unwrap();
+            } else {
+                engine.execute("add role unrelated;").unwrap();
+            }
+            let mut sink = Sink::default();
+            let outcome = engine
+                .execute_search_command(
+                    &mut stale,
+                    commands.next().unwrap(),
+                    &mut Variables::default(),
+                    &mut sink,
+                    &mut None,
+                    &execution,
+                )
+                .unwrap();
+            assert_eq!(outcome.matched_rows, usize::from(winner_creates_key));
+            drop(stale);
+            assert_eq!(sink.headers, 1);
+            assert_eq!(sink.rows.len(), 1);
+            let actual = engine
+                .execute_collect(r#"search [{(?key, code)}, "known", *] return ?key;"#)
+                .unwrap();
+            assert_eq!(actual.rows, sink.rows);
+        }
+    }
 
     #[test]
     fn malformed_and_arbitrary_scripts_return_without_panicking() {

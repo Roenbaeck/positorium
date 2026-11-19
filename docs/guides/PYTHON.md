@@ -139,9 +139,11 @@ result = database.execute(
 
 `now` deterministically replaces every `@NOW` in the complete script. `timeout`
 is a positive number of seconds, and `max_rows` applies independently to every
-search. A lower Traqula `limit` still wins. Long-running native execution
-releases the Python interpreter lock; Positorium itself serializes scripts for
-one database owner.
+search. A lower Traqula `limit` still wins. Native execution releases the Python
+interpreter lock. Read-only scripts on the same database can run concurrently
+against consistent views. Standalone get-or-create hits also use a snapshot.
+Unconditional append scripts can prepare concurrently, then one writer commits
+their commands in order.
 
 `max_work_units` caps cumulative logical query work across every search in the
 script. `max_memory_bytes` caps live accounted query workspace; reservations
@@ -177,7 +179,7 @@ All database exceptions derive from `PositoriumError`. Useful subclasses include
 The package exports `PYTHON_INTERFACE_VERSION`, `TRAQULA_VERSION`, and
 `TERRAIN_VERSION`. Python interface 1 is documented in
 [Contracts](../reference/CONTRACTS.md). The distribution version follows PEP
-440, so Cargo `0.2.0-beta.3` is installed as Python `0.2.0b3`.
+440, so Cargo `0.2.1-beta.4` is installed as Python `0.2.1b4`.
 
 ## Publishing a release
 

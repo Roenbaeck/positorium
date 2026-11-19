@@ -29,6 +29,62 @@ fn in_memory_mode_allows_basic_operations() {
     assert!(db.contains_role("person").unwrap());
 }
 
+#[cfg(feature = "persistence")]
+#[test]
+fn concurrent_append_scripts_replay_canonical_targets_and_their_assertions() {
+    use positorium::Engine;
+    use std::sync::Barrier;
+    let path = temporary_store_path("parallel-appends");
+    let db = Database::new(PersistenceMode::File(path.clone())).unwrap();
+    let start = Barrier::new(6);
+    std::thread::scope(|scope| {
+        for value in 0..6 {
+            let (db, start) = (&db, &start);
+            scope.spawn(move || {
+                let script = format!(
+                    r#"
+                    add role status, claim_ref, evidence_ref;
+                    add posit +p [{{(+case, status)}}, {value}, '2024']
+                        and assert +e by +source with 90% at '2025';
+                    add posit +p [{{(case, status)}}, {value}, '2024']
+                        and assert +e by source with 90% at '2025';
+                    add posit [{{(p, claim_ref)}}, "claim", '2024'],
+                              [{{(e, evidence_ref)}}, "evidence", '2024'];
+                "#
+                );
+                start.wait();
+                Engine::new(db).execute(&script).unwrap();
+            });
+        }
+    });
+    let query = r#"search ?p = [{(?case, status)}, ?v, *],
+                       ?e = [{(?p, posit), (?source, ascertains)}, 90%, *],
+                       [{(?e, evidence_ref)}, "evidence", *],
+                       [{(?p, claim_ref)}, "claim", *]
+                   return ?v, ?case, ?p, ?e, ?source order by ?v;"#;
+    let rows = Engine::new(&db).execute_collect(query).unwrap().rows;
+    assert_eq!(rows.len(), 6);
+    assert_eq!(
+        Engine::new(&db)
+            .execute_collect("search ?p = [*, *, *] return ?p;")
+            .unwrap()
+            .row_count,
+        24
+    );
+    assert_eq!(db.role_count().unwrap(), 8);
+    for (i, row) in rows.iter().enumerate() {
+        assert_eq!(row[0].text, i.to_string());
+    }
+    drop(db);
+    let reopened = Database::new(PersistenceMode::File(path.clone())).unwrap();
+    assert_eq!(
+        Engine::new(&reopened).execute_collect(query).unwrap().rows,
+        rows
+    );
+    drop(reopened);
+    remove_store(&path);
+}
+
 #[test]
 #[cfg(feature = "persistence")]
 fn append_only_store_replays_roles_posits_and_indexes() {

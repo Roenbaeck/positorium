@@ -135,9 +135,9 @@ WASM interface versions.
 
 Terrain starts its timeout before waiting for the database execution owner,
 captures structural sources under that owner in a fixed lock order, and releases
-all database locks before aggregation. Concurrent queries and writers therefore
-serialize with capture, while the more expensive aggregation operates on an
-immutable snapshot.
+all database locks before aggregation. Terrain captures serialize with commits
+and mixed mutation scripts. Snapshot lookups and private append preparation
+can proceed throughout capture and aggregation.
 
 Terrain 1 hard limits are one million scanned posits, 250,000 active appearance
 sets, one million distinct endpoint Things, five million temporal comparisons,

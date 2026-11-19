@@ -64,13 +64,24 @@ listed in [CONTRACTS.md](../reference/CONTRACTS.md).
 
 Each semicolon-delimited `add role` or `add posit` command is one atomic batch.
 An `and assert` suffix persists its target and assertion envelopes in that same
-batch. A `search ... or add posit ...` command holds the script execution owner
-across search and fallback selection; when the fallback runs, its posits and
-optional assertions form one atomic batch.
+batch. A standalone `search ... or add posit ...` can return an existing match
+from a snapshot. The writer confirms a miss against the current store before
+creating the fallback and its optional assertions in one atomic batch.
 For a persistent store, success is returned only after the records and Commit
 frame are flushed, the replacement manifest is flushed and renamed, and the
 required directory entries are synchronized. A multi-posit command is all or
 nothing. Earlier successful commands remain committed if a later command fails.
+
+Read-only Traqula scripts use a consistent view for the entire request, including
+SSE. New readers can use the latest published view while a mutation script is
+running. Once that script exits, new readers see its completed commands. For a
+streaming mutation script, use its terminal event to sequence a follow-up read.
+Views share stored records and unchanged index data. Long-running reads can
+retain older index data while new writes commit.
+
+Each in-flight unconditional append script holds its expanded candidates until
+commit. Batch size and the number of concurrent ingest requests both affect
+peak memory. The query workspace budget excludes mutation staging.
 
 If a log or manifest write has an uncertain outcome, the active writer becomes
 fail-closed and rejects further writes. Restart the process: writable recovery

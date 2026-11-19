@@ -14,7 +14,7 @@ thread_local! {
 }
 
 pub(super) fn execute(
-    database: &Database,
+    view: &ReadView,
     query: &plan::PhysicalQuery,
     sink: &mut dyn RowSink,
     return_columns: &mut Option<Vec<String>>,
@@ -45,7 +45,7 @@ pub(super) fn execute(
         binding.0.retain(|name, _| query.domains.contains_key(name));
         for block in &query.not_exists {
             let mut found = false;
-            visit_branch(database, block, 0, &binding, execution, &mut |_| {
+            visit_branch(view, block, 0, &binding, execution, &mut |_| {
                 found = true;
                 Ok(SinkFlow::Stop)
             })?;
@@ -84,14 +84,9 @@ pub(super) fn execute(
         Ok(SinkFlow::Continue)
     };
     for branch in &query.branches {
-        if let SinkFlow::Stop = visit_branch(
-            database,
-            branch,
-            0,
-            &Binding::default(),
-            execution,
-            &mut emit,
-        )? {
+        if let SinkFlow::Stop =
+            visit_branch(view, branch, 0, &Binding::default(), execution, &mut emit)?
+        {
             break;
         }
     }
@@ -116,7 +111,7 @@ pub(super) fn execute(
 }
 
 fn visit_branch(
-    database: &Database,
+    view: &ReadView,
     branch: &plan::PlannedBranch,
     index: usize,
     input: &Binding,
@@ -132,19 +127,19 @@ fn visit_branch(
     let Some(pattern) = branch.patterns.get(index) else {
         return visitor(input.clone());
     };
-    visit_pattern(database, pattern, input, execution, &mut |binding| {
+    visit_pattern(view, pattern, input, execution, &mut |binding| {
         for predicate in &pattern.predicates {
             execution.work(1)?;
             if !evaluate_predicate(predicate, &binding)? {
                 return Ok(SinkFlow::Continue);
             }
         }
-        visit_branch(database, branch, index + 1, &binding, execution, visitor)
+        visit_branch(view, branch, index + 1, &binding, execution, visitor)
     })
 }
 
 fn visit_pattern(
-    database: &Database,
+    view: &ReadView,
     planned: &plan::PlannedPattern,
     input: &Binding,
     execution: &ExecutionContext,
@@ -156,7 +151,7 @@ fn visit_pattern(
         // The entire history must participate in dominance before a row escapes.
         // This also keeps external field bindings on the correct side of reduction.
         for binding in evaluate_pattern(
-            database,
+            view,
             planned,
             input,
             &HashMap::new(),
@@ -169,23 +164,16 @@ fn visit_pattern(
         }
         return Ok(SinkFlow::Continue);
     }
-    let identities = candidate_identities(database, pattern, input, &planned.access, execution)?;
-    let keeper = database.posit_keeper();
+    let identities = candidate_identities(view, pattern, input, &planned.access, execution)?;
     for identity in identities {
         execution.work(1)?;
         #[cfg(test)]
         SCANNED.with(|count| count.set(count.get() + 1));
-        // Release the lock before structural matching or invoking downstream
-        // operators/sinks. Only the current candidate's Arc is kept alive here.
-        let posit = keeper
-            .lock()
-            .map_err(|e| DatabaseError::Lock(e.to_string()))?
-            .posit::<LiteralValue>(identity)
-            .ok_or_else(|| {
-                DatabaseError::Invariant(format!(
-                    "posit index contains identity {identity} without a literal posit"
-                ))
-            })?;
+        let posit = view.posit(identity).ok_or_else(|| {
+            DatabaseError::Invariant(format!(
+                "posit index contains identity {identity} without a literal posit"
+            ))
+        })?;
         let _fields = execution.workspace(|| match &pattern.value {
             ValueSlot::Variable(_) | ValueSlot::LegacyVariable(_) => {
                 posit.value().token().len() as u64 + 128
@@ -462,7 +450,7 @@ mod tests {
 
     #[test]
     fn incremental_bags_and_row_order_match_materialized_reference() {
-        let database = fixture();
+        let view = fixture().read_view();
         for body in [
             "[{(?x, left)}, ?v, *]",
             "[{(?x, left)}, ?v, *], [{(?y, right)}, ?w, *]",
@@ -491,15 +479,14 @@ mod tests {
                         .unwrap()
                         .next()
                         .unwrap();
-                    plan::compile(&database, prepare(command, &execution).unwrap(), &execution)
-                        .unwrap()
+                    plan::compile(&view, prepare(command, &execution).unwrap(), &execution).unwrap()
                 };
                 let planned = compile();
                 assert!(planned.materialization_reason.is_none(), "{script}");
                 let mut actual = Rows::default();
-                execute(&database, &planned, &mut actual, &mut None, &execution).unwrap();
+                execute(&view, &planned, &mut actual, &mut None, &execution).unwrap();
                 let mut reference = Rows::default();
-                execute_materialized(&database, compile(), &mut reference, &mut None, &execution)
+                execute_materialized(&view, compile(), &mut reference, &mut None, &execution)
                     .unwrap();
                 assert_eq!(actual.0, reference.0, "{script}");
             }

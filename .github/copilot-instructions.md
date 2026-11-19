@@ -65,7 +65,7 @@ All constructs follow a keeper pattern for canonical storage and deduplication u
 ### Operational persistence behavior
 - Startup: validated replay reconstructs keepers, lookups, and the identity generator before the engine accepts work. Corruption and unsupported formats fail closed.
 - Writes: persistence appends each successful mutation command as one durable batch before publishing it to in-memory state.
-- Ownership: one `Database` owns one store and one execution mutex; query interfaces sharing it serialize execution. The OS store lock rejects a second writer.
+- One process owns each persistent store. Readers pin a published view for the entire script. Standalone get-or-create hits and private preparation of unconditional appends can run alongside a writer. One writer orders commits and publishes completed commands at script exit.
 
 ### DataType maintenance
 When adding a literal family or representation:
@@ -80,7 +80,7 @@ When adding a literal family or representation:
 - Avoid premature allocation by relying on `ResultSetMode` and in-place roaring operations.
 
 ## Concurrency and Interface
-`src/interface.rs` provides a query interface with bounded execution-lock waiting, cooperative cancellation, and optional streaming. `src/server.rs` implements an Axum HTTP/SSE boundary. All frontends sharing a `Database` use its execution owner, so separately created interfaces cannot bypass serialization.
+`src/interface.rs` provides bounded writer-lock waiting, cooperative cancellation, and optional streaming. `src/server.rs` implements the Axum HTTP/SSE boundary. Frontends sharing a `Database` use its published views and its ordered writer.
 	- File-backed and in-memory modes have the same logical execution semantics.
 	- Cancellation is cooperative and must be checked at bounded points in parsing, command execution, result production, and execution-lock waiting.
 	- Shutdown stops intake, finishes or cancels active work according to the boundary contract, and flushes the owned store.

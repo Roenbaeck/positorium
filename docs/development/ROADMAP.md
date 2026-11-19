@@ -146,9 +146,8 @@ follow-up work.
 - [ ] **Improve join representation and incremental validation.**
         - Add hash joins, indexed/evicting effective-cut reuse, and incremental
             validation strategies for currently materialized plans.
-        - Use compact binding slots, reuse parsed literal interpretations, and
-            replace linear staged-posit duplicate searches with a command-local
-            hash index.
+        - Use compact binding slots and reuse parsed literal interpretations.
+            Duplicate detection within a staged posit batch now uses a hash index.
 - [ ] **Measure operators and scaling.**
         - Add actual rows, loops, candidate scans, temporal comparisons, peak
             intermediate memory, first-row latency, and timeout overshoot.
@@ -175,11 +174,10 @@ follow-up work.
         - Keep general constraints, classification acceptance, subclass closure,
             and fusion as explicit, separately specified policies.
 
-Retain the append-only durable store and single-writer model for this sequence.
-Introduce a read-view boundary as planning evolves; prioritize concurrent
-immutable readers, persisted indexes, and replay snapshots when measurements
-justify them. The query-planning work itself does not require a storage-format
-change.
+The append-only store uses a single writer and publishes immutable Traqula read
+views at script boundaries. Independent readers, standalone get-or-create hits,
+and unconditional append preparation can run alongside the writer. Measure
+persisted indexes and replay snapshots separately.
 
 ## P0: Defects Found In Review (2026-08-20)
 
@@ -534,8 +532,7 @@ posit replay.
             configuration, locks, or network input. Internal proven invariants may use
             assertions rather than blanket replacement.
 - [x] **Enforce a single database owner.**
-        - Serialize scripts through one worker/command queue so queries cannot observe
-            half-updated keepers or indexes.
+        - Order commits and publish consistent views for readers.
         - Enforce command-level atomicity: each semicolon-delimited command commits all
             of its changes or none, while earlier commands remain committed after a
             later failure. Defer explicit script transactions until after beta (D021).
@@ -612,7 +609,7 @@ posit replay.
         - Verify that replay and import preserve proposition identity independently of
             record order and that no store-local identity collisions survive remapping.
 - [x] **Concurrency and failure tests.**
-        - Verify single-writer locking, concurrent client serialization, cancellation,
+        - Verify single-writer locking, concurrent read views, cancellation,
             disk-full/write failure behavior, restart after failure, and clean shutdown.
 - [x] **Fuzz storage and language parsers.**
         - Ensure malformed or arbitrary bytes/scripts produce bounded errors, not

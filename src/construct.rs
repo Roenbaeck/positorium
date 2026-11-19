@@ -47,8 +47,11 @@ use std::collections::hash_set::Iter;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::hash::Hash;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use unicode_normalization::UnicodeNormalization;
+
+mod read_view;
+pub(crate) use read_view::{ReadView, ScriptView};
 
 /// Internal heterogeneous map keyed by `TypeId` used for storing per-value
 /// type bimap indices for posits.
@@ -168,8 +171,14 @@ impl ThingGenerator {
     }
     /// Generates a new identity.
     pub fn generate(&mut self) -> Thing {
+        let thing = self.reserve();
+        self.retained.insert(thing);
+        thing
+    }
+    /// Reserve a unique identity for a candidate. Only a committed record
+    /// makes the identity visible to the store's structural catalog.
+    pub(crate) fn reserve(&mut self) -> Thing {
         self.lower_bound += 1;
-        self.retained.insert(self.lower_bound);
         self.lower_bound
     }
     /// Iterates over currently retained identities (unordered).
@@ -300,6 +309,9 @@ impl Appearance {
     pub fn role(&self) -> Arc<Role> {
         Arc::clone(&self.role)
     }
+    pub(crate) fn role_name(&self) -> &str {
+        self.role.name()
+    }
 }
 impl Ord for Appearance {
     fn cmp(&self, other: &Self) -> Ordering {
@@ -334,7 +346,9 @@ impl AppearanceKeeper {
         }
     }
     pub fn keep(&mut self, appearance: Appearance) -> (Arc<Appearance>, bool) {
-        let keepsake = Arc::new(appearance);
+        self.keep_arc(Arc::new(appearance))
+    }
+    fn keep_arc(&mut self, keepsake: Arc<Appearance>) -> (Arc<Appearance>, bool) {
         let previously_kept = !self.kept.insert(Arc::clone(&keepsake));
         (
             Arc::clone(self.kept.get(&keepsake).unwrap()),
@@ -350,7 +364,7 @@ impl AppearanceKeeper {
 }
 
 // ------------- AppearanceSet -------------
-#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct AppearanceSet {
     appearances: Arc<Vec<Arc<Appearance>>>,
 }
@@ -362,6 +376,13 @@ impl AppearanceSet {
         }
         Some(Self {
             appearances: Arc::new(set),
+        })
+    }
+    pub(crate) fn checked(appearances: Vec<Arc<Appearance>>) -> Result<Arc<Self>, DatabaseError> {
+        Self::new(appearances).map(Arc::new).ok_or_else(|| {
+            DatabaseError::InvalidAppearanceSet(
+                "an appearance set may contain at most one Thing for each Role".into(),
+            )
         })
     }
     pub fn appearances(&self) -> &Vec<Arc<Appearance>> {
@@ -420,7 +441,7 @@ impl AppearanceSetKeeper {
 }
 
 // --------------- Posit ----------------
-#[derive(Eq, Debug)]
+#[derive(Clone, Eq, Debug)]
 pub struct Posit<V: DataType> {
     posit: Thing, // a posit is also a thing we can "talk" about
     appearance_set: Arc<AppearanceSet>,
@@ -673,6 +694,7 @@ impl PersistenceMode {
 
 pub struct Database {
     pub(crate) execution_owner: Mutex<()>,
+    published_view: Mutex<Arc<ReadView>>,
     // owns a thing generator
     pub(crate) thing_generator: Arc<Mutex<ThingGenerator>>,
     // owns keepers for the available constructs
@@ -681,12 +703,6 @@ pub struct Database {
     pub(crate) appearance_set_keeper: Arc<Mutex<AppearanceSetKeeper>>,
     pub(crate) posit_keeper: Arc<Mutex<PositKeeper>>,
     // owns lookups between constructs (similar to database indexes)
-    pub(crate) thing_to_appearance_lookup: Arc<Mutex<Lookup<Thing, Arc<Appearance>, ThingHasher>>>,
-    pub(crate) role_to_appearance_lookup: Arc<Mutex<RoleAppearanceLookup>>,
-    pub(crate) appearance_to_appearance_set_lookup: Arc<Mutex<AppearanceSetLookup>>,
-    pub(crate) appearance_set_to_posit_thing_lookup:
-        Arc<Mutex<ThingLookup<Arc<AppearanceSet>, OtherHasher>>>,
-    pub(crate) role_to_posit_thing_lookup: Arc<Mutex<ThingLookup<Thing, OtherHasher>>>,
     /// Reverse lookup: posit thing -> its appearance set (type-erased from value/time).
     pub(crate) posit_thing_to_appearance_set_lookup:
         Arc<Mutex<HashMap<Thing, Arc<AppearanceSet>, ThingHasher>>>,
@@ -715,31 +731,18 @@ impl Database {
         let appearance_keeper = AppearanceKeeper::new();
         let appearance_set_keeper = AppearanceSetKeeper::new();
         let posit_keeper = PositKeeper::new();
-        let thing_to_appearance_lookup = Lookup::new();
-        let role_to_appearance_lookup = Lookup::new();
-        let appearance_to_appearance_set_lookup = Lookup::new();
-        let appearance_set_to_posit_thing_lookup = ThingLookup::new();
-        let role_to_posit_thing_lookup = ThingLookup::new();
         let posit_thing_to_appearance_set_lookup: HashMap<Thing, Arc<AppearanceSet>, ThingHasher> =
             HashMap::default();
         let posit_time_lookup: HashMap<Thing, Time, ThingHasher> = HashMap::default();
         // Create the database so that we can prime it before returning it
         let database = Database {
             execution_owner: Mutex::new(()),
+            published_view: Mutex::new(Arc::new(ReadView::default())),
             thing_generator: Arc::new(Mutex::new(thing_generator)),
             role_keeper: Arc::new(Mutex::new(role_keeper)),
             appearance_keeper: Arc::new(Mutex::new(appearance_keeper)),
             appearance_set_keeper: Arc::new(Mutex::new(appearance_set_keeper)),
             posit_keeper: Arc::new(Mutex::new(posit_keeper)),
-            thing_to_appearance_lookup: Arc::new(Mutex::new(thing_to_appearance_lookup)),
-            role_to_appearance_lookup: Arc::new(Mutex::new(role_to_appearance_lookup)),
-            appearance_to_appearance_set_lookup: Arc::new(Mutex::new(
-                appearance_to_appearance_set_lookup,
-            )),
-            appearance_set_to_posit_thing_lookup: Arc::new(Mutex::new(
-                appearance_set_to_posit_thing_lookup,
-            )),
-            role_to_posit_thing_lookup: Arc::new(Mutex::new(role_to_posit_thing_lookup)),
             posit_thing_to_appearance_set_lookup: Arc::new(Mutex::new(
                 posit_thing_to_appearance_set_lookup,
             )),
@@ -748,40 +751,51 @@ impl Database {
             store: Arc::new(Mutex::new(store)),
         };
 
+        let mut initial_view = ReadView::default();
         #[cfg(feature = "persistence")]
         if let Some(replayed) = replayed {
             if replayed.roles.is_empty()
                 && replayed.posits.is_empty()
                 && !replayed.has_required_codecs
             {
-                database.bootstrap_append_store()?;
+                database.bootstrap_append_store(&mut initial_view)?;
             } else {
-                database.restore_append_store(replayed)?;
+                database.restore_append_store(&mut initial_view, replayed)?;
             }
         }
-        #[cfg(not(feature = "persistence"))]
-        {
+        if initial_view.role_count() == 0 {
             for (identity, name) in BUILTIN_ROLES {
-                database.ensure_builtin_role(identity, name)?;
+                database.ensure_builtin_role(&mut initial_view, identity, name)?;
             }
         }
-        #[cfg(feature = "persistence")]
-        if database
-            .role_keeper
-            .lock()
-            .map_err(|error| DatabaseError::Lock(error.to_string()))?
-            .is_empty()
-        {
-            for (identity, name) in BUILTIN_ROLES {
-                database.ensure_builtin_role(identity, name)?;
-            }
-        }
-
+        database.publish_read_view(Arc::new(initial_view));
         Ok(database)
     }
 
+    pub(crate) fn read_view(&self) -> Arc<ReadView> {
+        Arc::clone(
+            &self
+                .published_view
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        )
+    }
+
+    fn publish_read_view(&self, view: Arc<ReadView>) {
+        // The lock only protects the pointer swap. Reclaim an old view outside
+        // the lock, since it may be the last reference to a large index subtree.
+        let previous = std::mem::replace(
+            &mut *self
+                .published_view
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+            view,
+        );
+        drop(previous);
+    }
+
     #[cfg(feature = "persistence")]
-    fn bootstrap_append_store(&self) -> Result<(), DatabaseError> {
+    fn bootstrap_append_store(&self, view: &mut ReadView) -> Result<(), DatabaseError> {
         let roles = BUILTIN_ROLES
             .into_iter()
             .map(|(identity, name)| Role::new(identity, name.to_string(), true))
@@ -795,29 +809,25 @@ impl Database {
             .ok_or_else(|| DatabaseError::Invariant("persistent store is absent".to_string()))?
             .append_batch(&records)?;
         for role in roles {
-            self.thing_generator
-                .lock()
-                .map_err(|error| DatabaseError::Lock(error.to_string()))?
-                .retain(role.role());
-            self.keep_role(role)?;
+            self.keep_role(view, role)?;
         }
         Ok(())
     }
 
     #[cfg(feature = "persistence")]
-    fn restore_append_store(&self, replayed: ReplayedStore) -> Result<(), DatabaseError> {
+    fn restore_append_store(
+        &self,
+        view: &mut ReadView,
+        replayed: ReplayedStore,
+    ) -> Result<(), DatabaseError> {
         if !replayed.has_required_codecs {
             return Err(DatabaseError::DataCorruption {
                 message: "append-only store lacks the mandatory v1 codec registry".to_string(),
             });
         }
         for role in replayed.roles {
-            self.thing_generator
-                .lock()
-                .map_err(|error| DatabaseError::Lock(error.to_string()))?
-                .retain(role.identity);
             let (_, existed) =
-                self.keep_role(Role::new(role.identity, role.name, role.reserved))?;
+                self.keep_role(view, Role::new(role.identity, role.name, role.reserved))?;
             if existed {
                 return Err(DatabaseError::DataCorruption {
                     message: "duplicate Role survived logical replay".to_string(),
@@ -835,23 +845,18 @@ impl Database {
                     .ok_or_else(|| DatabaseError::DataCorruption {
                         message: format!("missing replayed Role {role_identity}"),
                     })?;
-                self.thing_generator
-                    .lock()
-                    .map_err(|error| DatabaseError::Lock(error.to_string()))?
-                    .retain(thing);
-                appearances.push(self.keep_appearance(Appearance::new(thing, role))?.0);
+                appearances.push(Arc::new(Appearance::new(thing, role)));
             }
-            let appearance_set = self.create_appearance_set(appearances)?.0;
-            self.thing_generator
-                .lock()
-                .map_err(|error| DatabaseError::Lock(error.to_string()))?
-                .retain(posit.identity);
-            let (_, existed) = self.keep_posit(Posit::new(
-                posit.identity,
-                appearance_set,
-                posit.value,
-                posit.time,
-            ))?;
+            let appearance_set = AppearanceSet::checked(appearances)?;
+            let (_, existed) = self.keep_posit_arc(
+                view,
+                Arc::new(Posit::new(
+                    posit.identity,
+                    appearance_set,
+                    posit.value,
+                    posit.time,
+                )),
+            )?;
             if existed {
                 return Err(DatabaseError::DataCorruption {
                     message: "duplicate Posit survived logical replay".to_string(),
@@ -859,35 +864,16 @@ impl Database {
             }
         }
         for (identity, name) in BUILTIN_ROLES {
-            self.ensure_builtin_role(identity, name)?;
+            self.ensure_builtin_role(view, identity, name)?;
         }
         Ok(())
     }
     // functions to access the owned generator and keepers
-    pub(crate) fn thing_generator(&self) -> Arc<Mutex<ThingGenerator>> {
-        Arc::clone(&self.thing_generator)
-    }
     pub(crate) fn role_keeper(&self) -> Arc<Mutex<RoleKeeper>> {
         Arc::clone(&self.role_keeper)
     }
     pub(crate) fn posit_keeper(&self) -> Arc<Mutex<PositKeeper>> {
         Arc::clone(&self.posit_keeper)
-    }
-    pub(crate) fn thing_to_appearance_lookup(
-        &self,
-    ) -> Arc<Mutex<Lookup<Thing, Arc<Appearance>, ThingHasher>>> {
-        Arc::clone(&self.thing_to_appearance_lookup)
-    }
-    pub(crate) fn appearance_to_appearance_set_lookup(&self) -> Arc<Mutex<AppearanceSetLookup>> {
-        Arc::clone(&self.appearance_to_appearance_set_lookup)
-    }
-    pub(crate) fn appearance_set_to_posit_thing_lookup(
-        &self,
-    ) -> Arc<Mutex<ThingLookup<Arc<AppearanceSet>, OtherHasher>>> {
-        Arc::clone(&self.appearance_set_to_posit_thing_lookup)
-    }
-    pub(crate) fn role_to_posit_thing_lookup(&self) -> Arc<Mutex<ThingLookup<Thing, OtherHasher>>> {
-        Arc::clone(&self.role_to_posit_thing_lookup)
     }
     pub(crate) fn posit_thing_to_appearance_set_lookup(
         &self,
@@ -913,32 +899,39 @@ impl Database {
 
     /// Return whether the normalized, case-sensitive role catalog contains `name`.
     pub fn contains_role(&self, name: &str) -> Result<bool, DatabaseError> {
-        let name: String = name.nfc().collect();
-        Ok(self
-            .role_keeper
-            .lock()
-            .map_err(|error| DatabaseError::Lock(error.to_string()))?
-            .get(&name)
-            .is_some())
+        Ok(self.read_view().role(name).is_some())
     }
 
     /// Return the number of roles in the catalog, including reserved roles.
     pub fn role_count(&self) -> Result<usize, DatabaseError> {
-        Ok(self
-            .role_keeper
-            .lock()
-            .map_err(|error| DatabaseError::Lock(error.to_string()))?
-            .len())
+        Ok(self.read_view().role_count())
     }
     // functions to create constructs for the keepers to keep that also populate the lookups
-    pub(crate) fn keep_role(&self, role: Role) -> Result<(Arc<Role>, bool), DatabaseError> {
-        Ok(self
+    fn keep_role(
+        &self,
+        view: &mut ReadView,
+        role: Role,
+    ) -> Result<(Arc<Role>, bool), DatabaseError> {
+        let (role, existed) = self
             .role_keeper
             .lock()
             .map_err(|error| DatabaseError::Lock(error.to_string()))?
-            .keep(role))
+            .keep(role);
+        if !existed {
+            self.thing_generator
+                .lock()
+                .map_err(|error| DatabaseError::Lock(error.to_string()))?
+                .retain(role.role());
+            view.insert_role(Arc::clone(&role));
+        }
+        Ok((role, existed))
     }
-    fn ensure_builtin_role(&self, identity: Thing, name: &str) -> Result<(), DatabaseError> {
+    fn ensure_builtin_role(
+        &self,
+        view: &mut ReadView,
+        identity: Thing,
+        name: &str,
+    ) -> Result<(), DatabaseError> {
         {
             let keeper = self
                 .role_keeper
@@ -966,18 +959,15 @@ impl Database {
             }
         }
 
-        self.thing_generator
-            .lock()
-            .map_err(|error| DatabaseError::Lock(error.to_string()))?
-            .retain(identity);
         let (builtin_role, existed) =
-            self.keep_role(Role::new(identity, name.to_string(), true))?;
+            self.keep_role(view, Role::new(identity, name.to_string(), true))?;
         debug_assert!(!existed);
         let _ = builtin_role;
         Ok(())
     }
     pub(crate) fn create_roles(
         &self,
+        view: &mut ReadView,
         roles: Vec<(String, bool)>,
     ) -> Result<Vec<(Arc<Role>, bool)>, DatabaseError> {
         enum Source {
@@ -1016,7 +1006,7 @@ impl Database {
                     .thing_generator
                     .lock()
                     .map_err(|error| DatabaseError::Lock(error.to_string()))?
-                    .generate();
+                    .reserve();
                 let index = prepared.len();
                 prepared.push(Role::new(identity, canonical_name, reserved));
                 sources.push(Source::New(index));
@@ -1036,7 +1026,7 @@ impl Database {
         let kept: Vec<Arc<Role>> = prepared
             .into_iter()
             .map(|role| {
-                let (role, existed) = self.keep_role(role)?;
+                let (role, existed) = self.keep_role(view, role)?;
                 debug_assert!(!existed);
                 Ok(role)
             })
@@ -1049,88 +1039,50 @@ impl Database {
             })
             .collect())
     }
-    pub(crate) fn keep_appearance(
-        &self,
-        appearance: Appearance,
-    ) -> Result<(Arc<Appearance>, bool), DatabaseError> {
-        let (kept_appearance, previously_kept) = self
-            .appearance_keeper
-            .lock()
-            .map_err(|error| DatabaseError::Lock(error.to_string()))?
-            .keep(appearance);
-        if !previously_kept {
-            self.thing_to_appearance_lookup
-                .lock()
-                .map_err(|error| DatabaseError::Lock(error.to_string()))?
-                .insert(kept_appearance.thing(), Arc::clone(&kept_appearance));
-            if kept_appearance.role().reserved {
-                self.role_to_appearance_lookup
-                    .lock()
-                    .map_err(|error| DatabaseError::Lock(error.to_string()))?
-                    .insert(kept_appearance.role(), Arc::clone(&kept_appearance));
-            }
-        }
-        Ok((kept_appearance, previously_kept))
-    }
-    pub(crate) fn create_appearance(
-        &self,
-        thing: Thing,
-        role: Arc<Role>,
-    ) -> Result<(Arc<Appearance>, bool), DatabaseError> {
-        self.keep_appearance(Appearance::new(thing, role))
-    }
-    pub(crate) fn keep_appearance_set(
-        &self,
-        appearance_set: AppearanceSet,
-    ) -> Result<(Arc<AppearanceSet>, bool), DatabaseError> {
-        let (kept_appearance_set, previously_kept) = self
+    /// Intern the members of a committed set. The writer also uses this path
+    /// during replay, so failed batches cannot affect catalog counts.
+    fn intern_appearance_set(&self, set: &mut Arc<AppearanceSet>) -> Result<(), DatabaseError> {
+        let mut sets = self
             .appearance_set_keeper
             .lock()
-            .map_err(|error| DatabaseError::Lock(error.to_string()))?
-            .keep(appearance_set);
-        if !previously_kept {
-            for appearance in kept_appearance_set.appearances().iter() {
-                self.appearance_to_appearance_set_lookup
-                    .lock()
-                    .map_err(|error| DatabaseError::Lock(error.to_string()))?
-                    .insert(Arc::clone(appearance), Arc::clone(&kept_appearance_set));
+            .map_err(|e| DatabaseError::Lock(e.to_string()))?;
+        if let Some(existing) = sets.kept.get(set) {
+            *set = Arc::clone(existing);
+        } else {
+            let mut appearances = self
+                .appearance_keeper
+                .lock()
+                .map_err(|e| DatabaseError::Lock(e.to_string()))?;
+            for member in Arc::make_mut(&mut Arc::make_mut(set).appearances) {
+                *member = appearances.keep_arc(Arc::clone(member)).0;
             }
+            sets.kept.insert(Arc::clone(set));
         }
-        Ok((kept_appearance_set, previously_kept))
-    }
-    pub(crate) fn create_appearance_set(
-        &self,
-        appearance_set: Vec<Arc<Appearance>>,
-    ) -> Result<(Arc<AppearanceSet>, bool), DatabaseError> {
-        let appearance_set = AppearanceSet::new(appearance_set).ok_or_else(|| {
-            DatabaseError::InvalidAppearanceSet(
-                "an appearance set may contain at most one Thing for each Role".into(),
-            )
-        })?;
-        self.keep_appearance_set(appearance_set)
-    }
-    #[cfg(feature = "persistence")]
-    pub(crate) fn keep_posit<V: 'static + DataType>(
-        &self,
-        posit: Posit<V>,
-    ) -> Result<(Arc<Posit<V>>, bool), DatabaseError> {
-        self.keep_posit_arc(Arc::new(posit))
+        Ok(())
     }
 
-    fn keep_posit_arc<V: 'static + DataType>(
+    fn keep_posit_arc(
         &self,
-        posit: Arc<Posit<V>>,
-    ) -> Result<(Arc<Posit<V>>, bool), DatabaseError> {
+        view: &mut ReadView,
+        mut posit: Arc<Posit<LiteralValue>>,
+    ) -> Result<(Arc<Posit<LiteralValue>>, bool), DatabaseError> {
+        self.intern_appearance_set(&mut Arc::make_mut(&mut posit).appearance_set)?;
         let (kept_posit, previously_kept) = self
             .posit_keeper
             .lock()
             .map_err(|error| DatabaseError::Lock(error.to_string()))?
             .keep_arc(posit);
         if !previously_kept {
-            self.appearance_set_to_posit_thing_lookup
-                .lock()
-                .map_err(|error| DatabaseError::Lock(error.to_string()))?
-                .insert(kept_posit.appearance_set(), kept_posit.posit());
+            {
+                let mut things = self
+                    .thing_generator
+                    .lock()
+                    .map_err(|e| DatabaseError::Lock(e.to_string()))?;
+                things.retain(kept_posit.posit());
+                for member in kept_posit.appearance_set.appearances() {
+                    things.retain(member.thing());
+                }
+            }
             self.posit_thing_to_appearance_set_lookup
                 .lock()
                 .map_err(|error| DatabaseError::Lock(error.to_string()))?
@@ -1140,14 +1092,7 @@ impl Database {
                 .lock()
                 .map_err(|error| DatabaseError::Lock(error.to_string()))?
                 .insert(kept_posit.posit(), kept_posit.time().clone());
-            // Index posit thing by each role in its appearance set
-            for appearance in kept_posit.appearance_set().appearances().iter() {
-                let role_thing = appearance.role().role();
-                self.role_to_posit_thing_lookup
-                    .lock()
-                    .map_err(|error| DatabaseError::Lock(error.to_string()))?
-                    .insert(role_thing, kept_posit.posit());
-            }
+            view.insert_posit(Arc::clone(&kept_posit));
         }
         Ok((kept_posit, previously_kept))
     }
@@ -1158,6 +1103,7 @@ impl Database {
     /// without sacrificing atomicity.
     pub(crate) fn create_literal_posits_with_assertions(
         &self,
+        view: &mut ReadView,
         targets: Vec<(Arc<AppearanceSet>, LiteralValue, Time)>,
         assertions: Vec<LiteralAssertionSpec>,
     ) -> Result<CreatedLiteralPosits, DatabaseError> {
@@ -1182,7 +1128,8 @@ impl Database {
         }
 
         let mut prepared: Vec<Arc<Posit<LiteralValue>>> = Vec::new();
-        let target_sources = self.stage_literal_posits(targets, &mut prepared)?;
+        let mut positions = HashMap::default();
+        let target_sources = self.stage_literal_posits(targets, &mut prepared, &mut positions)?;
         let staged_targets = Self::resolve_pending_literal_sources(&target_sources, &prepared);
 
         let (posit_role, ascertains_role) = {
@@ -1203,18 +1150,17 @@ impl Database {
             let target = staged_targets.get(spec.target_index).ok_or_else(|| {
                 DatabaseError::Invariant("validated assertion target disappeared".into())
             })?;
-            let target_appearance = self
-                .create_appearance(target.posit(), Arc::clone(&posit_role))?
-                .0;
-            let source_appearance = self
-                .create_appearance(spec.positor, Arc::clone(&ascertains_role))?
-                .0;
-            let appearance_set = self
-                .create_appearance_set(vec![target_appearance, source_appearance])?
-                .0;
+            let appearance_set = AppearanceSet::checked(vec![
+                Arc::new(Appearance::new(target.posit(), Arc::clone(&posit_role))),
+                Arc::new(Appearance::new(spec.positor, Arc::clone(&ascertains_role))),
+            ])?;
             assertion_posits.push((appearance_set, spec.certainty, spec.time));
         }
-        let assertion_sources = self.stage_literal_posits(assertion_posits, &mut prepared)?;
+        let assertion_sources =
+            self.stage_literal_posits(assertion_posits, &mut prepared, &mut positions)?;
+
+        drop(staged_targets);
+        drop(positions);
 
         #[cfg(feature = "persistence")]
         if !prepared.is_empty() {
@@ -1241,7 +1187,7 @@ impl Database {
         let kept: Vec<Arc<Posit<LiteralValue>>> = prepared
             .into_iter()
             .map(|posit| {
-                let (posit, existed) = self.keep_posit_arc(posit)?;
+                let (posit, existed) = self.keep_posit_arc(view, posit)?;
                 debug_assert!(!existed);
                 Ok(posit)
             })
@@ -1256,37 +1202,28 @@ impl Database {
         &self,
         posits: Vec<(Arc<AppearanceSet>, LiteralValue, Time)>,
         prepared: &mut Vec<Arc<Posit<LiteralValue>>>,
+        positions: &mut HashMap<Arc<Posit<LiteralValue>>, usize, OtherHasher>,
     ) -> Result<Vec<PendingLiteralSource>, DatabaseError> {
         let mut sources = Vec::with_capacity(posits.len());
+        let mut generator = self
+            .thing_generator
+            .lock()
+            .map_err(|err| DatabaseError::Lock(err.to_string()))?;
+        let mut keeper = self
+            .posit_keeper
+            .lock()
+            .map_err(|err| DatabaseError::Lock(err.to_string()))?;
         for (appearance_set, value, time) in posits {
-            let identity = self
-                .thing_generator
-                .lock()
-                .map_err(|error| DatabaseError::Lock(error.to_string()))?
-                .generate();
-            let candidate = Arc::new(Posit::new(identity, appearance_set, value, time));
-            if let Some(existing) = self
-                .posit_keeper
-                .lock()
-                .map_err(|error| DatabaseError::Lock(error.to_string()))?
-                .existing(&candidate)
-            {
-                self.thing_generator
-                    .lock()
-                    .map_err(|error| DatabaseError::Lock(error.to_string()))?
-                    .release(identity);
+            let candidate = Arc::new(Posit::new(generator.reserve(), appearance_set, value, time));
+            if let Some(existing) = keeper.existing(&candidate) {
                 sources.push(PendingLiteralSource::Existing(existing));
-            } else if let Some(index) = prepared.iter().position(|existing| existing == &candidate)
-            {
-                self.thing_generator
-                    .lock()
-                    .map_err(|error| DatabaseError::Lock(error.to_string()))?
-                    .release(identity);
-                sources.push(PendingLiteralSource::New(index));
             } else {
-                let index = prepared.len();
-                prepared.push(candidate);
-                sources.push(PendingLiteralSource::New(index));
+                let index = positions.entry(Arc::clone(&candidate)).or_insert_with(|| {
+                    let index = prepared.len();
+                    prepared.push(candidate);
+                    index
+                });
+                sources.push(PendingLiteralSource::New(*index));
             }
         }
         Ok(sources)
@@ -1397,6 +1334,7 @@ mod append_store_tests {
             let database =
                 Database::new(PersistenceMode::File(path.to_string_lossy().into_owned())).unwrap();
             Engine::new(&database).execute("add role status;").unwrap();
+            let things_before = database.thing_generator.lock().unwrap().len();
             database
                 .store
                 .lock()
@@ -1413,6 +1351,12 @@ mod append_store_tests {
                 .unwrap_err();
             assert!(error.to_string().contains("injected"), "{error}");
             assert_eq!(database.posit_keeper.lock().unwrap().len(), 0);
+            assert_eq!(
+                database.thing_generator.lock().unwrap().len(),
+                things_before
+            );
+            assert_eq!(database.appearance_keeper.lock().unwrap().len(), 0);
+            assert_eq!(database.appearance_set_keeper.lock().unwrap().len(), 0);
             drop(database);
 
             let restored =

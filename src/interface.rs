@@ -133,7 +133,7 @@ impl QueryInterface {
             (None, None)
         };
 
-        // Execute on a background thread; the database owner serializes scripts.
+        // Execute on a background thread. The engine assigns the script its view.
         let db = Arc::clone(&self.db);
         let cancel_for_thread = cancel.clone();
         let active = Arc::clone(&self.active);
@@ -193,15 +193,14 @@ impl QueryInterface {
 
     /// Run a Traqula script synchronously on the current thread.
     ///
-    /// This is appropriate for one-off startup scripts and embedded callers that
-    /// already execute on the database owner's thread.
+    /// Use this for startup scripts and embedded callers that wait for completion.
     pub fn run_sync(&self, script: &str) -> Result<()> {
         Engine::new(&self.db)
             .execute_collect_multi(script)
             .map(|_| ())
     }
 
-    /// Execute a single-result script while holding the database owner lock.
+    /// Execute a single-result script.
     pub fn execute_collect_with_options(
         &self,
         script: &str,
@@ -210,7 +209,7 @@ impl QueryInterface {
         Engine::new(&self.db).execute_collect_with_options(script, options)
     }
 
-    /// Execute a multi-result script while holding the database owner lock.
+    /// Execute a multi-result script.
     pub fn execute_collect_multi_with_options(
         &self,
         script: &str,
@@ -219,7 +218,7 @@ impl QueryInterface {
         Engine::new(&self.db).execute_collect_multi_with_options(script, options)
     }
 
-    /// Stream one result set while holding the database owner lock.
+    /// Stream one result set from a script.
     pub fn execute_stream_single_with_options<S: RowSink>(
         &self,
         script: &str,
@@ -229,7 +228,7 @@ impl QueryInterface {
         Engine::new(&self.db).execute_stream_single_with_options(script, sink, options)
     }
 
-    /// Stream multiple result sets while holding the database owner lock.
+    /// Stream multiple result sets from a script.
     pub fn execute_stream_multi_with_options<C: MultiStreamCallbacks>(
         &self,
         script: &str,
