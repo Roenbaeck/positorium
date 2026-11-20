@@ -68,7 +68,47 @@ use tracing::info;
 use unicode_normalization::UnicodeNormalization;
 // (Bit*Assign imports previously used by legacy toggle-based set ops removed)
 
-type Variables = HashMap<String, ResultSet, OtherHasher>;
+#[derive(Default)]
+struct Variables {
+    values: HashMap<String, ResultSet, OtherHasher>,
+    // Only strict scripts need to track promotions from successful lookups.
+    promoted: Option<std::collections::HashSet<String>>,
+}
+
+impl Variables {
+    fn take_modifiers(commands: &mut Pairs<'_, Rule>) -> Self {
+        let mut vars = Self::default();
+        if commands
+            .peek()
+            .is_some_and(|p| p.as_rule() == Rule::strict_mutations)
+        {
+            commands.next();
+            vars.promoted = Some(Default::default());
+        }
+        vars
+    }
+
+    fn mutation_identities(&self, name: &str) -> Result<Vec<Thing>, DatabaseError> {
+        let bound = self.values.get(name).ok_or_else(|| {
+            DatabaseError::InvalidRecall(format!(
+                "variable '{name}' is not bound in a prior command"
+            ))
+        })?;
+        if let Some(ids) = &bound.multi
+            && ids.len() > 1
+            && self
+                .promoted
+                .as_ref()
+                .is_some_and(|names| names.contains(name))
+        {
+            return Err(DatabaseError::InvalidRecall(format!(
+                "strict mutations: '{name}' holds {} identities after search or add; narrow the lookup before writing",
+                ids.len()
+            )));
+        }
+        result_set_identities(bound)
+    }
+}
 
 /// Version of the accepted Traqula source grammar and semantics.
 pub const TRAQULA_VERSION: u16 = 1;
@@ -394,7 +434,7 @@ fn result_set_identities(result_set: &ResultSet) -> Result<Vec<Thing>, DatabaseE
 }
 
 fn bind_identity(variables: &mut Variables, name: String, identity: Thing) {
-    variables.entry(name).or_default().insert(identity);
+    variables.values.entry(name).or_default().insert(identity);
 }
 
 fn search_limit(command: &Pair<'_, Rule>) -> Result<Option<usize>, DatabaseError> {
@@ -659,6 +699,7 @@ fn emit_fallback_rows(
         .iter()
         .map(|name| {
             variables
+                .values
                 .get(name)
                 .ok_or_else(|| DatabaseError::UnknownVariable(name.clone()))
                 .and_then(result_set_identities)
@@ -959,7 +1000,7 @@ mod constraint;
 mod query;
 
 pub use budget::QueryLimits;
-pub use constraint::CONSTRAINT_VERSION;
+pub use constraint::{CONSTRAINT_REPORT_VERSION, CONSTRAINT_VERSION};
 mod embedded;
 
 pub use query::plan::{
@@ -1021,7 +1062,7 @@ pub(crate) fn script_counts(traqula: &str) -> Result<(usize, usize), DatabaseErr
     let mut commands = 0;
     let mut searches = 0;
     for pair in pairs {
-        if pair.as_rule() != Rule::EOI {
+        if !matches!(pair.as_rule(), Rule::EOI | Rule::strict_mutations) {
             commands += 1;
         }
         if search_has_return(&pair) {
@@ -1227,6 +1268,15 @@ enum ResolvedParameter {
 }
 
 impl ResolvedParameter {
+    fn identity(&self, name: &str) -> Result<(ResultCellKind, Thing), DatabaseError> {
+        match self {
+            Self::Identity { kind, id, .. } => Ok((*kind, *id)),
+            _ => Err(DatabaseError::Parameter(format!(
+                "{name} requires a Thing or Posit identity"
+            ))),
+        }
+    }
+
     fn literal(&self) -> Result<LiteralValue, DatabaseError> {
         match self {
             Self::Literal(literal) | Self::Time { literal, .. } => Ok(literal.clone()),
@@ -1360,7 +1410,7 @@ impl<'en> Engine<'en> {
         let execution = options.resolve(self.database.store_id())?;
         execution.check()?;
         let commands = parse_script(traqula)?
-            .filter(|command| command.as_rule() != Rule::EOI)
+            .filter(|command| !matches!(command.as_rule(), Rule::EOI | Rule::strict_mutations))
             .collect::<Vec<_>>();
         execution.check()?;
         if commands.len() != 1 || !matches!(commands[0].as_rule(), Rule::search | Rule::explain) {
@@ -1485,7 +1535,8 @@ impl<'en> Engine<'en> {
     ) -> Result<(Vec<String>, bool, usize), crate::error::DatabaseError> {
         let execution = options.resolve(self.database.store_id())?;
         execution.check()?;
-        let pairs = parse_script(traqula)?;
+        let mut pairs = parse_script(traqula)?;
+        let mut variables = Variables::take_modifiers(&mut pairs);
         let mut view = self.script_view(&pairs, &execution)?;
         execution.check()?;
         for warning in &execution.metadata.warnings {
@@ -1493,7 +1544,6 @@ impl<'en> Engine<'en> {
                 return Ok((Vec::new(), false, 0));
             }
         }
-        let mut variables: Variables = Variables::default();
 
         let search_count = pairs.clone().filter(|p| search_has_return(p)).count();
         if search_count != 1 {
@@ -1600,27 +1650,46 @@ impl<'en> Engine<'en> {
         variables: &mut Variables,
         execution: &ExecutionContext,
     ) -> Result<(), DatabaseError> {
-        Self::construct_posits(
-            &mut append::Writer::new(self.database, view),
-            command,
-            variables,
-            execution,
-        )
+        let mut writer = append::Writer::new(self.database, view);
+        if append::dependent_additions(&command) {
+            let mut preceding = Vec::new();
+            for part in command.into_inner() {
+                let targets = if part.as_rule() == Rule::and_assert_clause {
+                    preceding.as_slice()
+                } else {
+                    &[]
+                };
+                let kept = Self::construct_posits(
+                    &mut writer,
+                    std::iter::once(part),
+                    variables,
+                    execution,
+                    targets,
+                )?;
+                preceding = kept.expect("ordered writer stages every addition").targets;
+            }
+        } else {
+            Self::construct_posits(&mut writer, command.into_inner(), variables, execution, &[])?;
+        }
+        execution.check()?;
+        writer.publish()
     }
 
-    fn construct_posits(
+    fn construct_posits<'i>(
         scope: &mut impl append::AppendScope,
-        command: Pair<Rule>,
+        structures: impl Iterator<Item = Pair<'i, Rule>>,
         variables: &mut Variables,
         execution: &ExecutionContext,
-    ) -> Result<(), DatabaseError> {
+        previous_targets: &[Arc<crate::construct::Posit<LiteralValue>>],
+    ) -> Result<Option<CreatedLiteralPosits>, DatabaseError> {
         let resolved_now = &execution.metadata.resolved_now;
         let mut pending = Vec::new();
         let mut result_bindings = Vec::new();
         let mut assertion_specs = Vec::new();
         let mut assertion_bindings = Vec::new();
-        let mut last_target_range: Option<std::ops::Range<usize>> = None;
-        for structure in command.into_inner() {
+        let mut last_target_range =
+            (!previous_targets.is_empty()).then_some(0..previous_targets.len());
+        for structure in structures {
             execution.check()?;
             let mut variable: Option<String> = None;
             let mut value: Option<LiteralValue> = None;
@@ -1668,6 +1737,9 @@ impl<'en> Engine<'en> {
                                                     local_variable.to_owned(),
                                                     thing,
                                                 );
+                                            }
+                                            Rule::parameter => {
+                                                local_variables.push(appearance.as_str());
                                             }
                                             Rule::recall => {
                                                 local_variables.push(
@@ -1755,12 +1827,12 @@ impl<'en> Engine<'en> {
                     let candidates = local_variables
                         .iter()
                         .map(|name| {
-                            let bound = variables.get(*name).ok_or_else(|| {
-                                DatabaseError::InvalidRecall(format!(
-                                    "variable '{name}' is not bound in a prior command"
-                                ))
-                            })?;
-                            result_set_identities(bound)
+                            if name.starts_with('$') {
+                                let (kind, id) = execution.parameter(name)?.identity(name)?;
+                                Ok(vec![scope.reference(kind, id)?])
+                            } else {
+                                variables.mutation_identities(name)
+                            }
                         })
                         .collect::<Result<Vec<_>, DatabaseError>>()?;
                     let things_for_roles = candidates.iter().map(Vec::as_slice).collect::<Vec<_>>();
@@ -1930,12 +2002,7 @@ impl<'en> Engine<'en> {
                         let source = scope.fresh_thing()?;
                         bind_identity(variables, source_variable.clone(), source);
                     }
-                    let sources = variables.get(&source_variable).ok_or_else(|| {
-                        DatabaseError::InvalidRecall(format!(
-                            "assertion source '{source_variable}' is not bound"
-                        ))
-                    })?;
-                    let sources = result_set_identities(sources)?;
+                    let sources = variables.mutation_identities(&source_variable)?;
                     if sources.is_empty() {
                         return Err(DatabaseError::InvalidRecall(format!(
                             "assertion source '{source_variable}' is empty"
@@ -1975,8 +2042,8 @@ impl<'en> Engine<'en> {
             }
         }
         execution.check()?;
-        let Some(kept) = scope.finish(pending, assertion_specs)? else {
-            return Ok(());
+        let Some(kept) = scope.finish(pending, assertion_specs, previous_targets)? else {
+            return Ok(None);
         };
         for ((variable, range), posits) in result_bindings
             .into_iter()
@@ -1988,13 +2055,13 @@ impl<'en> Engine<'en> {
             )
         {
             if let Some(variable) = variable {
-                let bound = variables.entry(variable).or_default();
+                let bound = variables.values.entry(variable).or_default();
                 for posit in &posits[range] {
                     bound.insert(posit.posit());
                 }
             }
         }
-        Ok(())
+        Ok(Some(kept))
     }
     fn execute_search_command(
         &self,
@@ -2069,6 +2136,9 @@ impl<'en> Engine<'en> {
                 let Some(found) = outcome.identity_bindings.get(name) else {
                     continue;
                 };
+                if let Some(promoted) = &mut variables.promoted {
+                    promoted.insert(name.clone());
+                }
                 let values = result_set_identities(&found.values)?;
                 for identity in values {
                     bind_identity(variables, name.clone(), identity);
@@ -2267,6 +2337,7 @@ impl<'en> Engine<'en> {
                                                             inserted_id_vars_this_pattern
                                                                 .push(local_variable.to_string());
                                                             if let Entry::Vacant(entry) = variables
+                                                                .values
                                                                 .entry(local_variable.to_string())
                                                             {
                                                                 let result_set = ResultSet::new();
@@ -2648,7 +2719,7 @@ impl<'en> Engine<'en> {
                                                 let is_insert = token.starts_with('+');
                                                 if !is_insert {
                                                     let key = *token; // recall name as-is
-                                                    if !(variables.contains_key(key)
+                                                    if !(variables.values.contains_key(key)
                                                         || seen_inserted_id_vars.contains(key))
                                                     {
                                                         *exec_error = Some(
@@ -2702,7 +2773,7 @@ impl<'en> Engine<'en> {
                                                             let mut any_match = false;
                                                             for name in names.iter() {
                                                                 if let Some(rs) =
-                                                                    variables.get(name)
+                                                                    variables.values.get(name)
                                                                 {
                                                                     match rs.mode {
                                                                         ResultSetMode::Thing => {
@@ -2730,7 +2801,9 @@ impl<'en> Engine<'en> {
                                                             let key = token
                                                                 .strip_prefix('+')
                                                                 .unwrap_or(token);
-                                                            if let Some(rs) = variables.get(key) {
+                                                            if let Some(rs) =
+                                                                variables.values.get(key)
+                                                            {
                                                                 match rs.mode {
                                                                     ResultSetMode::Thing => {
                                                                         rs.thing.unwrap()
@@ -2776,7 +2849,7 @@ impl<'en> Engine<'en> {
                                         // Bind outer posit variable (e.g., +p)
                                         if let Some(var) = &variable {
                                             let name = var.strip_prefix('+').unwrap_or(var);
-                                            match variables.entry(name.to_string()) {
+                                            match variables.values.entry(name.to_string()) {
                                                 Entry::Vacant(entry) => {
                                                     let mut rs = ResultSet::new();
                                                     rs.insert_many(&cands);
@@ -3540,7 +3613,8 @@ impl<'en> Engine<'en> {
     ) -> Result<CollectedResult, DatabaseError> {
         let execution = options.resolve(self.database.store_id())?;
         execution.check()?;
-        let pairs = parse_script(traqula)?;
+        let mut pairs = parse_script(traqula)?;
+        let mut variables = Variables::take_modifiers(&mut pairs);
         if self.execute_appends(&pairs, &execution)? {
             return Ok(CollectedResult {
                 columns: Vec::new(),
@@ -3553,7 +3627,6 @@ impl<'en> Engine<'en> {
         let mut view = self.script_view(&pairs, &execution)?;
         execution.check()?;
         let metadata = execution.metadata.clone();
-        let mut variables: Variables = Variables::default();
         struct CollectSink {
             rows: Vec<Vec<ResultCell>>,
             limit: Option<usize>,
@@ -3646,7 +3719,8 @@ impl<'en> Engine<'en> {
     ) -> Result<Vec<CollectedResultSet>, DatabaseError> {
         let execution = options.resolve(self.database.store_id())?;
         execution.check()?;
-        let pairs = parse_script(traqula)?;
+        let mut pairs = parse_script(traqula)?;
+        let mut variables = Variables::take_modifiers(&mut pairs);
         if expect_one {
             let count = pairs.clone().filter(search_has_return).count();
             if count != 1 {
@@ -3661,7 +3735,6 @@ impl<'en> Engine<'en> {
         let mut view = self.script_view(&pairs, &execution)?;
         execution.check()?;
         let metadata = execution.metadata.clone();
-        let mut variables: Variables = Variables::default();
 
         let mut results: Vec<CollectedResultSet> = Vec::new();
         for command in pairs {
@@ -3748,7 +3821,8 @@ impl<'en> Engine<'en> {
     ) -> Result<(), DatabaseError> {
         let execution = options.resolve(self.database.store_id())?;
         execution.check()?;
-        let pairs = parse_script(traqula)?;
+        let mut pairs = parse_script(traqula)?;
+        let mut variables = Variables::take_modifiers(&mut pairs);
         for warning in &execution.metadata.warnings {
             callbacks.on_warning(warning);
         }
@@ -3757,7 +3831,6 @@ impl<'en> Engine<'en> {
         }
         let mut view = self.script_view(&pairs, &execution)?;
         execution.check()?;
-        let mut variables: Variables = Variables::default();
 
         let mut set_index = 0usize;
         for command in pairs {

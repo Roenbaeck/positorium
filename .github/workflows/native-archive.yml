@@ -1,0 +1,137 @@
+name: Native archive
+
+on:
+  workflow_call:
+    inputs:
+      os:
+        type: string
+        required: true
+      label:
+        type: string
+        required: true
+      version:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  archive:
+    runs-on: ${{ inputs.os }}
+    env:
+      ARCHIVE_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build release binaries
+        # Python is distributed as a wheel; native archives must not link libpython.
+        run: cargo build --release --no-default-features --features cli,server,persistence --bins --locked
+      - name: Archive Unix binaries
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p dist/package/traqula
+          cp target/release/positorium target/release/positorium-store dist/package/
+          cp positorium.json README.md LICENSE.MIT LICENSE.Apache-2.0 dist/package/
+          cp traqula/{empty,welcome,blackthorn,cancellation-constraint}.traqula dist/package/traqula/
+          cp -R docs dist/package/
+          archive="positorium-${ARCHIVE_VERSION}-${{ inputs.label }}.tar.gz"
+          tar -czf "dist/${archive}" -C dist/package .
+          (cd dist && shasum -a 256 "${archive}" > "${archive}.sha256" && shasum -a 256 -c "${archive}.sha256")
+      - name: Archive Windows binaries
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/package/traqula | Out-Null
+          Copy-Item target/release/positorium.exe,target/release/positorium-store.exe -Destination dist/package
+          Copy-Item positorium.json,README.md,LICENSE.MIT,LICENSE.Apache-2.0 -Destination dist/package
+          Copy-Item traqula/empty.traqula,traqula/welcome.traqula,traqula/blackthorn.traqula,traqula/cancellation-constraint.traqula -Destination dist/package/traqula
+          Copy-Item docs -Destination dist/package -Recurse
+          $archive = "positorium-$env:ARCHIVE_VERSION-${{ inputs.label }}.zip"
+          Compress-Archive -Path dist/package/* -DestinationPath "dist/$archive"
+          $hash = (Get-FileHash "dist/$archive" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $archive" | Set-Content -NoNewline "dist/$archive.sha256"
+      - name: Smoke-test Unix archive
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          smoke_dir="$(mktemp -d)"
+          trap 'rm -rf "$smoke_dir"' EXIT
+          tar -xzf dist/*.tar.gz -C "$smoke_dir"
+          cd "$smoke_dir"
+          test -f traqula/blackthorn.traqula
+          test -f traqula/welcome.traqula
+          test -f traqula/cancellation-constraint.traqula
+          ./positorium >smoke.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true; rm -rf "$smoke_dir"' EXIT
+          ready=0
+          for _ in {1..40}; do
+            if curl --silent --fail http://127.0.0.1:8080/v1/query \
+              -H 'content-type: application/json' \
+              --data '{"traqula_version":1,"script":"add role release_smoke; add posit [{(+thing, release_smoke)}, \"ok\", @NOW]; search [{(?thing, release_smoke), ...}, ?value, *] return ?value;","stream":false}' \
+              >response.json; then
+              ready=1
+              break
+            fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              cat smoke.log
+              exit 1
+            fi
+            sleep 0.25
+          done
+          test "$ready" = 1
+          grep -q '"status":"ok"' response.json
+          kill -TERM "$server_pid"
+          wait "$server_pid"
+          ./positorium-store backup positorium.store backup.store
+          ./positorium-store inspect backup.store
+      - name: Smoke-test Windows archive
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $smokeDir = Join-Path $env:RUNNER_TEMP "positorium-smoke-$env:GITHUB_RUN_ID"
+          Expand-Archive -Path (Get-ChildItem dist/*.zip).FullName -DestinationPath $smokeDir
+          if (-not (Test-Path (Join-Path $smokeDir "traqula/blackthorn.traqula"))) {
+            throw "release archive is missing the Blackthorn detective case"
+          }
+          if (-not (Test-Path (Join-Path $smokeDir "traqula/welcome.traqula"))) {
+            throw "release archive is missing the welcome example"
+          }
+          if (-not (Test-Path (Join-Path $smokeDir "traqula/cancellation-constraint.traqula"))) {
+            throw "release archive is missing the cancellation constraint example"
+          }
+          $stdout = Join-Path $smokeDir "smoke.out"
+          $stderr = Join-Path $smokeDir "smoke.err"
+          $process = Start-Process -FilePath (Join-Path $smokeDir "positorium.exe") -WorkingDirectory $smokeDir -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          try {
+            $ready = $false
+            for ($attempt = 0; $attempt -lt 40; $attempt++) {
+              if ($process.HasExited) {
+                Get-Content $stdout,$stderr
+                throw "positorium exited before the smoke request"
+              }
+              try {
+                $body = '{"traqula_version":1,"script":"add role release_smoke; add posit [{(+thing, release_smoke)}, \"ok\", @NOW]; search [{(?thing, release_smoke), ...}, ?value, *] return ?value;","stream":false}'
+                $response = Invoke-RestMethod -Uri http://127.0.0.1:8080/v1/query -Method Post -ContentType application/json -Body $body
+                $ready = $response.status -eq "ok"
+                if ($ready) { break }
+              } catch {}
+              Start-Sleep -Milliseconds 250
+            }
+            if (-not $ready) { throw "positorium did not become ready" }
+          } finally {
+            if (-not $process.HasExited) {
+              Stop-Process -Id $process.Id
+              $process.WaitForExit()
+            }
+            Remove-Item $smokeDir -Recurse -Force
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: positorium-${{ inputs.label }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error

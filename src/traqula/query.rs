@@ -156,6 +156,7 @@ impl Binding {
 #[derive(Debug, Clone)]
 enum ThingSlot {
     Wildcard,
+    Identity(Thing),
     Variable(String),
     LegacyVariable(String),
     OneOf(Vec<String>),
@@ -430,7 +431,7 @@ fn execute_materialized(
     let mut bindings = BudgetVec::new(&execution.budget);
     for branch in &query.branches {
         let mut branch_bindings = BudgetVec::new(&execution.budget);
-        branch_bindings.push(Binding::default())?;
+        branch_bindings.push(branch.anchors.clone())?;
         for pattern in &branch.patterns {
             let mut joined = BudgetVec::new(&execution.budget);
             for binding in &branch_bindings {
@@ -770,7 +771,7 @@ fn parse_pattern(
                 latest_matching = true;
             }
             Rule::appearance_set_search => {
-                appearances = Some(parse_appearance_set(component)?);
+                appearances = Some(parse_appearance_set(component, execution)?);
             }
             Rule::appearing_value_search => {
                 value = Some(parse_value_slot(component, execution)?);
@@ -934,7 +935,10 @@ fn validate_via_pattern(pattern: &PositPattern) -> Result<(), DatabaseError> {
     Ok(())
 }
 
-fn parse_appearance_set(pattern: Pair<'_, Rule>) -> Result<AppearanceSetPattern, DatabaseError> {
+fn parse_appearance_set(
+    pattern: Pair<'_, Rule>,
+    execution: &ExecutionContext,
+) -> Result<AppearanceSetPattern, DatabaseError> {
     let mut members = Vec::new();
     let mut any = false;
     let mut binding = None;
@@ -942,12 +946,12 @@ fn parse_appearance_set(pattern: Pair<'_, Rule>) -> Result<AppearanceSetPattern,
     for member in pattern.into_inner() {
         match member.as_rule() {
             Rule::wildcard => any = true,
-            Rule::appearance_search => members.push(parse_appearance(member)?),
+            Rule::appearance_search => members.push(parse_appearance(member, execution)?),
             Rule::appearance_set_binding => binding = Some(variable_name(&member)),
             Rule::appearance_list => {
                 for item in member.into_inner() {
                     match item.as_rule() {
-                        Rule::appearance_search => members.push(parse_appearance(item)?),
+                        Rule::appearance_search => members.push(parse_appearance(item, execution)?),
                         Rule::ellipsis => open = true,
                         rule => {
                             return Err(DatabaseError::Invariant(format!(
@@ -973,7 +977,10 @@ fn parse_appearance_set(pattern: Pair<'_, Rule>) -> Result<AppearanceSetPattern,
     })
 }
 
-fn parse_appearance(appearance: Pair<'_, Rule>) -> Result<AppearancePattern, DatabaseError> {
+fn parse_appearance(
+    appearance: Pair<'_, Rule>,
+    execution: &ExecutionContext,
+) -> Result<AppearancePattern, DatabaseError> {
     let mut inner = appearance.into_inner();
     let thing = inner
         .next()
@@ -983,6 +990,14 @@ fn parse_appearance(appearance: Pair<'_, Rule>) -> Result<AppearancePattern, Dat
         .ok_or_else(|| DatabaseError::Invariant("appearance lacks a Role slot".into()))?;
     let thing = match thing.as_rule() {
         Rule::wildcard => ThingSlot::Wildcard,
+        // Definition validation infers a signature before there are caller values.
+        Rule::parameter if execution.validating_definition => ThingSlot::Identity(0),
+        Rule::parameter => ThingSlot::Identity(
+            execution
+                .parameter(thing.as_str())?
+                .identity(thing.as_str())?
+                .1,
+        ),
         Rule::query_variable => ThingSlot::Variable(variable_name(&thing)),
         Rule::insert | Rule::recall => ThingSlot::LegacyVariable(variable_name(&thing)),
         Rule::recall_union | Rule::query_union => ThingSlot::OneOf(
@@ -1485,7 +1500,13 @@ fn plan_patterns<'a>(
     view: &ReadView,
     patterns: &'a [PositPattern],
     initially_available: &HashSet<&str>,
+    anchors: &Binding,
 ) -> Result<Vec<&'a PositPattern>, DatabaseError> {
+    // Keep the existing validation order for branches where reading a pattern
+    // can fail. An unrelated empty literal posting must not mask that error.
+    let can_reorder = patterns
+        .iter()
+        .all(|pattern| pattern_matches_are_total(view, pattern));
     let mut pending: Vec<_> = patterns.iter().collect();
     let mut planned = Vec::with_capacity(patterns.len());
     let mut available = initially_available.clone();
@@ -1493,7 +1514,16 @@ fn plan_patterns<'a>(
         let mut best = None;
         for (index, pattern) in pending.iter().enumerate() {
             if pattern.dependencies().is_subset(&available) {
-                let estimate = estimated_candidate_count(view, pattern);
+                let connected = !pattern.introduced().is_disjoint(&available)
+                    || !pattern.dependencies().is_empty();
+                let estimate = if can_reorder {
+                    (
+                        !connected,
+                        estimated_candidate_count(view, pattern, anchors),
+                    )
+                } else {
+                    (false, role_candidate_count(view, pattern))
+                };
                 if best.is_none_or(|(_, best_estimate)| estimate < best_estimate) {
                     best = Some((index, estimate));
                 }
@@ -1517,7 +1547,70 @@ fn plan_patterns<'a>(
     Ok(planned)
 }
 
-fn estimated_candidate_count(view: &ReadView, pattern: &PositPattern) -> u64 {
+// Skipping a candidate of an incompatible family could hide a comparison error.
+fn literal_comparison_is_total(
+    view: &ReadView,
+    pattern: &PositPattern,
+    value: &LiteralValue,
+) -> bool {
+    let compatible = value.family().nominal_mask();
+    view.value_families(None) & !compatible == 0 || pattern.appearances.members.iter().any(|m|
+        matches!(&m.role, RoleSlot::Named(name) if view.value_families(Some(name)) & !compatible == 0))
+}
+
+fn pattern_matches_are_total(view: &ReadView, pattern: &PositPattern) -> bool {
+    pattern.effect.is_none()
+        && match &pattern.value {
+            ValueSlot::Literal(value) => literal_comparison_is_total(view, pattern, value),
+            _ => true,
+        }
+}
+
+fn indexed_literal<'a>(view: &ReadView, pattern: &'a PositPattern) -> Option<&'a LiteralValue> {
+    if let ValueSlot::Literal(value) = &pattern.value
+        && (pattern.cutoff.is_none() || pattern.latest_matching)
+        && pattern.effect.is_none()
+        && literal_comparison_is_total(view, pattern, value)
+    {
+        Some(value)
+    } else {
+        None
+    }
+}
+
+fn estimated_candidate_count(view: &ReadView, pattern: &PositPattern, anchors: &Binding) -> u64 {
+    let literal = indexed_literal(view, pattern).map(|v| {
+        view.value_posting(v.nominal_fingerprint())
+            .map_or(0, |p| p.len())
+    });
+    let posit = pattern
+        .posit
+        .as_ref()
+        .filter(|_| pattern.cutoff.is_none())
+        .and_then(|name| anchors.get(name))
+        .map(|_| 1);
+    let things = pattern.appearances.members.iter().filter_map(|m| {
+        let id = match &m.thing {
+            ThingSlot::Identity(id) => *id,
+            ThingSlot::Variable(name) => match anchors.get(name) {
+                Some(BoundValue::Thing(id) | BoundValue::Posit(id)) => *id,
+                _ => return None,
+            },
+            _ => return None,
+        };
+        let role = match &m.role {
+            RoleSlot::Named(name) => view.normalized_role(name),
+            _ => None,
+        };
+        Some(view.thing_candidate_count(id, role.as_ref()))
+    });
+    things
+        .chain(literal)
+        .chain(posit)
+        .fold(role_candidate_count(view, pattern), u64::min)
+}
+
+fn role_candidate_count(view: &ReadView, pattern: &PositPattern) -> u64 {
     pattern
         .appearances
         .members
@@ -1908,85 +2001,84 @@ fn indexed_candidate_identities(
     input: &Binding,
     execution: &ExecutionContext,
 ) -> Result<Option<BudgetBitmap>, DatabaseError> {
-    let mut postings = BudgetVec::new(&execution.budget);
+    use crate::construct::SetPosting;
+    enum Source<'a> {
+        Role(Option<&'a RoaringTreemap>),
+        Set(Option<&'a SetPosting>),
+        Posit(Thing),
+        Things(Vec<Thing>, Option<Arc<Role>>),
+    }
 
+    // Copy or expand only the smallest usable posting. The structural matcher
+    // and field checks already verify the other constraints on each candidate.
+    let mut best = None;
+    let mut consider = |count: u64, source| {
+        if best.as_ref().is_none_or(|(n, _)| count < *n) {
+            best = Some((count, source));
+        }
+    };
     if let Some(name) = &pattern.posit
-        && (pattern.cutoff.is_none() || pattern.latest_matching)
+        && pattern.cutoff.is_none()
+        && let Some(BoundValue::Thing(id) | BoundValue::Posit(id)) = input.get(name)
     {
-        match input.get(name) {
-            Some(BoundValue::Thing(identity) | BoundValue::Posit(identity)) => {
-                let memory = execution.workspace(|| bitmap_bytes(1))?;
-                postings.push(BudgetBitmap {
-                    posting: singleton(*identity),
-                    memory,
-                })?;
-            }
-            Some(other) => {
-                return Err(DatabaseError::VariableDomain {
-                    name: name.clone(),
-                    first: other.domain().label(),
-                    second: Domain::Posit.label(),
-                });
-            }
-            None => {}
-        }
+        consider(u64::from(view.posit(*id).is_some()), Source::Posit(*id));
     }
-
-    if let Some(name) = &pattern.appearances.binding {
-        match input.get(name) {
-            Some(BoundValue::AppearanceSet(appearance_set)) => {
-                let found = view.set_posting(appearance_set);
-                let count = found.map_or(0, |posting| posting.len());
-                execution.work(count)?;
-                let memory = execution.workspace(|| bitmap_bytes(count))?;
-                let mut posting = RoaringTreemap::new();
-                if let Some(found) = found {
-                    found.union_into(&mut posting);
-                }
-                postings.push(BudgetBitmap { posting, memory })?;
-            }
-            Some(other) => {
-                return Err(DatabaseError::VariableDomain {
-                    name: name.clone(),
-                    first: other.domain().label(),
-                    second: Domain::AppearanceSet.label(),
-                });
-            }
-            None => {}
-        }
+    if let Some(name) = &pattern.appearances.binding
+        && let Some(BoundValue::AppearanceSet(set)) = input.get(name)
+    {
+        let posting = view.set_posting(set);
+        consider(posting.map_or(0, SetPosting::len), Source::Set(posting));
     }
-
+    if let Some(value) = indexed_literal(view, pattern) {
+        let posting = view.value_posting(value.nominal_fingerprint());
+        consider(posting.map_or(0, SetPosting::len), Source::Set(posting));
+    }
     for member in &pattern.appearances.members {
         execution.work(1)?;
-        let (role_is_constrained, role) = indexed_role(view, &member.role, input)?;
-        if role_is_constrained && role.is_none() {
+        let (constrained, role) = indexed_role(view, &member.role, input)?;
+        if constrained && role.is_none() {
             return Ok(Some(clone_posting(None, execution)?));
         }
         if let Some(things) = indexed_things(&member.thing, input)? {
-            let _things = execution.workspace(|| things.len() as u64 * 8)?;
-            // This posting already requires the bound Thing to play the role.
-            // Copying the whole role bitmap for each correlated row is redundant.
-            let posting = posit_posting_for_things(view, &things, role.as_ref(), execution)?;
-            postings.push(posting)?;
+            let count = things
+                .iter()
+                .map(|id| view.thing_candidate_count(*id, role.as_ref()))
+                .sum();
+            consider(count, Source::Things(things, role));
         } else if let Some(role) = role {
-            postings.push(clone_posting(view.role_posting(role.role()), execution)?)?;
+            let posting = view.role_posting(role.role());
+            consider(
+                posting.map_or(0, RoaringTreemap::len),
+                Source::Role(posting),
+            );
         }
     }
-    execution.work(sort_work(postings.len(), 1))?;
-    let _sort = execution.workspace(|| postings.len() as u64 * size_of::<BudgetBitmap>() as u64)?;
-    postings.sort_by(|left, right| left.len().cmp(&right.len()));
-    let mut postings = postings.into_iter();
-    let Some(mut candidates) = postings.next() else {
+    let Some((count, source)) = best else {
         return Ok(None);
     };
-    for posting in postings {
-        execution.work(candidates.len().saturating_add(posting.len()))?;
-        let _scratch = execution.workspace(|| bitmap_bytes(candidates.len().min(posting.len())))?;
-        candidates.posting &= posting.posting;
-        if candidates.is_empty() {
-            break;
+    let candidates = match source {
+        _ if count == 0 => clone_posting(None, execution)?,
+        Source::Role(posting) => clone_posting(posting, execution)?,
+        Source::Things(things, role) => {
+            posit_posting_for_things(view, &things, role.as_ref(), execution)?
         }
-    }
+        Source::Set(posting) => {
+            execution.work(count)?;
+            let memory = execution.workspace(|| bitmap_bytes(count))?;
+            let mut result = RoaringTreemap::new();
+            if let Some(posting) = posting {
+                posting.union_into(&mut result);
+            }
+            BudgetBitmap {
+                posting: result,
+                memory,
+            }
+        }
+        Source::Posit(id) => BudgetBitmap {
+            posting: singleton(id),
+            memory: execution.workspace(|| bitmap_bytes(1))?,
+        },
+    };
     Ok(Some(candidates))
 }
 
@@ -2013,6 +2105,7 @@ fn indexed_role(
 fn indexed_things(slot: &ThingSlot, input: &Binding) -> Result<Option<Vec<Thing>>, DatabaseError> {
     match slot {
         ThingSlot::Wildcard => Ok(None),
+        ThingSlot::Identity(id) => Ok(Some(vec![*id])),
         ThingSlot::Variable(name) | ThingSlot::LegacyVariable(name) => match input.get(name) {
             Some(BoundValue::Thing(identity) | BoundValue::Posit(identity)) => {
                 Ok(Some(vec![*identity]))
@@ -2087,7 +2180,7 @@ fn posit_posting_for_things(
     for appearance_set in appearance_sets {
         if let Some(found) = view.set_posting(&appearance_set) {
             let combined = posting.len().saturating_add(found.len());
-            execution.work(combined)?;
+            execution.work(found.len())?;
             memory.resize(bitmap_bytes(combined))?;
             found.union_into(&mut posting);
         }
@@ -2202,6 +2295,7 @@ fn match_appearance(
     let mut binding = input.clone();
     let thing_matches = match &pattern.thing {
         ThingSlot::Wildcard => true,
+        ThingSlot::Identity(id) => stored.thing() == *id,
         ThingSlot::Variable(name) | ThingSlot::LegacyVariable(name) => {
             binding.bind(name, BoundValue::Thing(stored.thing()))?
         }
@@ -2303,7 +2397,13 @@ fn block_has_match(
     effect_cache: &mut EffectCache,
 ) -> Result<bool, DatabaseError> {
     let mut bindings = BudgetVec::new(&execution.budget);
-    bindings.push(outer.clone())?;
+    let mut input = outer.clone();
+    for (name, value) in &plan.anchors.0 {
+        if !input.bind(name, value.clone())? {
+            return Ok(false);
+        }
+    }
+    bindings.push(input)?;
     for pattern in &plan.patterns {
         let mut joined = BudgetVec::new(&execution.budget);
         for binding in &bindings {
@@ -2616,7 +2716,8 @@ mod tests {
             ),
             rare.clone(),
         ];
-        let planned = plan_patterns(&view, &pattern_order, &HashSet::new()).unwrap();
+        let planned =
+            plan_patterns(&view, &pattern_order, &HashSet::new(), &Binding::default()).unwrap();
         assert!(matches!(
             &planned[0].appearances.members[0].role,
             RoleSlot::Named(name) if name == "rare"

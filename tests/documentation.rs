@@ -133,7 +133,7 @@ fn detective_showcase_is_discoverable_and_shipped_with_the_ui() {
 
     for workflow in [
         ".github/workflows/pages.yml",
-        ".github/workflows/release.yml",
+        ".github/workflows/native-archive.yml",
     ] {
         let contents = fs::read_to_string(root.join(workflow)).unwrap();
         assert!(
@@ -157,7 +157,7 @@ fn hosted_studio_defaults_to_wasm_and_ships_the_welcome_example() {
 
     for workflow in [
         ".github/workflows/pages.yml",
-        ".github/workflows/release.yml",
+        ".github/workflows/native-archive.yml",
     ] {
         let contents = fs::read_to_string(root.join(workflow)).unwrap();
         assert!(

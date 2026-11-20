@@ -355,9 +355,10 @@ evaluate and can request an audit record of the result.
 
 For replay, retain the definition identity and source digest, input scope,
 evaluator version, parameters, clock, cuts, and store identity. A manifest of
-all scoped posit identities in canonical order and its digest identify the
-complete input in that store. Record the actual read identities and smaller
-per-finding witness sets separately. A backdated append can change the result
+all Posit identities in canonical order identifies the checked store view.
+Report version 2 retains its count and digest by default. Request the list
+itself with `with full manifest`. The actual read identities and smaller
+per-finding witness sets have their own fields. A backdated append can change the result
 at identical time cuts.
 An optional audit write appends the completed evaluation as ordinary posits
 ascertained by the evaluator after the read view closes. A later check can

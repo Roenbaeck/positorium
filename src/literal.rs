@@ -31,6 +31,14 @@ impl LiteralFamily {
         }
     }
 
+    pub(crate) fn nominal_mask(self) -> u8 {
+        1 << if self == Self::Decimal {
+            Self::Integer as u8
+        } else {
+            self as u8
+        }
+    }
+
     pub fn identifier(self) -> u8 {
         self as u8
     }
@@ -93,6 +101,29 @@ impl LiteralValue {
     /// Exact literal identity is byte-for-byte token equality.
     pub fn exactly_equals(&self, other: &Self) -> bool {
         self.token == other.token
+    }
+
+    /// Nominally equal tokens share a posting. The matcher still verifies each
+    /// candidate, so even a fingerprint collision cannot change the result.
+    pub(crate) fn nominal_fingerprint(&self) -> u64 {
+        let mut hash = seahash::SeaHasher::new();
+        self.family.nominal_mask().hash(&mut hash);
+        match self.family {
+            LiteralFamily::Integer | LiteralFamily::Decimal => {
+                NominalNumber(parse_number(&self.token).expect("validated number")).hash(&mut hash)
+            }
+            LiteralFamily::Certainty => parse_certainty(&self.token)
+                .expect("validated certainty")
+                .hash(&mut hash),
+            LiteralFamily::String => parse_json_string(&self.token)
+                .expect("validated string")
+                .hash(&mut hash),
+            LiteralFamily::Json => JsonParser::parse(&self.token)
+                .expect("validated JSON")
+                .hash(&mut hash),
+            LiteralFamily::Time => self.token.hash(&mut hash),
+        }
+        hash.finish()
     }
 
     /// Nominal semantic equality for beta literal families.
@@ -253,10 +284,26 @@ fn parse_json_string(token: &str) -> Result<String, String> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct NominalNumber(BigDecimal);
+
+impl Hash for NominalNumber {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // Hash a canonical coefficient and scale without expanding JSON exponents.
+        let (integer, scale) = self.0.as_bigint_and_scale();
+        let digits = integer.to_str_radix(10);
+        let significant = digits.trim_end_matches('0');
+        significant.hash(state);
+        if !significant.is_empty() {
+            (i128::from(scale) - (digits.len() - significant.len()) as i128).hash(state);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 enum SemanticJson {
     Null,
     Bool(bool),
-    Number(BigDecimal),
+    Number(NominalNumber),
     String(String),
     Array(Vec<SemanticJson>),
     Object(BTreeMap<String, SemanticJson>),
@@ -296,7 +343,9 @@ impl<'a> JsonParser<'a> {
             Some(b'"') => self.string().map(SemanticJson::String),
             Some(b'[') => self.array(),
             Some(b'{') => self.object(),
-            Some(b'-' | b'0'..=b'9') => self.number().map(SemanticJson::Number),
+            Some(b'-' | b'0'..=b'9') => self
+                .number()
+                .map(|n| SemanticJson::Number(NominalNumber(n))),
             Some(other) => Err(format!(
                 "invalid JSON byte '{}' at {}",
                 char::from(other),
