@@ -89,10 +89,67 @@ impl SetPosting {
     }
 }
 
+// All sets in a group have the same roles. One representative also serves as
+// the single inline set for appearances that occur in just one proposition.
+#[derive(Clone)]
+struct RoleGroup {
+    first: Arc<AppearanceSet>,
+    others: Option<Arc<HashTrieSetSync<Arc<AppearanceSet>, OtherHasher>>>,
+    posit_count: u64,
+}
+
+impl RoleGroup {
+    fn new(set: &Arc<AppearanceSet>) -> Self {
+        Self {
+            first: Arc::clone(set),
+            others: None,
+            posit_count: 1,
+        }
+    }
+
+    fn insert(&mut self, set: &Arc<AppearanceSet>, new_set: bool) {
+        self.posit_count += 1;
+        if new_set {
+            Arc::make_mut(self.others.get_or_insert_with(Default::default))
+                .insert_mut(Arc::clone(set));
+        }
+    }
+
+    fn sets(&self) -> impl Iterator<Item = &Arc<AppearanceSet>> {
+        std::iter::once(&self.first).chain(self.others.iter().flat_map(|sets| sets.iter()))
+    }
+}
+
+fn role_ids(set: &AppearanceSet) -> impl Iterator<Item = Thing> + '_ {
+    set.appearances().iter().map(|a| a.role.role())
+}
+
 #[derive(Clone)]
 struct AppearanceSets {
-    sets: Members<Arc<AppearanceSet>>,
-    posit_count: u64,
+    primary: RoleGroup,
+    // Pay for a shape index only when this (Thing, Role) appears in multiple
+    // role combinations, e.g. both {session, epoch} and {session, item}.
+    others: Option<Arc<Index<Vec<Thing>, RoleGroup>>>,
+}
+
+impl AppearanceSets {
+    fn insert(&mut self, set: &Arc<AppearanceSet>, new_set: bool) {
+        if (!new_set && self.others.is_none()) || role_ids(&self.primary.first).eq(role_ids(set)) {
+            self.primary.insert(set, new_set);
+            return;
+        }
+        let roles: Vec<_> = role_ids(set).collect();
+        let groups = Arc::make_mut(self.others.get_or_insert_with(Default::default));
+        if let Some(group) = groups.get_mut(&roles) {
+            group.insert(set, new_set);
+        } else {
+            groups.insert_mut(roles, RoleGroup::new(set));
+        }
+    }
+
+    fn groups(&self) -> impl Iterator<Item = &RoleGroup> {
+        std::iter::once(&self.primary).chain(self.others.iter().flat_map(|groups| groups.values()))
+    }
 }
 
 /// The catalog and indexes for one Traqula script. Edits to a writer's copy share
@@ -158,16 +215,13 @@ impl ReadView {
         }
         for appearance in set.appearances() {
             if let Some(entry) = self.appearance_sets.get_mut(appearance) {
-                entry.posit_count += 1;
-                if new_set {
-                    entry.sets.insert(Arc::clone(&set));
-                }
+                entry.insert(&set, new_set);
             } else {
                 self.appearance_sets.insert_mut(
                     Arc::clone(appearance),
                     AppearanceSets {
-                        sets: Members::One(Arc::clone(&set)),
-                        posit_count: 1,
+                        primary: RoleGroup::new(&set),
+                        others: None,
                     },
                 );
             }
@@ -245,28 +299,46 @@ impl ReadView {
         self.thing_appearances.get(&thing)
     }
 
-    pub(crate) fn thing_candidate_count(&self, thing: Thing, role: Option<&Arc<Role>>) -> u64 {
+    fn matching_groups(
+        &self,
+        appearance: &Appearance,
+        accepts_roles: impl Fn(&AppearanceSet) -> bool,
+    ) -> impl Iterator<Item = &RoleGroup> {
+        self.appearance_sets
+            .get(appearance)
+            .into_iter()
+            .flat_map(AppearanceSets::groups)
+            .filter(move |group| accepts_roles(&group.first))
+    }
+
+    pub(crate) fn thing_candidate_count(
+        &self,
+        thing: Thing,
+        role: Option<&Arc<Role>>,
+        accepts_roles: impl Fn(&AppearanceSet) -> bool,
+    ) -> u64 {
+        let count = |appearance: &Appearance| {
+            self.matching_groups(appearance, &accepts_roles)
+                .map(|group| group.posit_count)
+                .sum::<u64>()
+        };
         if let Some(role) = role {
-            return self
-                .appearance_sets
-                .get(&Appearance::new(thing, Arc::clone(role)))
-                .map_or(0, |entry| entry.posit_count);
+            return count(&Appearance::new(thing, Arc::clone(role)));
         }
         self.appearances(thing)
             .into_iter()
             .flat_map(Members::iter)
-            .filter_map(|a| self.appearance_sets.get(a))
-            .map(|entry| entry.posit_count)
+            .map(|a| count(a))
             .sum()
     }
 
-    pub(crate) fn appearance_sets(
+    pub(crate) fn matching_appearance_sets(
         &self,
-        appearance: &Arc<Appearance>,
-    ) -> Option<&Members<Arc<AppearanceSet>>> {
-        self.appearance_sets
-            .get(appearance)
-            .map(|entry| &entry.sets)
+        appearance: &Appearance,
+        accepts_roles: impl Fn(&AppearanceSet) -> bool,
+    ) -> impl Iterator<Item = &Arc<AppearanceSet>> {
+        self.matching_groups(appearance, accepts_roles)
+            .flat_map(RoleGroup::sets)
     }
 }
 

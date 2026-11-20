@@ -107,7 +107,10 @@ add posit +claim [
 This is syntax sugar for an ordinary target posit and an ordinary assertion
 posit with the exact `{posit, ascertains}` appearance set. `claim` and
 `evidence` bind their canonical posit identities; `registry` binds the source
-Thing. The source may instead be recalled with `by registry`. Source,
+Thing. Use `by registry` to recall a script binding or `by $dev` to supply a
+store-qualified identity parameter. For example, `and assert +a by $dev with
+100% at $t` binds the same assertion as an explicit `{(claim, posit),
+($dev, ascertains)}` envelope with that certainty and time. Source,
 certainty, and assertion time are mandatory and remain independent of the
 target's value and appearance time.
 
@@ -576,10 +579,19 @@ or bitmap access, candidate estimates, temporal reduction and field-filter
 placement, effective-evidence cuts, projection, ordering, and limits. Candidate
 estimates come from catalog/index sizes and are upper bounds, not measured
 cardinalities after matching. The planner considers literal-value postings,
-bound identities and role postings. It prefers a pattern connected to the
-bindings already available. A predicate such as `where ?s = $session` can
-supply the initial identity when filtering early preserves validation and
-temporal semantics. A changed database may produce a different plan.
+bound identities and role postings. For `($s, session)`, it counts posits for
+that identity in appearance sets compatible with the pattern's roles. For
+example, an exact `{(?i, item), ($s, session)}` lookup excludes the session's
+epochs from its estimate. The planner prefers patterns connected to known
+identities or earlier bindings.
+
+An identity equality can also anchor a conjunction, such as
+`where ?s = $s and ?introduced < ?at and ?c > 0%`. A preceding certainty
+comparison also permits the anchor when the stored value families show that
+the comparison is valid for every candidate. If an earlier comparison or
+absence check could raise a data error, the planner preserves its evaluation
+order. Historical patterns still select the state at their cutoff before
+testing its value. A changed database may produce a different plan.
 
 The plan's `incremental` flag reports whether scans, nested-loop joins, union,
 filters, absence checks, and projection pass rows directly to their consumers.

@@ -49,7 +49,7 @@ posit = {
     "[" ~ appearance_set ~ "," ~ appearing_value ~ "," ~ appearance_time ~ "]" 
 }
 assertion_binding = { insert }
-assertion_source = { insert | recall }
+assertion_source = { insert | parameter | recall }
 assertion_certainty = { parameter | certainty }
 assertion_time = { parameter | constant | time }
 and_assert_clause = {

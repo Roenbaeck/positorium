@@ -219,15 +219,22 @@ pub(super) fn compile(
         for pattern in &block.patterns {
             register_pattern(pattern, &mut local_domains)?;
         }
-        let total = total_before_filter(
-            view,
-            block.patterns.iter(),
-            &block.predicates,
-            &local_domains,
-        );
-        absence_checks_are_total &= total;
-        let anchors = if total {
-            identity_anchors(&block.predicates, &local_domains)
+        let scans_are_total = block
+            .patterns
+            .iter()
+            .all(|p| pattern_matches_are_total(view, p));
+        absence_checks_are_total &= scans_are_total
+            && block
+                .predicates
+                .iter()
+                .all(|p| predicate_is_total(view, block.patterns.iter(), p, &local_domains));
+        let anchors = if scans_are_total {
+            identity_anchors(
+                view,
+                block.patterns.iter(),
+                &block.predicates,
+                &local_domains,
+            )
         } else {
             Binding::default()
         };
@@ -242,15 +249,19 @@ pub(super) fn compile(
         plan.filters = block.predicates;
         not_exists.push(plan);
     }
-    let mut anchors = identity_anchors(&query.predicates, &domains);
+    let mut anchors = identity_anchors(
+        view,
+        query.branches.iter().flatten(),
+        &query.predicates,
+        &domains,
+    );
     if !anchors.0.is_empty()
         && (!absence_checks_are_total
-            || !total_before_filter(
-                view,
-                query.branches.iter().flatten(),
-                &query.predicates,
-                &domains,
-            ))
+            || !query
+                .branches
+                .iter()
+                .flatten()
+                .all(|p| pattern_matches_are_total(view, p)))
     {
         anchors = Binding::default();
     }
@@ -338,24 +349,56 @@ fn materialization_reason(query: &Query, domains: &HashMap<String, Domain>) -> O
     Some(reason.to_string())
 }
 
-// Moving a WHERE comparison before candidates, effect resolution or other
-// filters must preserve errors the complete evaluation could have reported.
-fn total_before_filter<'a>(
+fn predicate_is_total<'a>(
     view: &ReadView,
-    mut patterns: impl Iterator<Item = &'a PositPattern>,
-    predicates: &[Predicate],
+    patterns: impl Iterator<Item = &'a PositPattern> + Clone,
+    predicate: &Predicate,
     domains: &HashMap<String, Domain>,
 ) -> bool {
-    patterns.all(|pattern| pattern_matches_are_total(view, pattern))
-        && predicates.iter().all(|predicate| {
-            matches!(predicate, Predicate::Comparison { left, operator, .. }
-        if domains[left] != Domain::Literal || operator == "===")
-        })
+    let Predicate::Comparison {
+        left,
+        operator,
+        right,
+    } = predicate
+    else {
+        return false;
+    };
+    if domains[left] != Domain::Literal || operator == "===" {
+        return true;
+    }
+    // The same value binding can come from different union branches. A
+    // correlated binding with no local producer may carry any store family.
+    let families = |name: &str| {
+        patterns
+            .clone()
+            .filter(|p| matches!(&p.value, ValueSlot::Variable(v) | ValueSlot::LegacyVariable(v) if v == name))
+            .map(|p| pattern_value_families(view, p))
+            .reduce(|a, b| a | b)
+            .unwrap_or_else(|| view.value_families(None))
+    };
+    let left = families(left);
+    let right = match right {
+        Operand::Variable(name) => families(name),
+        Operand::Literal(value) => value.family().nominal_mask(),
+        _ => return false,
+    };
+    let both = left | right;
+    let orderable = LiteralFamily::Integer.nominal_mask() | LiteralFamily::Certainty.nominal_mask();
+    left == 0
+        || right == 0
+        || (both.is_power_of_two()
+            && (matches!(operator.as_str(), "=" | "?=") || both & orderable != 0))
 }
 
-fn identity_anchors(predicates: &[Predicate], domains: &HashMap<String, Domain>) -> Binding {
+fn identity_anchors<'a>(
+    view: &ReadView,
+    patterns: impl Iterator<Item = &'a PositPattern> + Clone,
+    predicates: &[Predicate],
+    domains: &HashMap<String, Domain>,
+) -> Binding {
     let mut anchors = Binding::default();
-    for predicate in predicates {
+    let mut start = 0;
+    for (index, predicate) in predicates.iter().enumerate() {
         if let Predicate::Comparison {
             left,
             operator,
@@ -363,6 +406,15 @@ fn identity_anchors(predicates: &[Predicate], domains: &HashMap<String, Domain>)
         } = predicate
             && matches!(operator.as_str(), "=" | "===" | "?=")
         {
+            // WHERE filters run in source order. An earlier anchor can narrow
+            // a fallible comparison, but a later one must not hide its errors.
+            if !predicates[start..index]
+                .iter()
+                .all(|p| predicate_is_total(view, patterns.clone(), p, domains))
+            {
+                break;
+            }
+            start = index + 1;
             // The query slot controls the projected kind of a matching identity.
             let value = if domains[left] == Domain::Posit {
                 BoundValue::Posit(*id)
