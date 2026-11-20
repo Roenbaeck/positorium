@@ -88,7 +88,16 @@ impl Variables {
         vars
     }
 
-    fn mutation_identities(&self, name: &str) -> Result<Vec<Thing>, DatabaseError> {
+    fn mutation_identities(
+        &self,
+        name: &str,
+        scope: &mut impl append::AppendScope,
+        execution: &ExecutionContext,
+    ) -> Result<Vec<Thing>, DatabaseError> {
+        if name.starts_with('$') {
+            let (kind, id) = execution.parameter(name)?.identity(name)?;
+            return Ok(vec![scope.reference(kind, id)?]);
+        }
         let bound = self.values.get(name).ok_or_else(|| {
             DatabaseError::InvalidRecall(format!(
                 "variable '{name}' is not bound in a prior command"
@@ -1826,14 +1835,7 @@ impl<'en> Engine<'en> {
                     }
                     let candidates = local_variables
                         .iter()
-                        .map(|name| {
-                            if name.starts_with('$') {
-                                let (kind, id) = execution.parameter(name)?.identity(name)?;
-                                Ok(vec![scope.reference(kind, id)?])
-                            } else {
-                                variables.mutation_identities(name)
-                            }
-                        })
+                        .map(|name| variables.mutation_identities(name, scope, execution))
                         .collect::<Result<Vec<_>, DatabaseError>>()?;
                     let things_for_roles = candidates.iter().map(Vec::as_slice).collect::<Vec<_>>();
                     if roles.len() != things_for_roles.len() {
@@ -1919,23 +1921,14 @@ impl<'en> Engine<'en> {
                             }
                             Rule::assertion_source => {
                                 let source = component.into_inner().next().ok_or_else(|| {
-                                    DatabaseError::Invariant(
-                                        "assertion source contains no variable".into(),
-                                    )
+                                    DatabaseError::Invariant("assertion source is empty".into())
                                 })?;
                                 source_allocates = source.as_rule() == Rule::insert;
-                                source_variable = Some(
-                                    source
-                                        .into_inner()
-                                        .next()
-                                        .ok_or_else(|| {
-                                            DatabaseError::Invariant(
-                                                "assertion source has no variable".into(),
-                                            )
-                                        })?
-                                        .as_str()
-                                        .to_string(),
-                                );
+                                source_variable = Some(if source.as_rule() == Rule::parameter {
+                                    source.as_str().to_owned()
+                                } else {
+                                    nested_mutation_variable(source)?
+                                });
                             }
                             Rule::assertion_certainty => {
                                 let value = component.into_inner().next().ok_or_else(|| {
@@ -2002,7 +1995,8 @@ impl<'en> Engine<'en> {
                         let source = scope.fresh_thing()?;
                         bind_identity(variables, source_variable.clone(), source);
                     }
-                    let sources = variables.mutation_identities(&source_variable)?;
+                    let sources =
+                        variables.mutation_identities(&source_variable, scope, execution)?;
                     if sources.is_empty() {
                         return Err(DatabaseError::InvalidRecall(format!(
                             "assertion source '{source_variable}' is empty"

@@ -183,6 +183,27 @@ struct AppearanceSetPattern {
     any: bool,
 }
 
+impl AppearanceSetPattern {
+    // Every set in an index group has the same roles. Variables and identities
+    // are still matched against the individual sets selected from the group.
+    fn accepts_roles(&self, set: &AppearanceSet) -> bool {
+        if self.any {
+            return true;
+        }
+        let roles = set.appearances();
+        let size_matches = if self.open {
+            roles.len() >= self.members.len()
+        } else {
+            roles.len() == self.members.len()
+        };
+        size_matches
+            && self.members.iter().all(|member| match &member.role {
+                RoleSlot::Named(name) => roles.iter().any(|a| a.role_name() == name),
+                _ => true,
+            })
+    }
+}
+
 #[derive(Debug, Clone)]
 enum ValueSlot {
     Wildcard,
@@ -1507,23 +1528,33 @@ fn plan_patterns<'a>(
     let can_reorder = patterns
         .iter()
         .all(|pattern| pattern_matches_are_total(view, pattern));
-    let mut pending: Vec<_> = patterns.iter().collect();
+    // These bounds only use store statistics and initial parameter values.
+    let mut pending: Vec<_> = patterns
+        .iter()
+        .map(|pattern| {
+            let count = if can_reorder {
+                estimated_candidate_count(view, pattern, anchors)
+            } else {
+                role_candidate_count(view, pattern)
+            };
+            (pattern, count)
+        })
+        .collect();
     let mut planned = Vec::with_capacity(patterns.len());
     let mut available = initially_available.clone();
     while !pending.is_empty() {
         let mut best = None;
-        for (index, pattern) in pending.iter().enumerate() {
+        for (index, (pattern, count)) in pending.iter().enumerate() {
             if pattern.dependencies().is_subset(&available) {
-                let connected = !pattern.introduced().is_disjoint(&available)
-                    || !pattern.dependencies().is_empty();
-                let estimate = if can_reorder {
-                    (
-                        !connected,
-                        estimated_candidate_count(view, pattern, anchors),
-                    )
-                } else {
-                    (false, role_candidate_count(view, pattern))
-                };
+                let connected = can_reorder
+                    && (!pattern.introduced().is_disjoint(&available)
+                        || !pattern.dependencies().is_empty()
+                        || pattern
+                            .appearances
+                            .members
+                            .iter()
+                            .any(|m| matches!(m.thing, ThingSlot::Identity(_))));
+                let estimate = (!connected, *count);
                 if best.is_none_or(|(_, best_estimate)| estimate < best_estimate) {
                     best = Some((index, estimate));
                 }
@@ -1532,7 +1563,7 @@ fn plan_patterns<'a>(
         let Some((index, _)) = best else {
             let dependencies: Vec<_> = pending
                 .iter()
-                .flat_map(|pattern| pattern.dependencies())
+                .flat_map(|(pattern, _)| pattern.dependencies())
                 .filter(|name| !available.contains(name))
                 .collect();
             return Err(DatabaseError::InvalidRecall(format!(
@@ -1540,11 +1571,22 @@ fn plan_patterns<'a>(
                 dependencies.join(", ")
             )));
         };
-        let pattern = pending.remove(index);
+        let (pattern, _) = pending.remove(index);
         available.extend(pattern.introduced());
         planned.push(pattern);
     }
     Ok(planned)
+}
+
+fn pattern_value_families(view: &ReadView, pattern: &PositPattern) -> u8 {
+    pattern
+        .appearances
+        .members
+        .iter()
+        .fold(view.value_families(None), |families, m| match &m.role {
+            RoleSlot::Named(name) => families & view.value_families(Some(name)),
+            _ => families,
+        })
 }
 
 // Skipping a candidate of an incompatible family could hide a comparison error.
@@ -1553,9 +1595,7 @@ fn literal_comparison_is_total(
     pattern: &PositPattern,
     value: &LiteralValue,
 ) -> bool {
-    let compatible = value.family().nominal_mask();
-    view.value_families(None) & !compatible == 0 || pattern.appearances.members.iter().any(|m|
-        matches!(&m.role, RoleSlot::Named(name) if view.value_families(Some(name)) & !compatible == 0))
+    pattern_value_families(view, pattern) & !value.family().nominal_mask() == 0
 }
 
 fn pattern_matches_are_total(view: &ReadView, pattern: &PositPattern) -> bool {
@@ -1602,7 +1642,9 @@ fn estimated_candidate_count(view: &ReadView, pattern: &PositPattern, anchors: &
             RoleSlot::Named(name) => view.normalized_role(name),
             _ => None,
         };
-        Some(view.thing_candidate_count(id, role.as_ref()))
+        Some(view.thing_candidate_count(id, role.as_ref(), |set| {
+            pattern.appearances.accepts_roles(set)
+        }))
     });
     things
         .chain(literal)
@@ -2042,7 +2084,11 @@ fn indexed_candidate_identities(
         if let Some(things) = indexed_things(&member.thing, input)? {
             let count = things
                 .iter()
-                .map(|id| view.thing_candidate_count(*id, role.as_ref()))
+                .map(|id| {
+                    view.thing_candidate_count(*id, role.as_ref(), |set| {
+                        pattern.appearances.accepts_roles(set)
+                    })
+                })
                 .sum();
             consider(count, Source::Things(things, role));
         } else if let Some(role) = role {
@@ -2059,9 +2105,13 @@ fn indexed_candidate_identities(
     let candidates = match source {
         _ if count == 0 => clone_posting(None, execution)?,
         Source::Role(posting) => clone_posting(posting, execution)?,
-        Source::Things(things, role) => {
-            posit_posting_for_things(view, &things, role.as_ref(), execution)?
-        }
+        Source::Things(things, role) => posit_posting_for_things(
+            view,
+            &things,
+            role.as_ref(),
+            &pattern.appearances,
+            execution,
+        )?,
         Source::Set(posting) => {
             execution.work(count)?;
             let memory = execution.workspace(|| bitmap_bytes(count))?;
@@ -2143,6 +2193,7 @@ fn posit_posting_for_things(
     view: &ReadView,
     things: &[Thing],
     role: Option<&Arc<Role>>,
+    pattern: &AppearanceSetPattern,
     execution: &ExecutionContext,
 ) -> Result<BudgetBitmap, DatabaseError> {
     let mut appearances: HashSet<_, OtherHasher> = HashSet::default();
@@ -2164,13 +2215,11 @@ fn posit_posting_for_things(
     let mut appearance_sets: HashSet<_, OtherHasher> = HashSet::default();
     let mut set_memory = execution.workspace(|| 0)?;
     for appearance in appearances {
-        if let Some(found) = view.appearance_sets(&appearance) {
-            for set in found.iter() {
-                execution.work(1)?;
-                if !appearance_sets.contains(set) {
-                    set_memory.grow(96)?;
-                    appearance_sets.insert(Arc::clone(set));
-                }
+        for set in view.matching_appearance_sets(&appearance, |set| pattern.accepts_roles(set)) {
+            execution.work(1)?;
+            if !appearance_sets.contains(set) {
+                set_memory.grow(96)?;
+                appearance_sets.insert(Arc::clone(set));
             }
         }
     }
