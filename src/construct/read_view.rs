@@ -336,3 +336,34 @@ impl Drop for ScriptView<'_> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn out_of_order_replay_invalidates_only_the_new_views_manifest() {
+        let db = Database::memory().unwrap();
+        db.execute("add role entry; add posit [{(+a,entry)},1,@NOW], [{(a,entry)},2,@NOW], [{(a,entry)},3,@NOW];").unwrap();
+        let original = db.read_view();
+        let mut ids: Vec<_> = original.posit_ids().collect();
+        ids.sort_unstable();
+        let hash = |ids: &[Thing]| {
+            let mut hash = SeaHasher::new();
+            for id in ids {
+                hash.write(&id.to_le_bytes());
+            }
+            hash
+        };
+        let mut replay = ReadView::default();
+        replay.insert_posit(original.posit(ids[1]).unwrap());
+        let pinned = replay.clone();
+        replay.insert_posit(original.posit(ids[0]).unwrap());
+        assert!(replay.manifest_digest().is_none());
+        replay.cache_manifest_digest(hash(&ids[..2]));
+        replay.insert_posit(original.posit(ids[2]).unwrap());
+        assert_eq!(pinned.manifest_digest(), Some(hash(&ids[1..2]).finish()));
+        assert_eq!(replay.manifest_digest(), Some(hash(&ids).finish()));
+        assert_eq!(replay.manifest_digest(), original.manifest_digest());
+    }
+}

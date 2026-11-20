@@ -346,16 +346,11 @@ fn total_before_filter<'a>(
     predicates: &[Predicate],
     domains: &HashMap<String, Domain>,
 ) -> bool {
-    patterns.all(|pattern| {
-        pattern.effect.is_none()
-            && match &pattern.value {
-                ValueSlot::Literal(value) => literal_comparison_is_total(view, pattern, value),
-                _ => true,
-            }
-    }) && predicates.iter().all(|predicate| {
-        matches!(predicate, Predicate::Comparison { left, operator, .. }
+    patterns.all(|pattern| pattern_matches_are_total(view, pattern))
+        && predicates.iter().all(|predicate| {
+            matches!(predicate, Predicate::Comparison { left, operator, .. }
         if domains[left] != Domain::Literal || operator == "===")
-    })
+        })
 }
 
 fn identity_anchors(predicates: &[Predicate], domains: &HashMap<String, Domain>) -> Binding {

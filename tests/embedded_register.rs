@@ -136,6 +136,8 @@ fn nominal_postings_preserve_equivalent_tokens_errors_and_historical_states() {
             format!(r#"search {latest}[{{(?x,string_value)}}, "A", *] as of '2025' return ?x;"#);
         assert_eq!(db.execute_one(&q).unwrap().row_count, expected);
     }
+    db.execute(r#"add posit [{(+y,string_value)},"C",'2024'];"#)
+        .unwrap();
     let x = reference(
         &db,
         &db.execute_one("search [{(?x,amount)},*,*] return ?x;")
@@ -144,6 +146,12 @@ fn nominal_postings_preserve_equivalent_tokens_errors_and_historical_states() {
     );
     db.execute(r#"add posit [{(+other,amount)}, "invalid family", '2024'];"#)
         .unwrap();
+    assert!(matches!(
+        db.execute_one(
+            r#"search [{(?x,amount)},10,*], [{(?y,string_value)},"absent",*] return ?x;"#
+        ),
+        Err(DatabaseError::Comparison(_))
+    ));
     assert!(matches!(
         db.execute_one_with_options(
             "search [{(?x,amount)},10,*] where ?x = $x return ?x;",

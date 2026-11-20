@@ -1502,6 +1502,11 @@ fn plan_patterns<'a>(
     initially_available: &HashSet<&str>,
     anchors: &Binding,
 ) -> Result<Vec<&'a PositPattern>, DatabaseError> {
+    // Keep the existing validation order for branches where reading a pattern
+    // can fail. An unrelated empty literal posting must not mask that error.
+    let can_reorder = patterns
+        .iter()
+        .all(|pattern| pattern_matches_are_total(view, pattern));
     let mut pending: Vec<_> = patterns.iter().collect();
     let mut planned = Vec::with_capacity(patterns.len());
     let mut available = initially_available.clone();
@@ -1511,10 +1516,14 @@ fn plan_patterns<'a>(
             if pattern.dependencies().is_subset(&available) {
                 let connected = !pattern.introduced().is_disjoint(&available)
                     || !pattern.dependencies().is_empty();
-                let estimate = (
-                    !connected,
-                    estimated_candidate_count(view, pattern, anchors),
-                );
+                let estimate = if can_reorder {
+                    (
+                        !connected,
+                        estimated_candidate_count(view, pattern, anchors),
+                    )
+                } else {
+                    (false, role_candidate_count(view, pattern))
+                };
                 if best.is_none_or(|(_, best_estimate)| estimate < best_estimate) {
                     best = Some((index, estimate));
                 }
@@ -1547,6 +1556,14 @@ fn literal_comparison_is_total(
     let compatible = value.family().nominal_mask();
     view.value_families(None) & !compatible == 0 || pattern.appearances.members.iter().any(|m|
         matches!(&m.role, RoleSlot::Named(name) if view.value_families(Some(name)) & !compatible == 0))
+}
+
+fn pattern_matches_are_total(view: &ReadView, pattern: &PositPattern) -> bool {
+    pattern.effect.is_none()
+        && match &pattern.value {
+            ValueSlot::Literal(value) => literal_comparison_is_total(view, pattern, value),
+            _ => true,
+        }
 }
 
 fn indexed_literal<'a>(view: &ReadView, pattern: &'a PositPattern) -> Option<&'a LiteralValue> {
@@ -1587,6 +1604,13 @@ fn estimated_candidate_count(view: &ReadView, pattern: &PositPattern, anchors: &
         };
         Some(view.thing_candidate_count(id, role.as_ref()))
     });
+    things
+        .chain(literal)
+        .chain(posit)
+        .fold(role_candidate_count(view, pattern), u64::min)
+}
+
+fn role_candidate_count(view: &ReadView, pattern: &PositPattern) -> u64 {
     pattern
         .appearances
         .members
@@ -1599,9 +1623,6 @@ fn estimated_candidate_count(view: &ReadView, pattern: &PositPattern, anchors: &
             ),
             RoleSlot::Wildcard | RoleSlot::Variable(_) => None,
         })
-        .chain(literal)
-        .chain(posit)
-        .chain(things)
         .min()
         .unwrap_or(u64::MAX)
 }
