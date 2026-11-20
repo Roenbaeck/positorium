@@ -15,7 +15,7 @@ include = [
     "/src/", "/examples/", "/benches/", "/tests/*.rs", "/traqula/",
     "!/tests/documentation.rs", "!/tests/editor_grammar.rs",
     "/docs/guides/COOKBOOK.md", "/docs/guides/RUST.md", "/docs/reference/TRAQULA.md",
-    "/positorium.json", "/README.md", "/LICENSE.*",
+    "/positorium.json", "/rust-toolchain.toml", "/README.md", "/LICENSE.*",
 ]
 
 [package.metadata.docs.rs]
