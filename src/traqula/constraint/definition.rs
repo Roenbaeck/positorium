@@ -79,6 +79,7 @@ fn parameter_types(
                     &[Time]
                 }
                 Rule::appearing_value_search => &[OtherLiteral, Integer, DateLiteral, Time],
+                Rule::appearance_search => &[Thing, Posit],
                 Rule::day_count => &[Integer],
                 Rule::date_operand => &[DateLiteral, Time],
                 _ => {

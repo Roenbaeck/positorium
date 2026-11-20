@@ -3,8 +3,9 @@ use crate::error::DatabaseError;
 use crate::literal::LiteralValue;
 use roaring::RoaringTreemap;
 use rpds::{HashTrieMapSync, HashTrieSetSync};
-use std::hash::Hash;
-use std::sync::{Arc, MutexGuard};
+use seahash::SeaHasher;
+use std::hash::{Hash, Hasher};
+use std::sync::{Arc, MutexGuard, OnceLock};
 use unicode_normalization::UnicodeNormalization;
 
 type Index<K, V> = HashTrieMapSync<K, V, OtherHasher>;
@@ -71,6 +72,13 @@ impl SetPosting {
         }
     }
 
+    pub(crate) fn contains(&self, id: Thing) -> bool {
+        match self {
+            Self::One(first) => *first == id,
+            Self::Many(ids) => ids.contains(id),
+        }
+    }
+
     pub(crate) fn union_into(&self, bitmap: &mut RoaringTreemap) {
         match self {
             Self::One(identity) => {
@@ -81,6 +89,12 @@ impl SetPosting {
     }
 }
 
+#[derive(Clone)]
+struct AppearanceSets {
+    sets: Members<Arc<AppearanceSet>>,
+    posit_count: u64,
+}
+
 /// The catalog and indexes for one Traqula script. Edits to a writer's copy share
 /// unchanged index paths and stored values with any readers of older views.
 #[derive(Clone, Default)]
@@ -88,9 +102,14 @@ pub(crate) struct ReadView {
     roles: Index<String, Arc<Role>>,
     posits: Index<Thing, Arc<Posit<LiteralValue>>>,
     thing_appearances: Index<Thing, Members<Arc<Appearance>>>,
-    appearance_sets: Index<Arc<Appearance>, Members<Arc<AppearanceSet>>>,
+    appearance_sets: Index<Arc<Appearance>, AppearanceSets>,
     set_posits: Index<Arc<AppearanceSet>, SetPosting>,
     role_posits: Index<Thing, RoaringTreemap>,
+    value_posits: Index<u64, SetPosting>,
+    role_families: Index<Thing, u8>,
+    value_families: u8,
+    highest_posit: Option<Thing>,
+    manifest_hash: OnceLock<SeaHasher>,
 }
 
 impl ReadView {
@@ -100,7 +119,30 @@ impl ReadView {
 
     pub(super) fn insert_posit(&mut self, posit: Arc<Posit<LiteralValue>>) {
         let identity = posit.posit();
+        // Normal commits extend the sorted manifest. Replay can supply older
+        // identities out of order, in which case the next audit rebuilds it.
+        if self.highest_posit.is_none() {
+            self.manifest_hash = OnceLock::from(SeaHasher::new());
+        }
+        if self.highest_posit.is_some_and(|last| identity <= last) {
+            self.manifest_hash.take();
+        } else {
+            self.highest_posit = Some(identity);
+            if let Some(hash) = self.manifest_hash.get_mut() {
+                hash.write(&identity.to_le_bytes());
+            }
+        }
+        let fingerprint = posit.value().nominal_fingerprint();
+        if let Some(posting) = self.value_posits.get_mut(&fingerprint) {
+            posting.insert(identity);
+        } else {
+            self.value_posits
+                .insert_mut(fingerprint, SetPosting::One(identity));
+        }
+        let family = posit.value().family().nominal_mask();
+        self.value_families |= family;
         let set = posit.appearance_set();
+        let new_set = self.set_posits.get(&set).is_none();
         if let Some(posting) = self.set_posits.get_mut(&set) {
             posting.insert(identity);
         } else {
@@ -112,15 +154,28 @@ impl ReadView {
                     appearance.thing(),
                     Arc::clone(appearance),
                 );
-                insert_member(
-                    &mut self.appearance_sets,
-                    Arc::clone(appearance),
-                    Arc::clone(&set),
-                );
             }
         }
         for appearance in set.appearances() {
+            if let Some(entry) = self.appearance_sets.get_mut(appearance) {
+                entry.posit_count += 1;
+                if new_set {
+                    entry.sets.insert(Arc::clone(&set));
+                }
+            } else {
+                self.appearance_sets.insert_mut(
+                    Arc::clone(appearance),
+                    AppearanceSets {
+                        sets: Members::One(Arc::clone(&set)),
+                        posit_count: 1,
+                    },
+                );
+            }
             let role = appearance.role().role();
+            let families = self.role_families.get(&role).copied().unwrap_or(0);
+            if families & family == 0 {
+                self.role_families.insert_mut(role, families | family);
+            }
             if let Some(posting) = self.role_posits.get_mut(&role) {
                 posting.insert(identity);
             } else {
@@ -156,6 +211,28 @@ impl ReadView {
         self.posits.keys().copied()
     }
 
+    pub(crate) fn manifest_digest(&self) -> Option<u64> {
+        self.manifest_hash.get().map(Hasher::finish)
+    }
+
+    pub(crate) fn cache_manifest_digest(&self, hash: SeaHasher) -> u64 {
+        self.manifest_hash.get_or_init(|| hash).finish()
+    }
+
+    pub(crate) fn value_families(&self, role: Option<&str>) -> u8 {
+        match role {
+            None => self.value_families,
+            Some(name) => self
+                .normalized_role(name)
+                .and_then(|r| self.role_families.get(&r.role()).copied())
+                .unwrap_or(0),
+        }
+    }
+
+    pub(crate) fn value_posting(&self, fingerprint: u64) -> Option<&SetPosting> {
+        self.value_posits.get(&fingerprint)
+    }
+
     pub(crate) fn role_posting(&self, role: Thing) -> Option<&RoaringTreemap> {
         self.role_posits.get(&role)
     }
@@ -168,11 +245,28 @@ impl ReadView {
         self.thing_appearances.get(&thing)
     }
 
+    pub(crate) fn thing_candidate_count(&self, thing: Thing, role: Option<&Arc<Role>>) -> u64 {
+        if let Some(role) = role {
+            return self
+                .appearance_sets
+                .get(&Appearance::new(thing, Arc::clone(role)))
+                .map_or(0, |entry| entry.posit_count);
+        }
+        self.appearances(thing)
+            .into_iter()
+            .flat_map(Members::iter)
+            .filter_map(|a| self.appearance_sets.get(a))
+            .map(|entry| entry.posit_count)
+            .sum()
+    }
+
     pub(crate) fn appearance_sets(
         &self,
         appearance: &Arc<Appearance>,
     ) -> Option<&Members<Arc<AppearanceSet>>> {
-        self.appearance_sets.get(appearance)
+        self.appearance_sets
+            .get(appearance)
+            .map(|entry| &entry.sets)
     }
 }
 

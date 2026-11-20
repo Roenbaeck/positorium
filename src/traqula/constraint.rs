@@ -11,8 +11,10 @@ use definition::{Definition, FindingKind};
 
 type Record = Arc<Posit<LiteralValue>>;
 type Result<T> = std::result::Result<T, DatabaseError>;
-/// Version of the saved definition and constraint report contract.
+/// Version of the saved definition contract.
 pub const CONSTRAINT_VERSION: u16 = 1;
+/// Version of the finding report returned by a check.
+pub const CONSTRAINT_REPORT_VERSION: u16 = 2;
 
 pub(super) struct ReadTrace {
     ids: BTreeSet<Thing>,
@@ -100,19 +102,34 @@ fn slot<const N: usize>(
 
 fn named(view: &ReadView, name: &str, execution: &ExecutionContext) -> Result<BTreeSet<Thing>> {
     let mut ids = BTreeSet::new();
-    if let Some(posting) = view.role("name").and_then(|r| view.role_posting(r.role())) {
-        for id in posting {
-            execution.work(1)?;
-            execution.trace_read(id)?;
-            let record = view
-                .posit(id)
-                .ok_or_else(|| DatabaseError::Invariant("missing named posit".into()))?;
-            if let Some(subject) = unary(&record, "name")
-                && record.value().family() == LiteralFamily::String
-                && decoded(record.value().token())? == name
-            {
-                ids.insert(subject);
-            }
+    let Some(names) = view
+        .normalized_role("name")
+        .and_then(|r| view.role_posting(r.role()))
+    else {
+        return Ok(ids);
+    };
+    let string = string_value(name)?;
+    let Some(values) = view.value_posting(string.nominal_fingerprint()) else {
+        return Ok(ids);
+    };
+    let candidates: Box<dyn Iterator<Item = Thing> + '_> = if names.len() < values.len() {
+        Box::new(names.iter())
+    } else {
+        Box::new(values.iter())
+    };
+    for id in candidates {
+        execution.work(1)?;
+        if !names.contains(id) || !values.contains(id) {
+            continue;
+        }
+        execution.trace_read(id)?;
+        let record = view
+            .posit(id)
+            .ok_or_else(|| DatabaseError::Invariant("missing named posit".into()))?;
+        if let Some(subject) = unary(&record, "name")
+            && has_string(&record, name)
+        {
+            ids.insert(subject);
         }
     }
     Ok(ids)
@@ -200,6 +217,7 @@ fn resolve_id(
     }
     let name = nested_mutation_variable(pair)?;
     let bound = variables
+        .values
         .get(&name)
         .ok_or_else(|| DatabaseError::UnknownVariable(name.clone()))?;
     one(&result_set_identities(bound)?, &format!("binding {name}"))?
@@ -590,6 +608,9 @@ impl Engine<'_> {
             })
             .transpose()?;
         let mut parameters = BTreeMap::new();
+        let full_manifest = parts
+            .next_if(|p| p.as_rule() == Rule::full_manifest)
+            .is_some();
         for name in &definition.parameters {
             if matches!(name.as_str(), "constraint_revision" | "constraint_policy") {
                 continue;
@@ -691,19 +712,38 @@ impl Engine<'_> {
         } else {
             "satisfied"
         };
-        let _manifest_space = execution.workspace(|| view.posit_count() as u64 * 40)?;
-        execution.work(budget::sort_work(view.posit_count(), 1))?;
-        let mut manifest: Vec<_> = view.posit_ids().collect();
-        manifest.sort_unstable();
-        let mut digest = seahash::SeaHasher::new();
-        for id in &manifest {
-            execution.work(1)?;
-            digest.write(&id.to_le_bytes());
-        }
-        let trace = trace.borrow();
         let ids = |ids: &[Thing]| ids.iter().map(Thing::to_string).collect::<Vec<_>>();
+        let count = view.posit_count();
+        let cached_digest = view.manifest_digest();
+        let mut snapshot = json!({"count": count});
+        let digest = if let Some(digest) = cached_digest.filter(|_| !full_manifest) {
+            digest
+        } else {
+            report_memory.grow(count as u64 * if full_manifest { 64 } else { 8 })?;
+            execution.work(budget::sort_work(count, 1))?;
+            let mut manifest: Vec<_> = view.posit_ids().collect();
+            manifest.sort_unstable();
+            let digest = match cached_digest {
+                Some(digest) => digest,
+                None => {
+                    let mut hash = seahash::SeaHasher::new();
+                    for id in &manifest {
+                        execution.work(1)?;
+                        hash.write(&id.to_le_bytes());
+                    }
+                    view.cache_manifest_digest(hash)
+                }
+            };
+            if full_manifest {
+                execution.work(count as u64)?;
+                snapshot["posits"] = json!(ids(&manifest));
+            }
+            digest
+        };
+        snapshot["digest"] = json!(format!("{digest:016x}"));
+        let trace = trace.borrow();
         let report = json!({
-            "version": CONSTRAINT_VERSION,
+            "version": CONSTRAINT_REPORT_VERSION,
             "verdict": verdict,
             "store": store,
             "policy": policy.to_string(),
@@ -717,7 +757,7 @@ impl Engine<'_> {
             "declarations": ids(&declarations),
             "read_posits": trace.ids.iter().map(Thing::to_string).collect::<Vec<_>>(),
             "work_units": trace.units,
-            "snapshot": {"posits": ids(&manifest), "digest": format!("{:016x}", digest.finish())},
+            "snapshot": snapshot,
             "readiness": readiness.map(|id|id.to_string()),
             "complete": complete,
             "missing_inputs": ids(&pending),

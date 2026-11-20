@@ -2,13 +2,14 @@
 //! batches on the caller's thread. Only the ordered phase uses store identities.
 
 use super::*;
-use crate::construct::{Appearance, AppearanceSet, Posit, Role};
+use crate::construct::{Appearance, AppearanceSet, Posit, Role, StagedPosits};
 use std::collections::HashSet;
 
 type Target = (Arc<AppearanceSet>, LiteralValue, Time);
 
 pub(super) trait AppendScope {
     fn fresh_thing(&mut self) -> Result<Thing, DatabaseError>;
+    fn reference(&mut self, kind: ResultCellKind, id: Thing) -> Result<Thing, DatabaseError>;
     fn role(&mut self, name: &str) -> Result<Arc<Role>, DatabaseError>;
 
     fn appearance_set<'a>(
@@ -26,32 +27,59 @@ pub(super) trait AppendScope {
         &mut self,
         targets: Vec<Target>,
         assertions: Vec<LiteralAssertionSpec>,
+        previous_targets: &[Arc<Posit<LiteralValue>>],
     ) -> Result<Option<CreatedLiteralPosits>, DatabaseError>;
 }
 
 pub(super) struct Writer<'a> {
     database: &'a Database,
     view: &'a mut ReadView,
+    staged: StagedPosits,
 }
 
 impl<'a> Writer<'a> {
     pub(super) fn new(database: &'a Database, view: &'a mut ReadView) -> Self {
-        Self { database, view }
+        Self {
+            database,
+            view,
+            staged: StagedPosits::default(),
+        }
     }
-    fn commit(
-        &mut self,
-        targets: Vec<Target>,
-        assertions: Vec<LiteralAssertionSpec>,
-    ) -> Result<CreatedLiteralPosits, DatabaseError> {
-        let kept = self
-            .database
-            .create_literal_posits_with_assertions(self.view, targets, assertions)?;
-        info!(target: "positorium::traqula", event="add_posit_commit", targets=kept.targets.len(), assertions=kept.assertions.len(), "posit command committed");
-        Ok(kept)
+    pub(super) fn publish(&mut self) -> Result<(), DatabaseError> {
+        self.database
+            .publish_staged(self.view, Vec::new(), std::mem::take(&mut self.staged))
+    }
+}
+
+fn check_reference(
+    view: &ReadView,
+    generator: &crate::construct::ThingGenerator,
+    kind: ResultCellKind,
+    id: Thing,
+) -> Result<Thing, DatabaseError> {
+    let exists = match kind {
+        ResultCellKind::Posit => view.posit(id).is_some(),
+        _ => generator.check(id).is_some(),
+    };
+    if exists {
+        Ok(id)
+    } else {
+        Err(DatabaseError::Parameter(format!(
+            "unknown {kind:?} identity {id}"
+        )))
     }
 }
 
 impl AppendScope for Writer<'_> {
+    fn reference(&mut self, kind: ResultCellKind, id: Thing) -> Result<Thing, DatabaseError> {
+        let generator = self
+            .database
+            .thing_generator
+            .lock()
+            .map_err(|e| DatabaseError::Lock(e.to_string()))?;
+        check_reference(self.view, &generator, kind, id)
+    }
+
     fn fresh_thing(&mut self) -> Result<Thing, DatabaseError> {
         Ok(self
             .database
@@ -71,9 +99,37 @@ impl AppendScope for Writer<'_> {
         &mut self,
         targets: Vec<Target>,
         assertions: Vec<LiteralAssertionSpec>,
+        previous_targets: &[Arc<Posit<LiteralValue>>],
     ) -> Result<Option<CreatedLiteralPosits>, DatabaseError> {
-        self.commit(targets, assertions).map(Some)
+        self.database
+            .stage_asserted(&mut self.staged, targets, previous_targets, assertions)
+            .map(Some)
     }
+}
+
+pub(super) fn dependent_additions(command: &Pair<'_, Rule>) -> bool {
+    let mut bound = HashSet::new();
+    for part in command.clone().into_inner() {
+        if !bound.is_empty()
+            && part
+                .clone()
+                .into_inner()
+                .flatten()
+                .any(|p| p.as_rule() == Rule::recall && bound.contains(p.as_str()))
+        {
+            return true;
+        }
+        if let Some(first) = part.into_inner().next()
+            && matches!(first.as_rule(), Rule::insert | Rule::assertion_binding)
+            && let Some(name) = first
+                .into_inner()
+                .flatten()
+                .find(|p| p.as_rule() == Rule::variable)
+        {
+            bound.insert(name.as_str());
+        }
+    }
+    false
 }
 
 enum Command {
@@ -92,6 +148,7 @@ enum Command {
 struct PreparedAppends {
     commands: Vec<Command>,
     slots: usize,
+    references: HashMap<usize, (ResultCellKind, Thing)>,
 }
 
 #[derive(Default)]
@@ -99,6 +156,7 @@ struct Preparation {
     plan: PreparedAppends,
     roles: HashMap<String, Arc<Role>, OtherHasher>,
     fresh_start: usize,
+    reference_slots: std::collections::BTreeMap<(ResultCellKind, Thing), Thing>,
     // Equal propositions must share one binding when a later command fans out.
     bound_posits: HashSet<Arc<Posit<LiteralValue>>, OtherHasher>,
     track_posits: bool,
@@ -160,7 +218,13 @@ impl Preparation {
                     self.plan.commands.push(Command::Roles(names));
                 }
                 Rule::add_posit => {
-                    Engine::construct_posits(&mut self, command, &mut variables, execution)?
+                    Engine::construct_posits(
+                        &mut self,
+                        command.into_inner(),
+                        &mut variables,
+                        execution,
+                        &[],
+                    )?;
                 }
                 _ => unreachable!("only unconditional appends enter preparation"),
             }
@@ -170,6 +234,16 @@ impl Preparation {
 }
 
 impl AppendScope for Preparation {
+    fn reference(&mut self, kind: ResultCellKind, id: Thing) -> Result<Thing, DatabaseError> {
+        if let Some(slot) = self.reference_slots.get(&(kind, id)) {
+            return Ok(*slot);
+        }
+        let slot = self.slot();
+        self.plan.references.insert(slot as usize, (kind, id));
+        self.reference_slots.insert((kind, id), slot);
+        Ok(slot)
+    }
+
     fn fresh_thing(&mut self) -> Result<Thing, DatabaseError> {
         Ok(self.slot())
     }
@@ -188,7 +262,9 @@ impl AppendScope for Preparation {
         &mut self,
         targets: Vec<Target>,
         assertions: Vec<LiteralAssertionSpec>,
+        previous_targets: &[Arc<Posit<LiteralValue>>],
     ) -> Result<Option<CreatedLiteralPosits>, DatabaseError> {
+        debug_assert!(previous_targets.is_empty());
         let fresh = self.fresh_start..self.plan.slots;
         let mut bindings = Vec::new();
         let bound = if self.track_posits {
@@ -255,7 +331,12 @@ impl PreparedAppends {
                             .lock()
                             .map_err(|err| DatabaseError::Lock(err.to_string()))?;
                         for slot in fresh {
-                            identities[slot] = generator.reserve();
+                            identities[slot] = match self.references.get(&slot) {
+                                Some(&(kind, id)) => {
+                                    check_reference(writer.view, &generator, kind, id)?
+                                }
+                                None => generator.reserve(),
+                            };
                         }
                     }
                     let resolve = |slot: Thing| {
@@ -291,7 +372,14 @@ impl PreparedAppends {
                         assertion.positor = resolve(assertion.positor)?;
                     }
                     execution.check()?;
-                    let kept = writer.commit(targets, assertions)?;
+                    let kept = engine.database.stage_asserted(
+                        &mut writer.staged,
+                        targets,
+                        &[],
+                        assertions,
+                    )?;
+                    let target_count = kept.targets.len();
+                    let assertion_count = kept.assertions.len();
                     debug_assert!(
                         bindings.is_empty()
                             || bindings.len() == kept.targets.len() + kept.assertions.len()
@@ -302,6 +390,9 @@ impl PreparedAppends {
                     {
                         identities[slot as usize] = posit.posit();
                     }
+                    drop(kept);
+                    writer.publish()?;
+                    info!(target: "positorium::traqula", event="add_posit_commit", targets=target_count, assertions=assertion_count, "posit command committed");
                 }
             }
         }
@@ -328,6 +419,14 @@ impl Engine<'_> {
                     Rule::add_role | Rule::add_posit | Rule::EOI
                 )
             })
+        {
+            return Ok(false);
+        }
+        // Earlier targets in the same durable command can resolve to existing
+        // canonical Posits. The ordered writer stages those dependencies.
+        if commands
+            .clone()
+            .any(|c| c.as_rule() == Rule::add_posit && dependent_additions(&c))
         {
             return Ok(false);
         }

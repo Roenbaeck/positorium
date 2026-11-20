@@ -1,8 +1,10 @@
 traqula = _{
-    SOI ~
+    SOI ~ strict_mutations? ~
     (add_role | add_posit | add_constraint | check_constraint | explain | search)* ~
     EOI
 }
+
+strict_mutations = { ^"strict mutations" ~ ";" }
 
 // common tokens
 COMMENT = _{ "/*" ~ (!"*/" ~ ANY)* ~ "*/" }
@@ -38,7 +40,7 @@ add_role = { ^"add role" ~ (role ~ ","?)+ ~ ";" }
 // add posit command
 insert = { "+" ~ variable }
 recall = { variable }
-appearance = { "(" ~ (insert | recall) ~ "," ~ role ~ ")" } 
+appearance = { "(" ~ (insert | parameter | recall) ~ "," ~ role ~ ")" }
 appearance_set = { "{" ~ (appearance ~ ","?)+ ~ "}" }
 appearing_value = { parameter | constant | json | string | time | certainty | decimal | int }
 appearance_time = { parameter | constant | time }
@@ -72,7 +74,8 @@ add_constraint = { ^"add constraint" ~ insert? ~ ((string ~ constraint_class?) |
 constraint_cut = { ^"as of" ~ appearance_time }
 readiness = { ^"with readiness" ~ (parameter | recall) }
 audit_clause = { ^"record by" ~ (parameter | recall) }
-check_constraint = { ^"check constraint" ~ ((string ~ constraint_class? ~ constraint_cut?) | parameter | recall) ~ readiness? ~ audit_clause? ~ ";" }
+full_manifest = { ^"with full manifest" }
+check_constraint = { ^"check constraint" ~ ((string ~ constraint_class? ~ constraint_cut?) | parameter | recall) ~ readiness? ~ full_manifest? ~ audit_clause? ~ ";" }
 
 // search command
 wildcard = { "*" }
@@ -80,7 +83,7 @@ wildcard = { "*" }
 // evaluator still compiles against it. No public search production references it.
 recall_union = { recall ~ ("|" ~ recall)+ }
 query_union = { query_variable ~ ("|" ~ query_variable)+ }
-appearance_search = { "(" ~ (wildcard | query_union | query_variable) ~ "," ~ (wildcard | query_variable | role) ~ ")" }
+appearance_search = { "(" ~ (wildcard | parameter | query_union | query_variable) ~ "," ~ (wildcard | query_variable | role) ~ ")" }
 ellipsis = { "..." }
 appearance_list = { (appearance_search ~ ("," ~ appearance_search)* ~ ("," ~ ellipsis)?) | ellipsis }
 appearance_set_binding = { query_variable ~ "=" }

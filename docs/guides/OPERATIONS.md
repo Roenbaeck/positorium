@@ -150,12 +150,14 @@ are retained.
 ## Release artifacts
 
 Tags matching `vMAJOR.MINOR.PATCH` (including prerelease suffixes) build stable
-Rust binaries for Linux x86-64, macOS Apple Silicon, and Windows x86-64. GitHub
+Rust binaries for Linux x86-64, Linux ARM64, macOS Apple Silicon, and Windows x86-64. GitHub
 Releases contain generated change notes, an archive per platform, and a SHA-256
 file for each archive. Each archive contains the two native binaries, the
 default configuration, its empty Traqula startup script, licenses, and this
-documentation tree. CI starts and queries the exact archive before publishing
-it. Verify the checksum before unpacking.
+documentation tree. CI starts and queries the archived server. On Unix it also
+backs up the resulting store and inspects the backup using the archived
+`positorium-store` binary. The CI run for a pull request or the default branch
+also provides the `positorium-linux-aarch64` artifact with its checksum.
 
 The modeling and maintenance recipes in [COOKBOOK.md](COOKBOOK.md) complement
 these procedures; normative transfer details remain in

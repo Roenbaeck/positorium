@@ -71,9 +71,9 @@ pub use terrain::{
     TerrainRoleRef, TerrainRoleSupport, TerrainRoleTotal, TerrainScope,
 };
 pub use traqula::{
-    CONSTRAINT_VERSION, CancellationToken, CollectedResult, CollectedResultSet, Engine,
-    ExecutionMetadata, ExecutionOptions, ExecutionParameter, ExecutionWarning,
-    MultiStreamCallbacks, PlanAccess, PlanBinding, PlanCutoff, PlanDomain, PlanNode, PlanOperator,
-    PlanOrder, QUERY_PLAN_VERSION, QueryLimits, QueryPlan, ResultCell, ResultCellKind, RowSink,
-    SinkFlow, TRAQULA_VERSION,
+    CONSTRAINT_REPORT_VERSION, CONSTRAINT_VERSION, CancellationToken, CollectedResult,
+    CollectedResultSet, Engine, ExecutionMetadata, ExecutionOptions, ExecutionParameter,
+    ExecutionWarning, MultiStreamCallbacks, PlanAccess, PlanBinding, PlanCutoff, PlanDomain,
+    PlanNode, PlanOperator, PlanOrder, QUERY_PLAN_VERSION, QueryLimits, QueryPlan, ResultCell,
+    ResultCellKind, RowSink, SinkFlow, TRAQULA_VERSION,
 };

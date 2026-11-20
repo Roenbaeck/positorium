@@ -71,7 +71,7 @@ pub(crate) fn format_uuid(uuid: [u8; 16]) -> String {
 }
 
 mod read_view;
-pub(crate) use read_view::{ReadView, ScriptView};
+pub(crate) use read_view::{ReadView, ScriptView, SetPosting};
 
 /// Internal heterogeneous map keyed by `TypeId` used for storing per-value
 /// type bimap indices for posits.
@@ -142,10 +142,11 @@ pub(crate) struct CreatedLiteralPosits {
     pub assertions: Vec<Arc<Posit<LiteralValue>>>,
 }
 
-#[derive(Debug)]
-enum PendingLiteralSource {
-    Existing(Arc<Posit<LiteralValue>>),
-    New(usize),
+/// Canonical identities for an uncommitted command, in first-occurrence order.
+#[derive(Default)]
+pub(crate) struct StagedPosits {
+    prepared: Vec<Arc<Posit<LiteralValue>>>,
+    positions: HashMap<Arc<Posit<LiteralValue>>, usize, OtherHasher>,
 }
 
 pub type ThingHasher = BuildHasherDefault<SeaHasher>;
@@ -1165,25 +1166,27 @@ impl Database {
         }
         Ok((kept_posit, previously_kept))
     }
-    /// Create target posits and assertion envelopes in one persistence batch.
-    ///
-    /// Assertions refer to target list positions rather than provisional Thing
-    /// identities, allowing an already-canonical target posit to be reused
-    /// without sacrificing atomicity.
-    pub(crate) fn create_literal_posits_with_assertions(
+    pub(crate) fn stage_asserted(
         &self,
-        view: &mut ReadView,
-        targets: Vec<(Arc<AppearanceSet>, LiteralValue, Time)>,
+        batch: &mut StagedPosits,
+        targets: Vec<LiteralPositSpec>,
+        previous_targets: &[Arc<Posit<LiteralValue>>],
         assertions: Vec<LiteralAssertionSpec>,
     ) -> Result<CreatedLiteralPosits, DatabaseError> {
+        let targets = self.stage_literal_posits(batch, targets)?;
+        let assertion_targets = if previous_targets.is_empty() {
+            &targets
+        } else {
+            previous_targets
+        };
         if let Some(spec) = assertions
             .iter()
-            .find(|spec| spec.target_index >= targets.len())
+            .find(|spec| spec.target_index >= assertion_targets.len())
         {
             return Err(DatabaseError::Invariant(format!(
                 "assertion target index {} is outside {} targets",
                 spec.target_index,
-                targets.len()
+                assertion_targets.len()
             )));
         }
         if let Some(spec) = assertions
@@ -1196,32 +1199,40 @@ impl Database {
             )));
         }
 
-        self.create_literal_batch(view, Vec::new(), targets, |staged_targets| {
-            let (posit_role, ascertains_role) = {
-                let keeper = self
-                    .role_keeper
-                    .lock()
-                    .map_err(|error| DatabaseError::Lock(error.to_string()))?;
-                let posit = keeper.lookup(&POSIT_ROLE_ID).ok_or_else(|| {
-                    DatabaseError::Invariant("built-in posit role is missing".into())
-                })?;
-                let ascertains = keeper.lookup(&ASCERTAINS_ROLE_ID).ok_or_else(|| {
-                    DatabaseError::Invariant("built-in ascertains role is missing".into())
-                })?;
-                (posit, ascertains)
-            };
-            let mut assertion_posits = Vec::with_capacity(assertions.len());
-            for spec in assertions {
-                let target = staged_targets.get(spec.target_index).ok_or_else(|| {
-                    DatabaseError::Invariant("validated assertion target disappeared".into())
-                })?;
-                let appearance_set = AppearanceSet::checked(vec![
-                    Arc::new(Appearance::new(target.posit(), Arc::clone(&posit_role))),
-                    Arc::new(Appearance::new(spec.positor, Arc::clone(&ascertains_role))),
-                ])?;
-                assertion_posits.push((appearance_set, spec.certainty, spec.time));
-            }
-            Ok(assertion_posits)
+        if assertions.is_empty() {
+            return Ok(CreatedLiteralPosits {
+                targets,
+                assertions: Vec::new(),
+            });
+        }
+        let (posit_role, ascertains_role) = {
+            let keeper = self
+                .role_keeper
+                .lock()
+                .map_err(|error| DatabaseError::Lock(error.to_string()))?;
+            let posit = keeper
+                .lookup(&POSIT_ROLE_ID)
+                .ok_or_else(|| DatabaseError::Invariant("built-in posit role is missing".into()))?;
+            let ascertains = keeper.lookup(&ASCERTAINS_ROLE_ID).ok_or_else(|| {
+                DatabaseError::Invariant("built-in ascertains role is missing".into())
+            })?;
+            (posit, ascertains)
+        };
+        let mut assertion_posits = Vec::with_capacity(assertions.len());
+        for spec in assertions {
+            let target = assertion_targets.get(spec.target_index).ok_or_else(|| {
+                DatabaseError::Invariant("validated assertion target disappeared".into())
+            })?;
+            let appearance_set = AppearanceSet::checked(vec![
+                Arc::new(Appearance::new(target.posit(), Arc::clone(&posit_role))),
+                Arc::new(Appearance::new(spec.positor, Arc::clone(&ascertains_role))),
+            ])?;
+            assertion_posits.push((appearance_set, spec.certainty, spec.time));
+        }
+        let assertions = self.stage_literal_posits(batch, assertion_posits)?;
+        Ok(CreatedLiteralPosits {
+            targets,
+            assertions,
         })
     }
 
@@ -1236,18 +1247,27 @@ impl Database {
             &[Arc<Posit<LiteralValue>>],
         ) -> Result<Vec<LiteralPositSpec>, DatabaseError>,
     ) -> Result<CreatedLiteralPosits, DatabaseError> {
-        let mut prepared: Vec<Arc<Posit<LiteralValue>>> = Vec::new();
-        let mut positions = HashMap::default();
-        let target_sources = self.stage_literal_posits(targets, &mut prepared, &mut positions)?;
-        let staged_targets = Self::resolve_pending_literal_sources(&target_sources, &prepared);
+        let mut batch = StagedPosits::default();
+        let targets = self.stage_literal_posits(&mut batch, targets)?;
+        let assertions = self.stage_literal_posits(&mut batch, dependents(&targets)?)?;
+        self.publish_staged(view, roles, batch)?;
+        Ok(CreatedLiteralPosits {
+            targets,
+            assertions,
+        })
+    }
 
-        let assertion_posits = dependents(&staged_targets)?;
-        let assertion_sources =
-            self.stage_literal_posits(assertion_posits, &mut prepared, &mut positions)?;
-
-        drop(staged_targets);
+    pub(crate) fn publish_staged(
+        &self,
+        view: &mut ReadView,
+        roles: Vec<Role>,
+        batch: StagedPosits,
+    ) -> Result<(), DatabaseError> {
+        let StagedPosits {
+            prepared,
+            positions,
+        } = batch;
         drop(positions);
-
         #[cfg(feature = "persistence")]
         if !prepared.is_empty() || !roles.is_empty() {
             let mut records: Vec<_> = roles.iter().map(role_record).collect();
@@ -1276,27 +1296,22 @@ impl Database {
         for role in roles {
             self.keep_role(view, role)?;
         }
-        let kept: Vec<Arc<Posit<LiteralValue>>> = prepared
-            .into_iter()
-            .map(|posit| {
-                let (posit, existed) = self.keep_posit_arc(view, posit)?;
-                debug_assert!(!existed);
-                Ok(posit)
-            })
-            .collect::<Result<Vec<_>, DatabaseError>>()?;
-        Ok(CreatedLiteralPosits {
-            targets: Self::resolve_pending_literal_sources(&target_sources, &kept),
-            assertions: Self::resolve_pending_literal_sources(&assertion_sources, &kept),
-        })
+        for posit in prepared {
+            let (_, existed) = self.keep_posit_arc(view, posit)?;
+            debug_assert!(!existed);
+        }
+        Ok(())
     }
 
     fn stage_literal_posits(
         &self,
-        posits: Vec<(Arc<AppearanceSet>, LiteralValue, Time)>,
-        prepared: &mut Vec<Arc<Posit<LiteralValue>>>,
-        positions: &mut HashMap<Arc<Posit<LiteralValue>>, usize, OtherHasher>,
-    ) -> Result<Vec<PendingLiteralSource>, DatabaseError> {
+        batch: &mut StagedPosits,
+        posits: Vec<LiteralPositSpec>,
+    ) -> Result<Vec<Arc<Posit<LiteralValue>>>, DatabaseError> {
         let mut sources = Vec::with_capacity(posits.len());
+        if posits.is_empty() {
+            return Ok(sources);
+        }
         let mut generator = self
             .thing_generator
             .lock()
@@ -1308,30 +1323,20 @@ impl Database {
         for (appearance_set, value, time) in posits {
             let candidate = Arc::new(Posit::new(generator.reserve(), appearance_set, value, time));
             if let Some(existing) = keeper.existing(&candidate) {
-                sources.push(PendingLiteralSource::Existing(existing));
+                sources.push(existing);
             } else {
-                let index = positions.entry(Arc::clone(&candidate)).or_insert_with(|| {
-                    let index = prepared.len();
-                    prepared.push(candidate);
-                    index
-                });
-                sources.push(PendingLiteralSource::New(*index));
+                let index = batch
+                    .positions
+                    .entry(Arc::clone(&candidate))
+                    .or_insert_with(|| {
+                        let index = batch.prepared.len();
+                        batch.prepared.push(candidate);
+                        index
+                    });
+                sources.push(Arc::clone(&batch.prepared[*index]));
             }
         }
         Ok(sources)
-    }
-
-    fn resolve_pending_literal_sources(
-        sources: &[PendingLiteralSource],
-        prepared_or_kept: &[Arc<Posit<LiteralValue>>],
-    ) -> Vec<Arc<Posit<LiteralValue>>> {
-        sources
-            .iter()
-            .map(|source| match source {
-                PendingLiteralSource::Existing(posit) => Arc::clone(posit),
-                PendingLiteralSource::New(index) => Arc::clone(&prepared_or_kept[*index]),
-            })
-            .collect()
     }
 }
 

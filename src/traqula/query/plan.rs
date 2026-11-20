@@ -184,6 +184,7 @@ pub(super) struct PlannedPattern {
 }
 
 pub(super) struct PlannedBranch {
+    pub anchors: Binding,
     pub filters: Vec<Predicate>,
     pub patterns: Vec<PlannedPattern>,
     domains: HashMap<String, Domain>,
@@ -211,27 +212,58 @@ pub(super) fn compile(
     execution.check()?;
     let PreparedQuery { query, domains } = prepared;
     let materialization_reason = materialization_reason(&query, &domains);
+    let mut not_exists = Vec::new();
+    let mut absence_checks_are_total = true;
+    for (index, block) in query.not_exists.into_iter().enumerate() {
+        let mut local_domains = domains.clone();
+        for pattern in &block.patterns {
+            register_pattern(pattern, &mut local_domains)?;
+        }
+        let total = total_before_filter(
+            view,
+            block.patterns.iter(),
+            &block.predicates,
+            &local_domains,
+        );
+        absence_checks_are_total &= total;
+        let anchors = if total {
+            identity_anchors(&block.predicates, &local_domains)
+        } else {
+            Binding::default()
+        };
+        let mut plan = compile_branch(
+            view,
+            block.patterns,
+            domains.clone(),
+            anchors,
+            format!("not_exists_{}", index + 1),
+            execution,
+        )?;
+        plan.filters = block.predicates;
+        not_exists.push(plan);
+    }
+    let mut anchors = identity_anchors(&query.predicates, &domains);
+    if !anchors.0.is_empty()
+        && (!absence_checks_are_total
+            || !total_before_filter(
+                view,
+                query.branches.iter().flatten(),
+                &query.predicates,
+                &domains,
+            ))
+    {
+        anchors = Binding::default();
+    }
     let mut branches = Vec::new();
     for (index, patterns) in query.branches.into_iter().enumerate() {
         branches.push(compile_branch(
             view,
             patterns,
             HashMap::new(),
+            anchors.clone(),
             format!("branch_{}", index + 1),
             execution,
         )?);
-    }
-    let mut not_exists = Vec::new();
-    for (index, block) in query.not_exists.into_iter().enumerate() {
-        let mut plan = compile_branch(
-            view,
-            block.patterns,
-            domains.clone(),
-            format!("not_exists_{}", index + 1),
-            execution,
-        )?;
-        plan.filters = block.predicates;
-        not_exists.push(plan);
     }
     if materialization_reason.is_none() {
         for branch in &mut branches {
@@ -306,15 +338,64 @@ fn materialization_reason(query: &Query, domains: &HashMap<String, Domain>) -> O
     Some(reason.to_string())
 }
 
+// Moving a WHERE comparison before candidates, effect resolution or other
+// filters must preserve errors the complete evaluation could have reported.
+fn total_before_filter<'a>(
+    view: &ReadView,
+    mut patterns: impl Iterator<Item = &'a PositPattern>,
+    predicates: &[Predicate],
+    domains: &HashMap<String, Domain>,
+) -> bool {
+    patterns.all(|pattern| {
+        pattern.effect.is_none()
+            && match &pattern.value {
+                ValueSlot::Literal(value) => literal_comparison_is_total(view, pattern, value),
+                _ => true,
+            }
+    }) && predicates.iter().all(|predicate| {
+        matches!(predicate, Predicate::Comparison { left, operator, .. }
+        if domains[left] != Domain::Literal || operator == "===")
+    })
+}
+
+fn identity_anchors(predicates: &[Predicate], domains: &HashMap<String, Domain>) -> Binding {
+    let mut anchors = Binding::default();
+    for predicate in predicates {
+        if let Predicate::Comparison {
+            left,
+            operator,
+            right: Operand::Identity(BoundValue::Thing(id) | BoundValue::Posit(id)),
+        } = predicate
+            && matches!(operator.as_str(), "=" | "===" | "?=")
+        {
+            // The query slot controls the projected kind of a matching identity.
+            let value = if domains[left] == Domain::Posit {
+                BoundValue::Posit(*id)
+            } else {
+                BoundValue::Thing(*id)
+            };
+            anchors.0.entry(left.clone()).or_insert(value);
+        }
+    }
+    anchors
+}
+
 fn compile_branch(
     view: &ReadView,
     patterns: Vec<PositPattern>,
     mut domains: HashMap<String, Domain>,
+    anchors: Binding,
     scope: String,
     execution: &ExecutionContext,
 ) -> Result<PlannedBranch, DatabaseError> {
+    domains.extend(
+        anchors
+            .0
+            .iter()
+            .map(|(name, value)| (name.clone(), value.domain())),
+    );
     let initially_available = domains.keys().map(String::as_str).collect();
-    let ordered = plan_patterns(view, &patterns, &initially_available)?;
+    let ordered = plan_patterns(view, &patterns, &initially_available, &anchors)?;
     let mut planned = Vec::new();
     for pattern in ordered {
         execution.check()?;
@@ -324,7 +405,7 @@ fn compile_branch(
             .unwrap()
             + 1;
         let available = domains.keys().map(String::as_str).collect();
-        let access = access_path(pattern, &available);
+        let access = access_path(view, pattern, &available);
         let estimated_candidates = if pattern.effect.is_some() {
             [
                 crate::construct::POSIT_ROLE_ID,
@@ -335,7 +416,7 @@ fn compile_branch(
             .min()
             .unwrap_or(0)
         } else {
-            let estimate = estimated_candidate_count(view, pattern);
+            let estimate = estimated_candidate_count(view, pattern, &anchors);
             if estimate == u64::MAX {
                 view.posit_count() as u64
             } else {
@@ -353,6 +434,7 @@ fn compile_branch(
         register_pattern(pattern, &mut domains)?;
     }
     Ok(PlannedBranch {
+        anchors,
         filters: Vec::new(),
         patterns: planned,
         domains,
@@ -360,7 +442,7 @@ fn compile_branch(
     })
 }
 
-fn access_path(pattern: &PositPattern, available: &HashSet<&str>) -> PlanAccess {
+fn access_path(view: &ReadView, pattern: &PositPattern, available: &HashSet<&str>) -> PlanAccess {
     if pattern.effect.is_some() {
         return PlanAccess::EffectiveSlice;
     }
@@ -392,14 +474,22 @@ fn access_path(pattern: &PositPattern, available: &HashSet<&str>) -> PlanAccess 
                     add(name);
                 }
             }
-            ThingSlot::Wildcard => {}
+            ThingSlot::Identity(_) | ThingSlot::Wildcard => {}
         }
     }
     roles.sort();
     roles.dedup();
     bindings.sort();
     bindings.dedup();
-    if roles.is_empty() && bindings.is_empty() {
+    if roles.is_empty()
+        && bindings.is_empty()
+        && indexed_literal(view, pattern).is_none()
+        && !pattern
+            .appearances
+            .members
+            .iter()
+            .any(|m| matches!(m.thing, ThingSlot::Identity(_)))
+    {
         PlanAccess::FullScan
     } else {
         PlanAccess::Bitmap { roles, bindings }
@@ -449,6 +539,7 @@ fn appearances(pattern: &AppearanceSetPattern) -> String {
         .map(|member| {
             let thing = match &member.thing {
                 ThingSlot::Wildcard => "*".into(),
+                ThingSlot::Identity(id) => id.to_string(),
                 ThingSlot::Variable(name) | ThingSlot::LegacyVariable(name) => format!("?{name}"),
                 ThingSlot::OneOf(names) => names
                     .iter()

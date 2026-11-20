@@ -58,7 +58,7 @@
         },
         {
           "name": "keyword.control.traqula",
-          "match": "\\b(check|constraint|readiness|record|violations|unresolved|evidence|permits|forbids)\\b"
+          "match": "\\b(check|constraint|readiness|record|violations|unresolved|evidence|permits|forbids|strict|mutations|full|manifest)\\b"
         },
         {
           "name": "support.function.traqula",

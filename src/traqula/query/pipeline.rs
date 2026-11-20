@@ -85,7 +85,7 @@ pub(super) fn execute(
     };
     for branch in &query.branches {
         if let SinkFlow::Stop =
-            visit_branch(view, branch, 0, &Binding::default(), execution, &mut emit)?
+            visit_branch(view, branch, 0, &branch.anchors, execution, &mut emit)?
         {
             break;
         }

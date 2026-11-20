@@ -233,7 +233,7 @@ fn ordinary_posits_discovery_pins_and_explicit_audits() {
     let audited = e
         .execute_collect_multi_with_options(
             r#"add posit [{(+reviewer,name)},"Reviewer",@NOW];
-        check constraint $rev record by reviewer;"#,
+        check constraint $rev with full manifest record by reviewer;"#,
             opts.clone(),
         )
         .unwrap();

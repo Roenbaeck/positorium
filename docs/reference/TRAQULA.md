@@ -59,8 +59,8 @@ Mutation variables are scoped to the script being executed:
 
 ```traqula
 add role name;
-add posit +p [{(+person, name)}, "Alice", @NOW];
-add posit [{(p, posit), (person, ascertains)}, 100%, @NOW];
+add posit +p [{(+person, name)}, "Alice", @NOW],
+          [{(p, posit), (person, ascertains)}, 100%, @NOW];
 ```
 
 Each `add role` or `add posit` command commits atomically. Earlier successful
@@ -78,7 +78,9 @@ concurrently. Each script expands its own bindings, appearance sets, and
 assertions using private identities. At commit, one writer resolves roles and
 identities against the current store and applies the commands in script order.
 An assertion points to the canonical identity of its target, including when a
-proposition occurs several times in the script.
+proposition occurs several times in the script. A command that references
+its own earlier Posit bindings stages them under the writer lock, where it
+can resolve an existing proposition to its canonical identity.
 
 A standalone `search ... or add posit ...` starts on a published view. A hit
 can finish while a writer is active. On a miss the command acquires the writer
@@ -114,6 +116,15 @@ durable batch. If the target proposition already exists, its canonical posit
 identity is reused. If the source binding contains several Things, one
 assertion posit is generated for every target/source combination.
 
+A later addition in the same command can also reference the generated assertion.
+For example, this stores the claim, assertion and meta-assertion in one commit.
+
+```traqula
+add posit +claim [{(+case, status)}, "open", @NOW]
+            and assert +evidence by +registry with 75% at @NOW,
+          [{(evidence, posit), (+reviewer, ascertains)}, 90%, @NOW];
+```
+
 ### Searching or adding
 
 `search ... or add posit ...` resolves durable identities without giving
@@ -136,6 +147,26 @@ script mutation binding: here `?registry` or `+registry` both establish
 `registry` for subsequent additions. Multiple matches remain a set and later
 posit construction fans out over that set. Cardinality aggregation and
 conditions on aggregates are deliberately deferred.
+
+Start a script with `strict mutations;` to reject a write that consumes a
+promoted binding holding several identities. A lookup may still return many
+rows. The guard runs when a later addition uses the binding, including inside a
+fallback or as an assertion source. Earlier successful commands stay committed.
+
+A second search introduces fresh `?` variables even if a previous command
+promoted the same name. To find turn 5 of a particular session, join the key
+and turn in one search, or supply the session as a typed parameter.
+
+```traqula
+strict mutations;
+search [{(?t, turn), ($s, session)}, 5, *]
+or add posit [{(+t, turn), ($s, session)}, 5, @NOW];
+add posit [{(+i, cited_item), (t, cited_turn)}, "quote", @NOW];
+```
+
+A lookup using `{(?e, epoch)}` matches a unary appearance set. To accept
+an epoch with additional roles, use `{(?e, epoch), ...}`. Include the
+session appearance if the epoch lookup is scoped to one session.
 
 The writer confirms absence against the current store and holds the lock
 through the fallback. When the fallback supplies a match for the missing key,
@@ -299,12 +330,17 @@ checker supplies `$constraint_revision` and `$constraint_policy` in the saved
 searches. Other parameters come from the check invocation.
 
 A check returns one row with `policy`, `revision`, `store` and `report`. The
-last cell contains a JSON object. Report version 1 includes the verdict,
+last cell contains a JSON object. Report version 2 includes the verdict,
 per-finding subject, expected condition, observed cells, witnesses, and any
 supporting evidence. It also includes the selected policy cutoff, revision time,
-definition schema, resolved parameters and clock, and a sorted manifest of the
-store's Posit identities. The source and manifest carry SeaHash fingerprints.
-The full manifest and the identities read during the checks are separate fields.
+definition schema, resolved parameters and clock. `snapshot.count` counts all
+Posits in the checked store view. `snapshot.digest` is the same SeaHash of the
+sorted, little-endian Posit identities as in version 1. `read_posits` lists the
+identities consulted by this check, and `source_digest` fingerprints its source.
+To include the complete sorted list in `snapshot.posits`, write
+`check constraint "policy" with full manifest;`. Put `with full manifest` after
+any `with readiness` clause and before `record by`. An audit describes the view
+immediately before its own record was added.
 
 | Evidence | Verdict |
 | --- | --- |
@@ -402,8 +438,7 @@ Ask which layer the query is intended to read:
 - `in effect T, t` asks which source assertions are effective at an
   assertion-time cut `T` about target states at an appearance-time cut `t`. It
   reads assertion-backed evidence, preserves source-local alternatives, and
-  applies retractions. This dual-cut operator is part of the unreleased
-  Traqula 1 grammar.
+  applies retractions. Both operators are available in Traqula 1.
 
 The target pattern can look identical because the operators answer different
 questions:
@@ -540,7 +575,11 @@ tree under `root`. Each node describes its operation, typed `bindings`, and
 or bitmap access, candidate estimates, temporal reduction and field-filter
 placement, effective-evidence cuts, projection, ordering, and limits. Candidate
 estimates come from catalog/index sizes and are upper bounds, not measured
-cardinalities after matching. A changed database may produce a different plan.
+cardinalities after matching. The planner considers literal-value postings,
+bound identities and role postings. It prefers a pattern connected to the
+bindings already available. A predicate such as `where ?s = $session` can
+supply the initial identity when filtering early preserves validation and
+temporal semantics. A changed database may produce a different plan.
 
 The plan's `incremental` flag reports whether scans, nested-loop joins, union,
 filters, absence checks, and projection pass rows directly to their consumers.
@@ -654,7 +693,11 @@ Parameters carry literal tokens, times, or store-qualified Thing and Posit
 references. Identity parameters use `{"kind":"posit","text":"<store UUID>/<decimal identity>"}`
 or the corresponding `thing` kind. They can select a constraint revision,
 policy, class, readiness declaration or evaluator and take part in identity
-comparisons. Python's `row.reference("revision")` constructs one from a save
+comparisons. Both kinds can occupy the Thing slot of a search or mutation,
+for example `search ?p = [{($s, session), ...}, *, *] return ?p;` or
+`add posit [{($s, session), (+i, item)}, "registered", @NOW];`.
+The store UUID is checked on entry. A write also checks that the referenced
+Thing or Posit exists. Python's `row.reference("revision")` constructs one from a save
 result. Parameter values are supplied independently of the source text.
 
 ```traqula

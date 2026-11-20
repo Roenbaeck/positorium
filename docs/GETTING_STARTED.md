@@ -24,10 +24,13 @@ Download the archive and matching `.sha256` file for your platform from
 | Platform | Archive label |
 | --- | --- |
 | Linux x86-64 | `linux-x86_64` |
+| Linux ARM64 | `linux-aarch64` |
 | macOS Apple Silicon | `macos-aarch64` |
 | Windows x86-64 | `windows-x86_64` |
 
-Verify the checksum before extracting it.
+For a Linux ARM64 build between releases, open the CI run for the default
+branch and download its `positorium-linux-aarch64` artifact. It contains the
+tarball and its checksum. Verify the checksum before extracting the tarball.
 
 macOS:
 

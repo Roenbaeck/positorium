@@ -9,7 +9,8 @@ SQLite prototype is deliberately excluded by D031.
 | Crate API | `0.3` | Cargo package version. A 0.x minor release may contain documented beta breaks |
 | Store | `1.0` | Manifest and every log-segment header; specified by [STORAGE.md](STORAGE.md) |
 | Traqula | `1` | Execution metadata, required HTTP request field, HTTP response, and WASM response |
-| Saved constraint | `1` | `CONSTRAINT_VERSION` in Rust, `constraint` in the definition schema, and `version` in the finding report |
+| Saved constraint | `1` | `CONSTRAINT_VERSION` in Rust, `constraint` in the definition schema |
+| Constraint report | `2` | `CONSTRAINT_REPORT_VERSION` in Rust and `version` in the finding report |
 | HTTP | `v1` | `/v1/query` and every buffered response |
 | SSE | `1` | `version` in every stream event |
 | WASM | `1` | `interface_version` in every returned JavaScript object |
