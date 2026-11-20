@@ -31,6 +31,34 @@ fn in_memory_mode_allows_basic_operations() {
 
 #[cfg(feature = "persistence")]
 #[test]
+fn embedded_api_reopens_the_original_os_path() {
+    let root = temporary_store_path("embedded-path");
+    #[cfg(target_os = "linux")]
+    let component = {
+        use std::os::unix::ffi::OsStrExt;
+        std::ffi::OsStr::from_bytes(b"store-\xff")
+    };
+    #[cfg(not(target_os = "linux"))]
+    let component = std::ffi::OsStr::new("Göteborg store");
+    let path = std::path::Path::new(&root).join(component);
+    let db = Database::open(&path).unwrap();
+    db.execute("add role amount; add posit [{(+o,amount)},+0010.00,@NOW];")
+        .unwrap();
+    let id = db.store_id().to_owned();
+    drop(db);
+    assert!(path.is_dir());
+    let db = Database::open(&path).unwrap();
+    assert_eq!(db.store_id(), id);
+    let query = db
+        .execute_one("search [{(*,amount)},?n,*] return ?n;")
+        .unwrap();
+    assert_eq!(query.cell(0, "n").unwrap().as_str(), "+0010.00");
+    drop(db);
+    remove_store(&root);
+}
+
+#[cfg(feature = "persistence")]
+#[test]
 fn concurrent_append_scripts_replay_canonical_targets_and_their_assertions() {
     use positorium::Engine;
     use std::sync::Barrier;

@@ -43,9 +43,8 @@
 //!     .unwrap();
 //! ```
 //!
-//! NOTE: The search functionality is still evolving; many captured variables
-//! are currently parsed but not yet materialized into final query outputs.
-//! Debug logging is gated behind `cfg(debug_assertions)` where appropriate.
+//! Use [`Database::execute`] for ordered result sets and [`Engine`] for
+//! streaming rows or inspecting a query plan.
 use crate::construct::{
     CreatedLiteralPosits, Database, LiteralAssertionSpec, OtherHasher, ReadView, ScriptView, Thing,
 };
@@ -961,6 +960,7 @@ mod query;
 
 pub use budget::QueryLimits;
 pub use constraint::CONSTRAINT_VERSION;
+mod embedded;
 
 pub use query::plan::{
     PlanAccess, PlanBinding, PlanCutoff, PlanDomain, PlanNode, PlanOperator, PlanOrder,
@@ -3635,9 +3635,26 @@ impl<'en> Engine<'en> {
         traqula: &str,
         options: ExecutionOptions,
     ) -> Result<Vec<CollectedResultSet>, DatabaseError> {
+        self.collect_result_sets(traqula, options, false)
+    }
+
+    fn collect_result_sets(
+        &self,
+        traqula: &str,
+        options: ExecutionOptions,
+        expect_one: bool,
+    ) -> Result<Vec<CollectedResultSet>, DatabaseError> {
         let execution = options.resolve(self.database.store_id())?;
         execution.check()?;
         let pairs = parse_script(traqula)?;
+        if expect_one {
+            let count = pairs.clone().filter(search_has_return).count();
+            if count != 1 {
+                return Err(DatabaseError::Execution(format!(
+                    "expected exactly one result set, found {count}"
+                )));
+            }
+        }
         if self.execute_appends(&pairs, &execution)? {
             return Ok(Vec::new());
         }

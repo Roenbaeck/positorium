@@ -12,8 +12,8 @@ It is an experimental embedded evidence database with an immutable posit model,
 the Traqula query language, an append-only native store, Python bindings, a
 trusted-local HTTP service, and an in-browser WASM testbed.
 
-The current version is `0.3.0-beta.5`. Read the
-[release notes](docs/releases/v0.3.0-beta.5.md). Tagged releases are available
+The Rust crate is at `0.3.1-beta.6`. Read the
+[release notes](https://github.com/Roenbaeck/positorium/blob/master/docs/releases/v0.3.1-beta.6.md). Tagged releases are available
 on the [releases page](https://github.com/Roenbaeck/positorium/releases).
 Beta means the documented language, storage, transfer, and interface versions
 have explicit compatibility rules; it does not mean an Internet-facing or
@@ -26,6 +26,35 @@ findings. [Saved constraints](docs/reference/TRAQULA.md#saved-constraints)
 [Run the 60-second browser example](https://roenbaeck.github.io/positorium/) ·
 [Get started](https://github.com/Roenbaeck/positorium/blob/master/docs/GETTING_STARTED.md) ·
 [Browse all documentation](https://github.com/Roenbaeck/positorium/blob/master/docs/README.md)
+
+## Rust
+
+Add the embedded database to your application with Cargo. The `persistence`
+feature enables both in-memory databases and on-disk stores.
+
+```sh
+cargo add positorium@=0.3.1-beta.6 --no-default-features --features persistence
+```
+
+```rust
+use positorium::{Database, ExecutionOptions, Result};
+
+fn main() -> Result<()> {
+    let db = Database::open("orders.store")?;
+    db.execute("add role order_number;")?;
+    let orders = db.execute_one_with_options(
+        "add posit [{(+order, order_number)}, $number, @NOW]; \
+         search [{(?order, order_number)}, $number, *] return ?order;",
+        ExecutionOptions::default().bind("number", "A-17"),
+    )?;
+    for row in orders.rows {
+        println!("Order Thing {}", row[0]);
+    }
+    Ok(())
+}
+```
+
+Use `Database::memory()?` for a temporary store. [Rust embedding guide](https://github.com/Roenbaeck/positorium/blob/master/docs/guides/RUST.md) · [Rust API](https://docs.rs/positorium/0.3.1-beta.6/positorium/)
 
 ## Python
 

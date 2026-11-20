@@ -714,6 +714,7 @@ impl PersistenceMode {
     }
 }
 
+/// An embedded database. Share it with `Arc<Database>` to use it from several threads.
 pub struct Database {
     store_id: String,
     pub(crate) execution_owner: Mutex<()>,
@@ -737,17 +738,38 @@ pub struct Database {
 }
 
 impl Database {
+    /// Create a database whose contents live until it is dropped.
+    pub fn memory() -> Result<Self, DatabaseError> {
+        Self::initialize(None)
+    }
+
+    /// Open or create an append-only store directory. The handle holds its writer lock
+    /// until dropped. Each successful mutation command commits its own changes.
+    #[cfg(feature = "persistence")]
+    pub fn open(path: impl AsRef<std::path::Path>) -> Result<Self, DatabaseError> {
+        Self::initialize(Some(path.as_ref()))
+    }
+
+    /// Construct a database from an explicit persistence mode.
     pub fn new(mode: PersistenceMode) -> Result<Database, DatabaseError> {
+        match mode {
+            PersistenceMode::InMemory => Self::memory(),
+            #[cfg(feature = "persistence")]
+            PersistenceMode::File(path) => Self::open(path),
+        }
+    }
+
+    fn initialize(path: Option<&std::path::Path>) -> Result<Self, DatabaseError> {
         #[cfg(feature = "persistence")]
-        let (store, replayed) = match mode {
-            PersistenceMode::InMemory => (None, None),
-            PersistenceMode::File(path) => {
-                let (store, replayed) = LogStore::open_replayed(&path)?;
+        let (store, replayed) = match path {
+            None => (None, None),
+            Some(path) => {
+                let (store, replayed) = LogStore::open_replayed(path)?;
                 (Some(store), Some(replayed))
             }
         };
         #[cfg(not(feature = "persistence"))]
-        let _ = mode;
+        let _ = path;
         // Create all the stuff that goes into a database engine
         let thing_generator = ThingGenerator::new();
         let role_keeper = RoleKeeper::new();

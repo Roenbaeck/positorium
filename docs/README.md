@@ -9,6 +9,7 @@ contracts that define compatibility and the design record used by maintainers.
 | Document | Use it for |
 | --- | --- |
 | [Getting started](GETTING_STARTED.md) | Install, run, query, restart, troubleshoot, and report beta feedback |
+| [Rust](guides/RUST.md) | Embed the crate, open a store, bind application data and read query results |
 | [Python](guides/PYTHON.md) | Install the native package, embed a database, bind typed parameters, and consume lossless results |
 | [The Blackthorn Ruby](guides/BLACKTHORN_CASE.md) | Run an interactive detective story showcasing contradictions, retractions, classifications, and Terrain |
 | [Operations](guides/OPERATIONS.md) | Configuration, durability, backup, restore, failure handling, and resource limits |
@@ -40,6 +41,7 @@ contracts that define compatibility and the design record used by maintainers.
 
 ## Releases
 
+- [0.3.1-beta.6 notes](releases/v0.3.1-beta.6.md)
 - [0.3.0-beta.5 notes](releases/v0.3.0-beta.5.md)
 - [0.2.1-beta.4 notes](releases/v0.2.1-beta.4.md)
 - [0.2.0-beta.3 notes](releases/v0.2.0-beta.3.md)
