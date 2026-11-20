@@ -1006,7 +1006,7 @@ checksum = "05c8b63e8d9609db387f0324918f81d68fe27748f084ef092fb35954d0539a85"
 
 [[package]]
 name = "positorium"
-version = "0.3.2-beta.7"
+version = "0.3.3-beta.8"
 dependencies = [
  "axum",
  "bigdecimal",

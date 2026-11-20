@@ -12,8 +12,8 @@ It is an experimental embedded evidence database with an immutable posit model,
 the Traqula query language, an append-only native store, Python bindings, a
 trusted-local HTTP service, and an in-browser WASM testbed.
 
-The Rust crate is at `0.3.2-beta.7`. Read the
-[release notes](https://github.com/Roenbaeck/positorium/blob/master/docs/releases/v0.3.2-beta.7.md). Tagged releases are available
+The Rust crate is at `0.3.3-beta.8`. Read the
+[release notes](https://github.com/Roenbaeck/positorium/blob/master/docs/releases/v0.3.3-beta.8.md). Tagged releases are available
 on the [releases page](https://github.com/Roenbaeck/positorium/releases).
 Beta means the documented language, storage, transfer, and interface versions
 have explicit compatibility rules; it does not mean an Internet-facing or
@@ -33,7 +33,7 @@ Add the embedded database to your application with Cargo. The `persistence`
 feature enables both in-memory databases and on-disk stores.
 
 ```sh
-cargo add positorium@=0.3.2-beta.7 --no-default-features --features persistence
+cargo add positorium@=0.3.3-beta.8 --no-default-features --features persistence
 ```
 
 ```rust
@@ -54,7 +54,7 @@ fn main() -> Result<()> {
 }
 ```
 
-Use `Database::memory()?` for a temporary store. [Rust embedding guide](https://github.com/Roenbaeck/positorium/blob/master/docs/guides/RUST.md) · [Rust API](https://docs.rs/positorium/0.3.2-beta.7/positorium/)
+Use `Database::memory()?` for a temporary store. [Rust embedding guide](https://github.com/Roenbaeck/positorium/blob/master/docs/guides/RUST.md) · [Rust API](https://docs.rs/positorium/0.3.3-beta.8/positorium/)
 
 ## Python
 

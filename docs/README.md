@@ -41,6 +41,7 @@ contracts that define compatibility and the design record used by maintainers.
 
 ## Releases
 
+- [0.3.3-beta.8 notes](releases/v0.3.3-beta.8.md)
 - [0.3.2-beta.7 notes](releases/v0.3.2-beta.7.md)
 - [0.3.1-beta.6 notes](releases/v0.3.1-beta.6.md)
 - [0.3.0-beta.5 notes](releases/v0.3.0-beta.5.md)
