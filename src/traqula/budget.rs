@@ -18,7 +18,7 @@ pub struct QueryLimits {
     pub max_memory_bytes: Option<u64>,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct QueryBudget(Option<Rc<State>>);
 
 struct State {

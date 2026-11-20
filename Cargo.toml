@@ -1,6 +1,6 @@
 [package]
 name = "positorium"
-version = "0.2.1-beta.4"
+version = "0.3.0-beta.5"
 edition = "2024"
 authors = ["Lars Rönnbäck <lars@positorium.com>"]
 license = "MIT OR Apache-2.0"
@@ -16,6 +16,8 @@ crate-type = ["cdylib", "rlib"]
 default = ["server", "persistence", "cli"]
 server = ["tokio", "axum", "tokio-stream", "futures-util", "tower-http"]
 persistence = ["getrandom"]
+# Compatibility with the optional dependency feature in earlier betas.
+getrandom = []
 cli = ["config"]
 wasm = ["wasm-bindgen", "serde-wasm-bindgen", "getrandom/wasm_js"]
 python = ["dep:pyo3", "persistence"]
@@ -41,7 +43,7 @@ tracing-subscriber = { version = "0.3.20", features = ["fmt", "env-filter"] }
 unicode-normalization = "0.1"
 wasm-bindgen = { version = "0.2.100", optional = true }
 serde-wasm-bindgen = { version = "0.6", optional = true }
-getrandom = { version = "0.4", optional = true }
+getrandom = "0.4"
 pyo3 = { version = "0.29.2", features = ["abi3-py39"], optional = true }
 
 # Optional dependencies for features

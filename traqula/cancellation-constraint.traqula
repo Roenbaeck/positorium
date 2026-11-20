@@ -1,0 +1,109 @@
+/* Each completed action identifies the request, order and policy revision.
+   The order register records the placement time. Source assertions identify
+   the destination at placement, cancellations, decisions and delegations.
+   The policy gives the inclusive ordinary window for each destination. */
+add constraint "Cancellation windows" {
+  unresolved "The completed cancellation needs a recorded order date" {
+    search ?action = [{(?req, request), (?order, subject), (?rev, policy), ...}, "cancelled", ?at]
+        in effect $known_at, $action_cut via ?report = [{(?action, posit), (*, ascertains)}, ?support, *]
+    not exists { ?placement = [{(?order, subject)}, "placed", ?day] as of ?at }
+    where ?rev = $constraint_revision and ?support > 0%
+    return ?action, ?req, ?report;
+  }
+
+  unresolved "The ordinary period needs a destination and a country window" {
+    search ?action = [{(?req, request), (?order, subject), (?rev, policy), ...}, "cancelled", ?at]
+        in effect $known_at, $action_cut via ?report = [{(?action, posit), (*, ascertains)}, ?support, *],
+        ?placement = [{(?order, subject)}, "placed", ?day] as of ?at
+    not exists { ?destination = [{(?order, subject), (?country, destination)}, "at placement", *]
+        in effect $known_at, ?day via ?origin = [{(?destination, posit), (*, ascertains)}, ?trust, *],
+        ?window = [{(?country, destination), (?rev, policy)}, ?days, *] as of ?day where ?trust > 0% }
+    where ?rev = $constraint_revision and ?support > 0% and min_days_between(?day, ?at) <= 30
+    return ?action, ?req, ?report, ?placement;
+  }
+
+  permits "The destination permits cancellation within the ordinary window" {
+    search ?action = [{(?req, request), (?order, subject), (?rev, policy), ...}, "cancelled", ?at]
+        in effect $known_at, $action_cut via ?report = [{(?action, posit), (*, ascertains)}, ?support, *],
+        ?placement = [{(?order, subject)}, "placed", ?day] as of ?at,
+        ?destination = [{(?order, subject), (?country, destination)}, "at placement", *]
+        in effect $known_at, ?day via ?origin = [{(?destination, posit), (*, ascertains)}, ?trust, *],
+        ?window = [{(?country, destination), (?rev, policy)}, ?days, *] as of ?day
+    where ?rev = $constraint_revision and ?support > 0% and ?trust > 0% and min_days_between(?day, ?at) <= ?days
+    return ?action, ?req, ?report, ?placement, ?destination, ?origin, ?window, ?days;
+  }
+
+  forbids "The ordinary window has expired and discretionary review begins after day 30" {
+    search ?action = [{(?req, request), (?order, subject), (?rev, policy), ...}, "cancelled", ?at]
+        in effect $known_at, $action_cut via ?report = [{(?action, posit), (*, ascertains)}, ?support, *],
+        ?placement = [{(?order, subject)}, "placed", ?day] as of ?at,
+        ?destination = [{(?order, subject), (?country, destination)}, "at placement", *]
+        in effect $known_at, ?day via ?origin = [{(?destination, posit), (*, ascertains)}, ?trust, *],
+        ?window = [{(?country, destination), (?rev, policy)}, ?days, *] as of ?day
+    where ?rev = $constraint_revision and ?support > 0% and ?trust > 0% and ?days < 30 and max_days_between(?day, ?at) > ?days and min_days_between(?day, ?at) <= 30
+    return ?action, ?req, ?report, ?placement, ?destination, ?origin, ?window, ?days;
+  }
+
+  unresolved "A reported destination needs a policy window" {
+    search ?action = [{(?req, request), (?order, subject), (?rev, policy), ...}, "cancelled", ?at]
+        in effect $known_at, $action_cut via ?report = [{(?action, posit), (*, ascertains)}, ?support, *],
+        ?placement = [{(?order, subject)}, "placed", ?day] as of ?at,
+        ?destination = [{(?order, subject), (?country, destination)}, "at placement", *]
+        in effect $known_at, ?day via ?origin = [{(?destination, posit), (*, ascertains)}, ?trust, *]
+    not exists { [{(?country, destination), (?rev, policy)}, *, *] as of ?day }
+    where ?rev = $constraint_revision and ?support > 0% and ?trust > 0% and min_days_between(?day, ?at) <= 30
+    return ?action, ?req, ?report, ?placement, ?destination, ?origin;
+  }
+
+  forbids "After day 30 the action must cite a timely approval from an authorized agent" {
+    search ?action = [{(?req, request), (?order, subject), (?rev, policy), ...}, "cancelled", ?at]
+        in effect $known_at, $action_cut via ?report = [{(?action, posit), (*, ascertains)}, ?support, *],
+        ?placement = [{(?order, subject)}, "placed", ?day] as of ?at
+    not exists { ?action = [{(?approval, relies_on), ...}, *, *],
+        ?decision = [{(?req, request), (?rev, policy)}, "approved", ?decided]
+        in effect $known_at, ?at via ?approval = [{(?decision, posit), (?agent, ascertains)}, ?yes, *],
+        ?delegation = [{(?agent, agent), (?rev, policy)}, "authorized", *]
+        in effect $known_at, ?decided via ?authority = [{(?delegation, posit), (*, ascertains)}, ?power, *] where ?yes > 0% and ?power > 0% }
+    where ?rev = $constraint_revision and ?support > 0% and max_days_between(?day, ?at) > 30
+    return ?action, ?req, ?report, ?placement;
+  }
+
+  forbids "An authorized reviewer denied this request" {
+    search ?action = [{(?req, request), (?order, subject), (?rev, policy), ...}, "cancelled", ?at]
+        in effect $known_at, $action_cut via ?report = [{(?action, posit), (*, ascertains)}, ?support, *],
+        ?placement = [{(?order, subject)}, "placed", ?day] as of ?at,
+        ?denial = [{(?req, request), (?rev, policy)}, "denied", ?denied]
+        in effect $known_at, ?at via ?refusal = [{(?denial, posit), (?reviewer, ascertains)}, ?no, *],
+        ?delegated = [{(?reviewer, agent), (?rev, policy)}, "authorized", *]
+        in effect $known_at, ?denied via ?authority2 = [{(?delegated, posit), (*, ascertains)}, ?power2, *]
+    where ?rev = $constraint_revision and ?support > 0% and max_days_between(?day, ?at) > 30 and ?no > 0% and ?power2 > 0%
+    return ?action, ?req, ?report, ?placement, ?denial, ?refusal, ?delegated, ?authority2;
+  }
+
+  forbids "An authorized reviewer disputes the approval this action cites" {
+    search ?action = [{(?req, request), (?order, subject), (?rev, policy), ...}, "cancelled", ?at]
+        in effect $known_at, $action_cut via ?report = [{(?action, posit), (*, ascertains)}, ?support, *],
+        ?placement = [{(?order, subject)}, "placed", ?day] as of ?at,
+        ?action = [{(?approval, relies_on), ...}, *, *],
+        ?approval = [{(?decision, posit), (*, ascertains)}, *, *],
+        ?decision = [{(?req, request), (?rev, policy)}, "approved", ?decided]
+        in effect $known_at, ?at via ?refusal = [{(?decision, posit), (?reviewer, ascertains)}, ?no, *],
+        ?delegated = [{(?reviewer, agent), (?rev, policy)}, "authorized", *]
+        in effect $known_at, ?decided via ?authority2 = [{(?delegated, posit), (*, ascertains)}, ?power2, *]
+    where ?rev = $constraint_revision and ?support > 0% and max_days_between(?day, ?at) > 30 and ?no < 0% and ?power2 > 0%
+    return ?action, ?req, ?report, ?placement, ?decision, ?approval, ?refusal, ?delegated, ?authority2;
+  }
+
+  permits "The action cites a timely delegated approval" {
+    search ?action = [{(?req, request), (?order, subject), (?rev, policy), ...}, "cancelled", ?at]
+        in effect $known_at, $action_cut via ?report = [{(?action, posit), (*, ascertains)}, ?support, *],
+        ?placement = [{(?order, subject)}, "placed", ?day] as of ?at,
+        ?action = [{(?approval, relies_on), ...}, *, *],
+        ?decision = [{(?req, request), (?rev, policy)}, "approved", ?decided]
+        in effect $known_at, ?at via ?approval = [{(?decision, posit), (?agent, ascertains)}, ?yes, *],
+        ?delegation = [{(?agent, agent), (?rev, policy)}, "authorized", *]
+        in effect $known_at, ?decided via ?authority = [{(?delegation, posit), (*, ascertains)}, ?power, *]
+    where ?rev = $constraint_revision and ?support > 0% and max_days_between(?day, ?at) > 30 and ?yes > 0% and ?power > 0%
+    return ?action, ?req, ?report, ?placement, ?decision, ?approval, ?delegation, ?authority;
+  }
+};

@@ -5,9 +5,9 @@
 This document records the accepted design and implementation of information in
 effect, five-role vocabulary bootstrap, neutral classification queries, and a
 selected-class Terrain overlay. These classification phases were implemented on
-2026-08-28. Constraints are deliberately **not** ready for implementation; the
-constraint sections record the current direction and the questions that must be
-answered first.
+2026-08-28. The constraint sections record the research at that point.
+Beta.5 implements saved, on-demand Traqula checks,
+temporal operations and a worked delegated approval. [Current constraint design](../design/CONSTRAINTS.md)
 
 The design draws on the three paper revisions retained in this repository:
 
@@ -414,9 +414,10 @@ classification verdict that Traqula did not return.
 
 ## Constraints: research direction only
 
-Do **not** implement constraint roles, policy decoding, cardinality validation,
-constraint mutation syntax, or write-time enforcement as part of the
-classification extension.
+This was the scope of the August classification extension. The snapshot,
+provenance and verdict model below informs the November implementation plan.
+The worked cancellation example in that plan also covers delegated human
+decisions. [Saved Traqula constraints](../design/CONSTRAINTS.md)
 
 ### Body characteristics, diagnostics, and enforcement
 
@@ -593,10 +594,11 @@ supplied as policy posits, or represented by a reusable declarative layer
 remains an open design question. No specificity, fusion, or override behavior
 should be frozen as database classification semantics.
 
-### Questions that block constraint implementation
+### Open questions for the general constraint model
 
-Write a separate constraint semantics specification before adding code. It must
-answer at least:
+These questions were recorded for the general constraint model. The first
+implementation uses read-only Traqula. Its order examples make the relevant
+choices explicit. [Implementation order](../design/CONSTRAINTS.md#implementation-order)
 
 1. What identifies a constraint: a program, an invocation, a policy Thing, or
    a specific definition posit?
@@ -695,13 +697,11 @@ shading is browser geometry.
 - Retain the unreleased crate and contract versions; update declarations
   immediately before the first Positorium release without adding legacy shims.
 
-### Separate future work: constraint semantics
+### Follow-up on constraint semantics
 
-- Develop the constraint-program, snapshot, provenance, finding, and evaluation
-  model in a separate design document.
-- Validate it against the blocking questions and examples above.
-- Do not schedule parser, storage, evaluator, or UI implementation until that
-  model is accepted.
+The [constraint design](../design/CONSTRAINTS.md) carries the snapshot and
+provenance model forward. It gives the first implementation sequence, from
+checking an undated order to verifying an authorized exception.
 
 ## Test matrix
 
@@ -749,8 +749,8 @@ This extension is complete when:
 
 ## Deferred work
 
-Constraints, write-time enforcement, classification verdicts, subclass closure,
-closed-world inference, automatic source fusion, global class-name uniqueness,
-class equivalence sugar, disjointness, and automatic schema selection remain
-deferred. Constraint research must not reserve vocabulary or impose storage
-behavior until its semantics are accepted.
+The classification milestone deferred write-time enforcement, classification
+verdicts, subclass closure, closed-world inference, automatic source fusion,
+global class-name uniqueness, class equivalence sugar, class disjointness, and
+automatic schema selection. Saved on-demand checks now have a separate
+[implementation milestone](ROADMAP.md#next-implementation-target-2026-11-20).

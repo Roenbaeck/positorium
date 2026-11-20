@@ -1,6 +1,6 @@
 traqula = _{
     SOI ~
-    (add_role | add_posit | explain | search)* ~
+    (add_role | add_posit | add_constraint | check_constraint | explain | search)* ~
     EOI
 }
 
@@ -59,6 +59,21 @@ and_assert_clause = {
 posit_addition = _{ posit ~ and_assert_clause? }
 add_posit = { ^"add posit" ~ (posit_addition ~ ","?)+ ~ ";" }
 
+// Constraint keywords are contextual so existing mutation bindings remain valid.
+constraint_class = { ^"in class" ~ (parameter | recall) }
+constraint_policy = { ^"of" ~ parameter }
+constraint_start = { ^"at" ~ appearance_time }
+finding_kind = { ^"violations" | ^"unresolved" | ^"evidence" | ^"permits" | ^"forbids" }
+constraint_finding = { finding_kind ~ string ~ "{" ~ search ~ "}" }
+constraint_clause = _{ search | constraint_finding }
+constraint_program = { SOI ~ constraint_clause+ ~ EOI }
+constraint_body = { "{" ~ constraint_clause+ ~ "}" }
+add_constraint = { ^"add constraint" ~ insert? ~ ((string ~ constraint_class?) | constraint_policy) ~ constraint_start? ~ constraint_body ~ ";" }
+constraint_cut = { ^"as of" ~ appearance_time }
+readiness = { ^"with readiness" ~ (parameter | recall) }
+audit_clause = { ^"record by" ~ (parameter | recall) }
+check_constraint = { ^"check constraint" ~ ((string ~ constraint_class? ~ constraint_cut?) | parameter | recall) ~ readiness? ~ audit_clause? ~ ";" }
+
 // search command
 wildcard = { "*" }
 // Retained as an internal rule because the isolated, non-dispatched legacy
@@ -91,11 +106,17 @@ distinct = { ^"distinct" }
 return_clause = { ^"return" ~ distinct? ~ (variable_reference ~ ","?)+ }
 search_clause = { ^"search" ~ (posit_search ~ ","?)+ }
 union_clause = { ^"union" ~ (posit_search ~ ","?)+ }
-not_exists_clause = { ^"not exists" ~ "{" ~ (posit_search ~ ","?)+ ~ "}" }
+not_exists_clause = { ^"not exists" ~ "{" ~ (posit_search ~ ","?)+ ~ where_clause? ~ "}" }
 // where clause: variable comparator value/variable. Initially engine only enforced time, but grammar now allows broader RHS.
 comparator = { "===" | "?=" | "<=" | ">=" | "<" | ">" | "=" }
 rhs_value = { parameter | constant | time | certainty | decimal | int | string | json }
-condition = { variable_reference ~ comparator ~ (rhs_value | variable_reference) }
+day_count = { variable_reference | parameter | int }
+day_shift = { ^"add_days" | ^"subtract_days" }
+date_operand = { (day_shift ~ "(" ~ date_operand ~ "," ~ day_count ~ ")") | variable_reference | parameter | constant | time }
+interval_relation = { ^"overlaps" | ^"disjoint" | ^"contains" | ^"within" | ^"definitely_before" | ^"definitely_after" | ^"possibly_before" | ^"possibly_after" }
+elapsed_bound = { ^"min_days_between" | ^"max_days_between" }
+calendar_test = { (interval_relation ~ "(" ~ date_operand ~ "," ~ date_operand ~ ")") | (elapsed_bound ~ "(" ~ date_operand ~ "," ~ date_operand ~ ")" ~ comparator ~ day_count) }
+condition = { calendar_test | (variable_reference ~ comparator ~ (rhs_value | variable_reference)) }
 where_clause = { ^"where" ~ condition ~ ("and" ~ condition)* }
 limit_clause = { ^"limit" ~ int }
 direction = { ^"asc" | ^"desc" }

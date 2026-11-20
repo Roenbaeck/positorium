@@ -232,12 +232,136 @@ key order, spacing, and numeric spelling.
 
 Ordering operators are `<`, `<=`, `>`, and `>=`.
 
+## Saved constraints
+
+A constraint is a named policy Thing. Its read-only Traqula source is the
+string value of an ordinary posit.
+Run a check when the evidence is ready for the question you want answered.
+
+```traqula
+add role order_record, order_date;
+add posit [{(+o, order_record)}, "A-17", '2026-11-01'];
+
+add constraint +original "Every order has a date" at '2026-11-01' {
+    search ?record = [{(?order, order_record)}, *, *]
+    not exists { [{(?order, order_date)}, *, *] }
+    return ?order, ?record;
+};
+
+check constraint original;
+check constraint "Every order has a date" as of '2026-11-15';
+```
+
+Adding the same name appends a source revision to the existing policy.
+The optional `at` sets its appearance time and otherwise defaults to the
+script's single `@NOW`. The complete text inside the braces, including
+whitespace and comments, is stored verbatim in a deterministically quoted
+string. Retrying the same source at the same time returns the same Posit.
+The save result has columns `policy` (Thing), `revision` (Posit) and `store`
+(quoted UUID). The optional local binding refers to the revision.
+
+| Command | Selection |
+| --- | --- |
+| `check constraint "Every order has a date";` | The uniquely latest applicable revision at the script's `@NOW` |
+| `check constraint "Every order has a date" as of $cut;` | The unique maximal source whose appearance time is definitely at or before the supplied cut |
+| `check constraint $revision;` | That exact source Posit, including a superseded or scheduled revision |
+| `add constraint of $policy at $starts { … };` | A new revision of a specific policy Thing, including when several policies share a name |
+
+Distinct revisions with equal or incomparable maximal times produce a diagnostic
+with their Posit identities. Two different edits in one script share the same
+clock unless given explicit times. A day-precision appearance time represents
+the whole day. To start a revision at midnight, use an instant such as
+`at '2026-12-01 00:00:00'`. A backdated save can change a subsequent historical
+lookup. Pin the revision to reproduce the choice of code. Reproducing the
+findings also requires the original inputs, clock and evidence cuts.
+
+The first successful save creates a declared class named `Constraint` if needed.
+Discovery uses direct class membership and the shared `name` role. Several
+matching policy Things make the name ambiguous. With several declared classes
+named `Constraint`, qualify a named command with `in class $class` immediately
+after the name. A check of an unknown policy, a policy without a source, and
+a policy with only future revisions gives a distinct diagnostic in each case.
+
+### Findings, coverage and audits
+
+The first projected column identifies the subject Thing or Posit. Project
+witness Posits and any observed values in the remaining columns. A bare search
+returns candidate violations. For several findings in one revision, place
+labeled searches inside its source using `violations "expectation" { search …; }`,
+`unresolved "reason" { search …; }` or `evidence "reason" { search …; }`.
+For a rule with competing interpretations, `permits "reason" { search …; }`
+and `forbids "reason" { search …; }` report possible outcomes for the subject
+in the first column. Conflicting outcomes for one subject give an unresolved
+finding. With complete evidence, a subject with only forbidden outcomes
+violates the rule. Permitted outcomes carry their evidence in the report.
+All searches share one view, clock, cancellation token and work budget. The
+checker supplies `$constraint_revision` and `$constraint_policy` in the saved
+searches. Other parameters come from the check invocation.
+
+A check returns one row with `policy`, `revision`, `store` and `report`. The
+last cell contains a JSON object. Report version 1 includes the verdict,
+per-finding subject, expected condition, observed cells, witnesses, and any
+supporting evidence. It also includes the selected policy cutoff, revision time,
+definition schema, resolved parameters and clock, and a sorted manifest of the
+store's Posit identities. The source and manifest carry SeaHash fingerprints.
+The full manifest and the identities read during the checks are separate fields.
+
+| Evidence | Verdict |
+| --- | --- |
+| A definite violation, such as a recorded negative quantity | `violated` |
+| Absence or history-dependent findings while a delivery is pending, an explicit unresolved finding, or zero findings without declared coverage | `indeterminate` |
+| Complete coverage with zero violations and zero unresolved findings | `satisfied` |
+
+To declare a load complete, identify the revision and an immutable delivery
+manifest. Each manifest entry points to a delivered Posit using `delivery`. An
+additional `previous` appearance links to the preceding entry. A maintainer who
+knows the expected load can use a receipt for a completed empty export. The
+checker follows the visible links and lists outstanding identities in `missing_inputs`.
+This example continues the script above.
+
+```traqula
+add role receipt, delivery, manifest, policy;
+add posit +batch [{(+loader, receipt)}, "orders and dates loaded", @NOW];
+add posit +entry [{(batch, delivery)}, "included", @NOW];
+add posit +ready [{(original, policy), (entry, manifest)}, "ready", @NOW];
+check constraint original with readiness ready record by loader;
+```
+
+The missing date now gives a violation. For a parameterized check, use
+`{"ready":{"parameters":{…},"clock":null}}` as the declaration value, copying
+the `scope` of the intended check. A body that uses `@NOW` records that clock
+in its scope. `record by` explicitly saves the completed report as a posit about
+the revision and ascertains it at 100% by the supplied evaluator. The returned
+`audit` column identifies it. The frozen report retains its originating store
+UUID when transferred. Ordinary checks only read. A row cap, timeout or budget
+that prevents an exhaustive evaluation gives an execution error.
+
+The worked cancellation constraint joins country windows, signed decisions
+and delegation evidence. Each returned witness identifies a recorded business
+act. [Cancellation constraint](../../traqula/cancellation-constraint.traqula)
+
 ## Time and snapshots
 
 Accepted time precision includes year, month, day, minute, second, and
 subsecond forms. A coarse time denotes a half-open interval, so mixed-precision
 times can overlap without being ordered. `@BOT`, `@NOW`, and `@EOT` are built-in
 constants. One `@NOW` value is resolved for the complete script.
+
+In a `where` clause, `?=` tests overlap between appearance-time bindings.
+A date in the second posit slot is a literal value. Two such literals compare
+by their tokens with `?=` in Traqula 1. Named `where` predicates accept
+either operand source. Use `overlaps(a,b)`,
+`disjoint(a,b)`, `contains(a,b)`, `within(a,b)`, `definitely_before(a,b)`,
+`possibly_before(a,b)` and their `after` counterparts. Finite intervals are
+half-open. `add_days(a,n)` and `subtract_days(a,n)` shift both endpoints
+by checked UTC calendar days. `min_days_between(a,b)` and
+`max_days_between(a,b)` give inclusive bounds for the signed day difference
+from `a` to `b` and take an integer comparison, such as
+`where min_days_between(?placed, ?cancelled) > 30`. A calendar shift can
+cross a month boundary. Sentinel arithmetic and overflow are errors.
+A correlated `not exists { … where … }` may use these predicates against
+outer bindings and locals.
+[Temporal operations for constraints](../design/CONSTRAINTS.md#temporal-operations-for-traqula)
 
 `as of` first matches the pattern structurally, then keeps every maximal
 matching posit at or before the cutoff for each appearance set. Equal-time and
@@ -526,8 +650,12 @@ execution methods retain their defaults. Python exposes `max_work_units` and
 ## Typed parameters
 
 `$name` denotes a value supplied separately by the Rust, HTTP, or WASM API.
-Parameters are typed as either literal or time values. They never substitute
-source text, roles, variables, or grammar.
+Parameters carry literal tokens, times, or store-qualified Thing and Posit
+references. Identity parameters use `{"kind":"posit","text":"<store UUID>/<decimal identity>"}`
+or the corresponding `thing` kind. They can select a constraint revision,
+policy, class, readiness declaration or evaluator and take part in identity
+comparisons. Python's `row.reference("revision")` constructs one from a save
+result. Parameter values are supplied independently of the source text.
 
 ```traqula
 search [{(?item, amount), ...}, ?amount, *] as of $cutoff

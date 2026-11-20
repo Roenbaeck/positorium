@@ -97,6 +97,8 @@ fn execution_parameters(
             let parameter = match kind.as_str() {
                 "literal" => ExecutionParameter::Literal { text },
                 "time" => ExecutionParameter::Time { text },
+                "thing" => ExecutionParameter::Thing { text },
+                "posit" => ExecutionParameter::Posit { text },
                 _ => {
                     return Err(PyValueError::new_err(format!(
                         "parameter '{name}' has unsupported kind '{kind}'"

@@ -12,12 +12,16 @@ It is an experimental embedded evidence database with an immutable posit model,
 the Traqula query language, an append-only native store, Python bindings, a
 trusted-local HTTP service, and an in-browser WASM testbed.
 
-The current version is `0.2.1-beta.4`. Read the
-[release notes](docs/releases/v0.2.1-beta.4.md). Tagged releases are available
+The current version is `0.3.0-beta.5`. Read the
+[release notes](docs/releases/v0.3.0-beta.5.md). Tagged releases are available
 on the [releases page](https://github.com/Roenbaeck/positorium/releases).
 Beta means the documented language, storage, transfer, and interface versions
 have explicit compatibility rules; it does not mean an Internet-facing or
 production-ready service.
+
+Save a Traqula query as a constraint and check it when a load is ready. Each
+check identifies the policy revision it used and the evidence behind its
+findings. [Saved constraints](docs/reference/TRAQULA.md#saved-constraints)
 
 [Run the 60-second browser example](https://roenbaeck.github.io/positorium/) ·
 [Get started](https://github.com/Roenbaeck/positorium/blob/master/docs/GETTING_STARTED.md) ·

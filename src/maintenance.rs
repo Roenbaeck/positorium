@@ -1,5 +1,6 @@
 //! Stable native inspection, backup, and logical-transfer tools.
 
+use crate::construct::format_uuid;
 use crate::construct::{BUILTIN_ROLES, Thing};
 use crate::datatype::{Time, TimeType};
 use crate::error::{DatabaseError, Result};
@@ -810,18 +811,6 @@ impl LogicalTime {
         };
         Ok(Time::from_time_type(moment))
     }
-}
-
-fn format_uuid(uuid: [u8; 16]) -> String {
-    let hex = uuid.map(|byte| format!("{byte:02x}")).concat();
-    format!(
-        "{}-{}-{}-{}-{}",
-        &hex[0..8],
-        &hex[8..12],
-        &hex[12..16],
-        &hex[16..20],
-        &hex[20..32]
-    )
 }
 
 fn parse_uuid(value: &str) -> Result<[u8; 16]> {

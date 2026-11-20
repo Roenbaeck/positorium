@@ -31,6 +31,7 @@ contracts that define compatibility and the design record used by maintainers.
 | Document | Audience |
 | --- | --- |
 | [Theory](design/THEORY.md) | Conceptual foundations of Transitional Modeling |
+| [Saved Traqula constraints](design/CONSTRAINTS.md) | Saving and revising policies, checking on demand, calendar arithmetic, and decisions delegated to people |
 | [Roadmap](development/ROADMAP.md) | Completed beta gates and planned work |
 | [Decisions](development/DECISIONS.md) | Accepted design decisions and rationale |
 | [Extending Traqula](development/EXTEND_TRAQULA.md) | Maintainer workflow for language changes |
@@ -39,6 +40,7 @@ contracts that define compatibility and the design record used by maintainers.
 
 ## Releases
 
+- [0.3.0-beta.5 notes](releases/v0.3.0-beta.5.md)
 - [0.2.1-beta.4 notes](releases/v0.2.1-beta.4.md)
 - [0.2.0-beta.3 notes](releases/v0.2.0-beta.3.md)
 - [0.1.4-beta.3 planning notes (unreleased)](releases/v0.1.4-beta.3.md)

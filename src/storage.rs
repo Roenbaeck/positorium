@@ -1151,12 +1151,9 @@ fn validate_pending_records(records: &[PendingRecord]) -> Result<()> {
 }
 
 fn initialize_store(directory: &Path) -> Result<Manifest> {
-    let mut store_uuid = [0u8; 16];
-    getrandom::fill(&mut store_uuid).map_err(|error| {
+    let store_uuid = crate::construct::new_store_uuid().map_err(|error| {
         DatabaseError::Persistence(format!("failed to generate store UUID: {error}"))
     })?;
-    store_uuid[6] = (store_uuid[6] & 0x0f) | 0x40;
-    store_uuid[8] = (store_uuid[8] & 0x3f) | 0x80;
 
     let log_path = directory.join(LOG_NAME);
     let mut log = OpenOptions::new()

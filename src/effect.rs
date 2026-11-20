@@ -146,7 +146,14 @@ impl Database {
         cut: EffectCut,
         limits: EffectLimits,
     ) -> Result<EffectiveSlice, DatabaseError> {
-        resolve_budgeted(&self.read_view(), cut, limits, |_| Ok(()), |_| Ok(()))
+        resolve_budgeted(
+            &self.read_view(),
+            cut,
+            limits,
+            |_| Ok(()),
+            |_| Ok(()),
+            |_| Ok(()),
+        )
     }
 }
 
@@ -156,6 +163,7 @@ pub(crate) fn resolve_budgeted(
     limits: EffectLimits,
     mut check: impl FnMut(u64) -> Result<(), DatabaseError>,
     mut reserve: impl FnMut(u64) -> Result<(), DatabaseError>,
+    mut read: impl FnMut(Thing) -> Result<(), DatabaseError>,
 ) -> Result<EffectiveSlice, DatabaseError> {
     check(1)?;
     let (assertion_identities, mut workspace) =
@@ -174,6 +182,7 @@ pub(crate) fn resolve_budgeted(
 
     for identity in assertion_identities {
         check(1)?;
+        read(identity)?;
         let assertion = view.posit(identity).ok_or_else(|| {
             DatabaseError::Invariant(format!(
                 "assertion index contains identity {identity} without a literal posit"
@@ -210,6 +219,7 @@ pub(crate) fn resolve_budgeted(
                     "malformed assertion posit {identity}: exact {{posit, ascertains}} envelopes require a certainty literal"
                 ))
             })?;
+        read(target_identity)?;
         let target = view.posit(target_identity).ok_or_else(|| {
             DatabaseError::Execution(format!(
                 "dangling assertion posit {identity}: target posit {target_identity} does not exist"

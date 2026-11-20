@@ -281,12 +281,117 @@ enum TemporalBound {
 }
 
 #[derive(Eq, PartialEq, Debug, Clone, Copy)]
-struct TimeInterval {
+pub(crate) struct TimeInterval {
     start: TemporalBound,
     end: TemporalBound,
 }
 
+impl TimeInterval {
+    pub(crate) fn relation(&self, name: &str, other: Self) -> bool {
+        match name {
+            "overlaps" => self.start < other.end && other.start < self.end,
+            "disjoint" => !self.relation("overlaps", other),
+            "contains" => self.start <= other.start && self.end >= other.end,
+            "within" => other.relation("contains", *self),
+            "definitely_before" => self != &other && self.end <= other.start,
+            "definitely_after" => other.relation("definitely_before", *self),
+            "possibly_before" => self.start.strictly_before_last(other),
+            "possibly_after" => other.start.strictly_before_last(*self),
+            _ => unreachable!("interval relation checked by the grammar"),
+        }
+    }
+
+    pub(crate) fn shift_days(self, days: i64) -> Result<Self, String> {
+        let shift = |bound: TemporalBound| {
+            let instant = bound.finite()?;
+            let date = instant.date()?;
+            let offset = chrono::Days::new(days.unsigned_abs());
+            let moved = if days < 0 {
+                date.checked_sub_days(offset)
+            } else {
+                date.checked_add_days(offset)
+            }
+            .ok_or("calendar-day shift overflows the supported calendar")?;
+            Ok::<_, String>(TemporalBound::Finite(TemporalInstant {
+                year: moved.year(),
+                month: moved.month() as u8,
+                day: moved.day() as u8,
+                ..instant
+            }))
+        };
+        Ok(Self {
+            start: shift(self.start)?,
+            end: shift(self.end)?,
+        })
+    }
+
+    fn civil_days(self) -> Result<(NaiveDate, NaiveDate), String> {
+        let first = self.start.finite()?.date()?;
+        let end = self.end.finite()?;
+        let mut last = end.date()?;
+        if (end.hour, end.minute, end.second, end.nanosecond) == (0, 0, 0, 0) {
+            last = last.pred_opt().ok_or("calendar-day boundary underflow")?;
+        }
+        Ok((first, last))
+    }
+
+    /// Minimum and maximum signed UTC calendar-day differences between endpoints.
+    pub(crate) fn elapsed_days(self, to: Self) -> Result<(i64, i64), String> {
+        let (first, last) = self.civil_days()?;
+        let (earliest, latest) = to.civil_days()?;
+        Ok(((earliest - last).num_days(), (latest - first).num_days()))
+    }
+}
+
+impl TemporalBound {
+    fn strictly_before_last(self, other: TimeInterval) -> bool {
+        let Self::Finite(start) = self else {
+            return self < other.end;
+        };
+        let Self::Finite(end) = other.end else {
+            return self < other.end;
+        };
+        if start >= end {
+            return false;
+        }
+        // If the half-open end is exactly one nanosecond after our earliest
+        // instant, both can only coincide. Compare that successor across midnight too.
+        let next = start.successor();
+        next.is_none_or(|next| next < end)
+    }
+
+    fn finite(self) -> Result<TemporalInstant, String> {
+        match self {
+            Self::Finite(instant) => Ok(instant),
+            _ => Err(
+                "calendar arithmetic requires finite dates within the supported calendar".into(),
+            ),
+        }
+    }
+}
+
 impl TemporalInstant {
+    fn successor(self) -> Option<Self> {
+        if self.nanosecond < 999_999_999 {
+            return Some(Self {
+                nanosecond: self.nanosecond + 1,
+                ..self
+            });
+        }
+        let dt = self.date().ok()?.and_hms_nano_opt(
+            self.hour.into(),
+            self.minute.into(),
+            self.second.into(),
+            self.nanosecond,
+        )?;
+        dt.checked_add_signed(chrono::Duration::nanoseconds(1))
+            .map(Self::from_datetime)
+    }
+
+    fn date(self) -> Result<NaiveDate, String> {
+        NaiveDate::from_ymd_opt(self.year, self.month.into(), self.day.into())
+            .ok_or_else(|| "date exceeds the supported calendar".into())
+    }
     fn start_of_year(year: i32) -> Self {
         Self {
             year,
@@ -410,7 +515,7 @@ impl Time {
         }
     }
 
-    fn interval(&self) -> TimeInterval {
+    pub(crate) fn interval(&self) -> TimeInterval {
         let finite = TemporalBound::Finite;
         match self.moment {
             TimeType::BeginningOfTime => TimeInterval {
@@ -488,27 +593,24 @@ impl Time {
     /// Returns true when at least one represented instant may precede an
     /// instant represented by `other`.
     pub fn possibly_before(&self, other: &Self) -> bool {
-        self.interval().start < other.interval().end
+        self.interval()
+            .relation("possibly_before", other.interval())
     }
 
     /// Returns true when at least one represented instant may follow an
     /// instant represented by `other`.
     pub fn possibly_after(&self, other: &Self) -> bool {
-        self.interval().end > other.interval().start
+        self.interval().relation("possibly_after", other.interval())
     }
 
     /// Returns true when the two half-open intervals intersect.
     pub fn overlaps(&self, other: &Self) -> bool {
-        let lhs = self.interval();
-        let rhs = other.interval();
-        lhs.start < rhs.end && rhs.start < lhs.end
+        self.interval().relation("overlaps", other.interval())
     }
 
     /// Returns true when `self` contains the complete interval of `other`.
     pub fn contains(&self, other: &Self) -> bool {
-        let lhs = self.interval();
-        let rhs = other.interval();
-        lhs.start <= rhs.start && lhs.end >= rhs.end
+        self.interval().relation("contains", other.interval())
     }
 
     /// Returns true when `self` is contained within `other`.

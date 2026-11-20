@@ -89,8 +89,8 @@ the binding.
 
 ## Typed parameters
 
-Parameters separate values from Traqula source. Values must be explicit
-`Literal` or `Time` instances:
+Parameters separate values from Traqula source. Use `Literal` for values,
+`Time` for cutoffs and `Reference` for store-qualified identities.
 
 ```python
 from datetime import date
@@ -118,6 +118,16 @@ Convenience constructors include:
 - `Literal.certainty(80)` for `80%`;
 - `time(...)` for ISO strings, dates, and timezone-aware datetimes; and
 - `raw_literal("+0010.00")` when exact token spelling is intentional.
+
+To check a saved constraint revision from a later script, take its reference
+from the save result and pass it as a parameter.
+
+```python
+revision = saved_row.reference("revision")
+checked = database.execute_one(
+    "check constraint $revision;", parameters={"revision": revision}
+)
+```
 
 Naive datetimes are rejected. A timezone-aware datetime is converted to UTC
 before its Traqula token is created. Standalone Python booleans and floats are
@@ -179,7 +189,7 @@ All database exceptions derive from `PositoriumError`. Useful subclasses include
 The package exports `PYTHON_INTERFACE_VERSION`, `TRAQULA_VERSION`, and
 `TERRAIN_VERSION`. Python interface 1 is documented in
 [Contracts](../reference/CONTRACTS.md). The distribution version follows PEP
-440, so Cargo `0.2.1-beta.4` is installed as Python `0.2.1b4`.
+440, so Cargo `0.3.0-beta.5` is installed as Python `0.3.0b5`.
 
 ## Publishing a release
 

@@ -5,6 +5,29 @@ history or assigning hidden truth semantics. Query variables begin with `?` and
 are scoped to one `search`; add-side allocation variables begin with `+` and
 remain available to later mutation commands in the same script.
 
+## Anti-pattern of class-qualified role names
+
+A constraint and a report can both have a `name` and source text in `source`.
+Calling the constraint's roles `constraint_name` and `constraint_source`
+gives those same relationships different Role identities. A search for
+`name` then misses the constraint. Finding all names would require knowing
+every class-specific spelling, including ones introduced later.
+
+Reuse the shared role wherever it has the same meaning. Record class
+membership separately with `thing` and `class`. A Thing can acquire another
+classification while the same name posit serves both. This search finds
+names across classes, including the names of Things awaiting classification.
+
+```traqula
+search [{(?item, name), ...}, ?name, *]
+return distinct ?item, ?name;
+```
+
+To find only named constraints, join the named Thing to the `Constraint`
+class through its membership posit. Use distinct role names when the parts
+played really differ. A sale has a `buyer` and a `seller`, and a person or a
+company can play either role. [Worked constraint lookup](../design/CONSTRAINTS.md#storing-a-search-body-in-beta4)
+
 ## Corrections and simultaneous disagreement
 
 A correction is another posit for the same exact appearance set. Do not delete
@@ -36,8 +59,8 @@ identities. Only `posit` and `ascertains` define the built-in assertion shape. A
 assertion is an ordinary posit that refers to another posit's identity:
 
 ```traqula
-add role status, source;
-add posit [{(+registry, source)}, "Registry A", @NOW];
+add role status, name;
+add posit [{(+registry, name)}, "Registry A", @NOW];
 add posit +claim [{(+case, status)}, "open", '2024-03-01']
   and assert by registry with 75% at @NOW;
 
@@ -52,8 +75,8 @@ negative certainty as deletion. `in effect T, t` selects source-local effective
 assertions explicitly and still does not choose truth:
 
 ```traqula
-add role status, source;
-add posit [{(+registry, source)}, "Registry A", @NOW];
+add role status, name;
+add posit [{(+registry, name)}, "Registry A", @NOW];
 add posit +claim [{(+case, status)}, "open", '2024-03-01']
   and assert by registry with 75% at @NOW;
 
@@ -163,10 +186,10 @@ appearance set remains a finite partial function from Role to Thing.
 Literal values remain recorded exactly as entered. If one context requires a
 unit, range, scale, or allowed vocabulary, record or configure that constraint
 outside the value's physical codec and evaluate conformance explicitly. A
-nonconforming posit remains part of history; it is not silently coerced or
-discarded. The general constraint model is still research: the current direction
-is a deterministic versioned program evaluated over an immutable effective
-snapshot with explicit findings and provenance, not built-in cardinality roles.
+nonconforming posit remains part of history. Save a Traqula search with
+`add constraint` and evaluate it on demand with `check constraint`. The
+worked examples find orders with missing dates and check a cancellation policy
+that delegates exception decisions to customer service. [Saved Traqula constraints](../design/CONSTRAINTS.md)
 
 ## Backup, restore, and native transfer
 

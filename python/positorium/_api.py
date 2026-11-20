@@ -101,7 +101,22 @@ class Time:
         return cls(f"'{value}'")
 
 
-Parameter = Union[Literal, Time]
+@dataclass(frozen=True)
+class Reference:
+    """Store-qualified reference to a Thing or Posit returned by Traqula."""
+
+    kind: str
+    store: str
+    identity: int
+
+    def __post_init__(self) -> None:
+        if self.kind not in ("thing", "posit"):
+            raise ValueError("a reference requires a thing or posit cell")
+        if type(self.identity) is not int or not 0 <= self.identity < 2**64:
+            raise ValueError("identity must be an unsigned 64-bit integer")
+
+
+Parameter = Union[Literal, Time, Reference]
 
 
 def literal(value: Union[str, int, Decimal, Mapping[str, Any]]) -> Literal:
@@ -144,6 +159,11 @@ class Row(Sequence[Cell]):
     """An ordered result row addressable by position or projected column name."""
 
     __slots__ = ("_columns", "_cells")
+
+    def reference(self, column: str) -> Reference:
+        """Qualify a constraint command's policy or revision for a later script."""
+        cell = self[column]
+        return Reference(cell.kind, _json.loads(self["store"].text), int(cell.text))
 
     def __init__(self, columns: Sequence[str], cells: Sequence[Cell]) -> None:
         self._columns = tuple(columns)
@@ -400,9 +420,11 @@ class Database:
                 encoded[name] = ("literal", parameter.text)
             elif isinstance(parameter, Time):
                 encoded[name] = ("time", parameter.text)
+            elif isinstance(parameter, Reference):
+                encoded[name] = (parameter.kind, f"{parameter.store}/{parameter.identity}")
             else:
                 raise TypeError(
-                    f"parameter '{name}' must be Literal or Time, got {type(parameter).__name__}"
+                    f"parameter '{name}' must be Literal, Time or Reference, got {type(parameter).__name__}"
                 )
         payload = self._native.execute_json(
             script,

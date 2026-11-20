@@ -50,6 +50,26 @@ use std::hash::Hash;
 use std::sync::{Arc, Mutex, PoisonError};
 use unicode_normalization::UnicodeNormalization;
 
+pub(crate) fn new_store_uuid() -> Result<[u8; 16], getrandom::Error> {
+    let mut id = [0; 16];
+    getrandom::fill(&mut id)?;
+    id[6] = (id[6] & 0x0f) | 0x40;
+    id[8] = (id[8] & 0x3f) | 0x80;
+    Ok(id)
+}
+
+pub(crate) fn format_uuid(uuid: [u8; 16]) -> String {
+    let hex = uuid.map(|byte| format!("{byte:02x}")).concat();
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    )
+}
+
 mod read_view;
 pub(crate) use read_view::{ReadView, ScriptView};
 
@@ -113,6 +133,8 @@ pub(crate) struct LiteralAssertionSpec {
     pub certainty: LiteralValue,
     pub time: Time,
 }
+
+pub(crate) type LiteralPositSpec = (Arc<AppearanceSet>, LiteralValue, Time);
 
 #[derive(Debug)]
 pub(crate) struct CreatedLiteralPosits {
@@ -191,7 +213,7 @@ impl ThingGenerator {
 }
 
 // ------------- Role -------------
-#[derive(Eq, Debug)]
+#[derive(Clone, Eq, Debug)]
 pub struct Role {
     role: Thing, // let it be a thing so we can "talk" about roles using posits
     name: String,
@@ -693,6 +715,7 @@ impl PersistenceMode {
 }
 
 pub struct Database {
+    store_id: String,
     pub(crate) execution_owner: Mutex<()>,
     published_view: Mutex<Arc<ReadView>>,
     // owns a thing generator
@@ -735,7 +758,18 @@ impl Database {
             HashMap::default();
         let posit_time_lookup: HashMap<Thing, Time, ThingHasher> = HashMap::default();
         // Create the database so that we can prime it before returning it
+        #[cfg(feature = "persistence")]
+        let persistent_id = store.as_ref().map(|store| store.store_uuid());
+        #[cfg(not(feature = "persistence"))]
+        let persistent_id = None;
+        let store_id = match persistent_id {
+            Some(id) => id,
+            None => new_store_uuid().map_err(|e| {
+                DatabaseError::Execution(format!("failed to generate store UUID: {e}"))
+            })?,
+        };
         let database = Database {
+            store_id: format_uuid(store_id),
             execution_owner: Mutex::new(()),
             published_view: Mutex::new(Arc::new(ReadView::default())),
             thing_generator: Arc::new(Mutex::new(thing_generator)),
@@ -770,6 +804,19 @@ impl Database {
         }
         database.publish_read_view(Arc::new(initial_view));
         Ok(database)
+    }
+
+    /// Stable identity used to qualify references into this store.
+    pub fn store_id(&self) -> &str {
+        &self.store_id
+    }
+
+    pub(crate) fn reserve_identity(&self) -> Result<Thing, DatabaseError> {
+        Ok(self
+            .thing_generator
+            .lock()
+            .map_err(|e| DatabaseError::Lock(e.to_string()))?
+            .reserve())
     }
 
     pub(crate) fn read_view(&self) -> Arc<ReadView> {
@@ -1127,35 +1174,52 @@ impl Database {
             )));
         }
 
+        self.create_literal_batch(view, Vec::new(), targets, |staged_targets| {
+            let (posit_role, ascertains_role) = {
+                let keeper = self
+                    .role_keeper
+                    .lock()
+                    .map_err(|error| DatabaseError::Lock(error.to_string()))?;
+                let posit = keeper.lookup(&POSIT_ROLE_ID).ok_or_else(|| {
+                    DatabaseError::Invariant("built-in posit role is missing".into())
+                })?;
+                let ascertains = keeper.lookup(&ASCERTAINS_ROLE_ID).ok_or_else(|| {
+                    DatabaseError::Invariant("built-in ascertains role is missing".into())
+                })?;
+                (posit, ascertains)
+            };
+            let mut assertion_posits = Vec::with_capacity(assertions.len());
+            for spec in assertions {
+                let target = staged_targets.get(spec.target_index).ok_or_else(|| {
+                    DatabaseError::Invariant("validated assertion target disappeared".into())
+                })?;
+                let appearance_set = AppearanceSet::checked(vec![
+                    Arc::new(Appearance::new(target.posit(), Arc::clone(&posit_role))),
+                    Arc::new(Appearance::new(spec.positor, Arc::clone(&ascertains_role))),
+                ])?;
+                assertion_posits.push((appearance_set, spec.certainty, spec.time));
+            }
+            Ok(assertion_posits)
+        })
+    }
+
+    /// Stage dependent posits against canonical target identities. Publish the roles,
+    /// targets and dependents only after one successful durable append.
+    pub(crate) fn create_literal_batch(
+        &self,
+        view: &mut ReadView,
+        roles: Vec<Role>,
+        targets: Vec<LiteralPositSpec>,
+        dependents: impl FnOnce(
+            &[Arc<Posit<LiteralValue>>],
+        ) -> Result<Vec<LiteralPositSpec>, DatabaseError>,
+    ) -> Result<CreatedLiteralPosits, DatabaseError> {
         let mut prepared: Vec<Arc<Posit<LiteralValue>>> = Vec::new();
         let mut positions = HashMap::default();
         let target_sources = self.stage_literal_posits(targets, &mut prepared, &mut positions)?;
         let staged_targets = Self::resolve_pending_literal_sources(&target_sources, &prepared);
 
-        let (posit_role, ascertains_role) = {
-            let keeper = self
-                .role_keeper
-                .lock()
-                .map_err(|error| DatabaseError::Lock(error.to_string()))?;
-            let posit = keeper
-                .lookup(&POSIT_ROLE_ID)
-                .ok_or_else(|| DatabaseError::Invariant("built-in posit role is missing".into()))?;
-            let ascertains = keeper.lookup(&ASCERTAINS_ROLE_ID).ok_or_else(|| {
-                DatabaseError::Invariant("built-in ascertains role is missing".into())
-            })?;
-            (posit, ascertains)
-        };
-        let mut assertion_posits = Vec::with_capacity(assertions.len());
-        for spec in assertions {
-            let target = staged_targets.get(spec.target_index).ok_or_else(|| {
-                DatabaseError::Invariant("validated assertion target disappeared".into())
-            })?;
-            let appearance_set = AppearanceSet::checked(vec![
-                Arc::new(Appearance::new(target.posit(), Arc::clone(&posit_role))),
-                Arc::new(Appearance::new(spec.positor, Arc::clone(&ascertains_role))),
-            ])?;
-            assertion_posits.push((appearance_set, spec.certainty, spec.time));
-        }
+        let assertion_posits = dependents(&staged_targets)?;
         let assertion_sources =
             self.stage_literal_posits(assertion_posits, &mut prepared, &mut positions)?;
 
@@ -1163,18 +1227,21 @@ impl Database {
         drop(positions);
 
         #[cfg(feature = "persistence")]
-        if !prepared.is_empty() {
-            let records = prepared
-                .iter()
-                .map(|posit| {
-                    posit_record_parts(
-                        posit.posit(),
-                        &posit.appearance_set(),
-                        posit.value(),
-                        posit.time(),
-                    )
-                })
-                .collect::<Result<Vec<_>, _>>()?;
+        if !prepared.is_empty() || !roles.is_empty() {
+            let mut records: Vec<_> = roles.iter().map(role_record).collect();
+            records.extend(
+                prepared
+                    .iter()
+                    .map(|posit| {
+                        posit_record_parts(
+                            posit.posit(),
+                            &posit.appearance_set(),
+                            posit.value(),
+                            posit.time(),
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            );
             let mut store = self
                 .store
                 .lock()
@@ -1184,6 +1251,9 @@ impl Database {
             }
         }
 
+        for role in roles {
+            self.keep_role(view, role)?;
+        }
         let kept: Vec<Arc<Posit<LiteralValue>>> = prepared
             .into_iter()
             .map(|posit| {
@@ -1281,6 +1351,49 @@ mod append_store_tests {
         assert_eq!(restored.posit_keeper.lock().unwrap().len(), 2);
         drop(restored);
         let _ = std::fs::remove_dir_all(path);
+    }
+
+    #[test]
+    fn constraint_bootstrap_and_revision_are_one_durable_commit() {
+        let path = std::env::temp_dir().join(format!(
+            "positorium-constraint-atomic-{}",
+            std::process::id()
+        ));
+        let open =
+            || Database::new(PersistenceMode::File(path.to_string_lossy().into_owned())).unwrap();
+        let db = open();
+        let save = r#"add constraint "rule" at @BOT { search ?p=[*,*,*] return ?p; };"#;
+        db.store
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .inject_failure(InjectedFailure::ManifestCommit);
+        assert!(
+            Engine::new(&db)
+                .execute(save)
+                .unwrap_err()
+                .to_string()
+                .contains("injected")
+        );
+        assert_eq!(db.role_count().unwrap(), BUILTIN_ROLES.len());
+        assert_eq!(db.read_view().posit_count(), 0);
+        drop(db);
+        let db = open();
+        assert_eq!(db.read_view().posit_count(), 0);
+        Engine::new(&db).execute(save).unwrap();
+        let batches = db
+            .store
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .committed_batches()
+            .unwrap();
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[1].len(), 9, "three roles and six posits");
+        drop(db);
+        std::fs::remove_dir_all(path).unwrap();
     }
 
     #[test]

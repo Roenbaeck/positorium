@@ -223,6 +223,32 @@ mod tests {
     }
 
     #[wasm_bindgen_test]
+    fn saved_constraint_returns_a_pinned_revision_in_wasm() {
+        let engine = WasmEngine::new().unwrap();
+        let saved=engine.execute(r#"add constraint "orders" at @BOT { search ?p=[{(*,order_record)},*,*] return ?p; };"#).unwrap();
+        let saved: serde_json::Value = serde_wasm_bindgen::from_value(saved).unwrap();
+        let row = &saved["result_sets"][0]["rows"][0];
+        let store: String = serde_json::from_str(row[2]["text"].as_str().unwrap()).unwrap();
+        let id = row[1]["text"].as_str().unwrap();
+        let params = serde_json::json!({"pin":{"kind":"posit","text":format!("{store}/{id}")}});
+        let check = engine
+            .execute_with_parameters(
+                "check constraint $pin;",
+                serde_wasm_bindgen::to_value(&params).unwrap(),
+            )
+            .unwrap();
+        let check: serde_json::Value = serde_wasm_bindgen::from_value(check).unwrap();
+        let report: serde_json::Value = serde_json::from_str(
+            check["result_sets"][0]["rows"][0][3]["text"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(report["revision"], id);
+        assert_eq!(report["verdict"], "indeterminate");
+    }
+
+    #[wasm_bindgen_test]
     fn incremental_wasm_limits_and_top_k_preserve_framing() {
         let engine = WasmEngine::new().unwrap();
         engine

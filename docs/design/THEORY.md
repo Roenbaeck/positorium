@@ -48,9 +48,11 @@ order, number spelling, and escape choices.
 If a model needs to require a particular kind of value, precision, unit, range,
 or cardinality, that requirement is a **constraint**, not a datatype declaration.
 The underlying posit remains faithfully recorded even when it does not conform.
-The general constraint representation is not yet settled; current research
-treats a constraint as a versioned deterministic program evaluated over an
-immutable effective snapshot, with its findings and provenance recorded.
+A maintainer can save a versioned Traqula rule and check it
+on demand over an immutable snapshot. A rule can delegate a judgment to a
+person. The checker can then establish whether an authorized person made the
+required decision and which action relied on it when that link was recorded.
+[Saved Traqula constraints](CONSTRAINTS.md)
 
 ## What Can Be Disagreed Upon
 

@@ -130,7 +130,7 @@ fn visit_branch(
     visit_pattern(view, pattern, input, execution, &mut |binding| {
         for predicate in &pattern.predicates {
             execution.work(1)?;
-            if !evaluate_predicate(predicate, &binding)? {
+            if !evaluate_predicate(predicate, &binding, execution)? {
                 return Ok(SinkFlow::Continue);
             }
         }
@@ -169,6 +169,7 @@ fn visit_pattern(
         execution.work(1)?;
         #[cfg(test)]
         SCANNED.with(|count| count.set(count.get() + 1));
+        execution.trace_read(identity)?;
         let posit = view.posit(identity).ok_or_else(|| {
             DatabaseError::Invariant(format!(
                 "posit index contains identity {identity} without a literal posit"

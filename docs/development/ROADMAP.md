@@ -28,12 +28,25 @@ implementation, documentation, and test work; decision acceptance alone does not
 complete them. Decision identifiers are included where they clarify the governing
 contract.
 
-## Next Execution Milestone (2026-11-06)
+## Saved constraints in beta.5 (2026-11-20)
 
-The completeness and execution review sets the following implementation order.
-Complete the correctness regressions before changing planning strategies. The
-older checked beta gates below record their original delivery; the new findings
-and remaining work are tracked here.
+**Saved, on-demand Traqula constraints** ship in beta.5.
+Definitions and their revisions use ordinary posits and
+the same append-only store format. [Constraint design and acceptance cases](../design/CONSTRAINTS.md)
+
+- [x] Save and reopen a definition, append by name, select by appearance time,
+  and evaluate an exact revision on one pinned view.
+- [x] Report missing dates before and after load readiness, positive violations,
+  unresolved cases, and the evidence used. Support explicit ascertained audits.
+- [x] Add typed interval relations and checked calendar arithmetic. Exercise
+  two-day and 30-day windows, human authorization, disputes and withdrawals.
+- [x] Compare indexed checks with a reference scan across 1,000 and 4,000 orders.
+  [Constraint benchmark](../../benches/constraints.rs)
+
+## Execution work from 2026-11-06
+
+The completeness and execution review set the following order for the beta
+work. Unchecked items continue to track open work from that review.
 
 ### 1. Correctness and regression tests
 
@@ -157,7 +170,7 @@ follow-up work.
 
 ### 4. Language completeness and evidence diagnostics
 
-- [ ] **Resolve datetime precision before extending temporal syntax.**
+- [ ] **Resolve datetime precision before extending sub-day semantics.**
         - Minute, second, and fractional-second spellings currently normalize to
             datetime instants. Reconcile this with the precision-preserving model
             and specify identity, codec, transfer, and compatibility consequences
@@ -689,12 +702,11 @@ posit replay.
             lifecycle values, evidence sources, certainty handling, and temporal cut.
             Start with direct classifications; keep subclass closure an explicit,
             later presentation option.
-- [ ] **Constraint layer.**
-        - Research a deterministic, versioned constraint-program interface over an
-            immutable effective snapshot, with findings, witnesses, complete-scope
-            digests, and reproducible evaluation records.
-        - Do not implement constraint roles, cardinality syntax, policy decoding, or
-            write-time enforcement until that semantics is accepted.
+- [x] **Constraint layer.** [Saved Traqula checks](#next-implementation-target-2026-11-20)
+  return findings with their witness posits. The first
+  implementation reports conformance on demand. Possible later uses include
+  automatic audits and strict checks on named actions.
+  [Evaluation and enforcement](../design/CONSTRAINTS.md#when-to-check-and-when-to-enforce)
 - [ ] **Richer Traqula operations.**
         - Add convenience OR syntax, BETWEEN, IN, richer aggregates, subqueries, and
             structured returns as orthogonal features with explicit desugarings where

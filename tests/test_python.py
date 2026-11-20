@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from datetime import date, datetime, timezone
@@ -25,8 +26,8 @@ class PositoriumPythonTests(unittest.TestCase):
             self.assertEqual(result.row_count, 1)
 
     def test_distribution_and_contract_versions_match(self):
-        self.assertEqual(positorium.__version__, "0.2.1b4")
-        self.assertEqual(positorium.RUST_PACKAGE_VERSION, "0.2.1-beta.4")
+        self.assertEqual(positorium.__version__, "0.3.0b5")
+        self.assertEqual(positorium.RUST_PACKAGE_VERSION, "0.3.0-beta.5")
         self.assertEqual(positorium.PYTHON_INTERFACE_VERSION, 1)
         self.assertEqual(positorium.TRAQULA_VERSION, 1)
         self.assertEqual(positorium.TERRAIN_VERSION, 1)
@@ -69,6 +70,20 @@ class PositoriumPythonTests(unittest.TestCase):
         self.assertTrue(database.closed)
         with self.assertRaises(positorium.ClosedError):
             database.execute("add role never_added;")
+
+    def test_constraint_revisions_across_scripts(self):
+        with positorium.Database.memory() as database:
+            body = "search ?p=[{(?o,quantity)},?n,*] where ?n < 0 return ?o,?p,?n;"
+            database.execute("add role quantity; add posit [{(+o,quantity)},-5,@NOW];")
+            revision = database.execute_one(
+                'add constraint "Quantity" at @BOT {' + body + "};"
+            )[0].reference("revision")
+            database.execute('add constraint "Quantity" at @EOT {' + body + "};")
+            checked = database.execute_one("check constraint $saved;", parameters={"saved": revision})
+            report = json.loads(checked[0]["report"].text)
+            self.assertEqual(report["verdict"], "violated")
+            self.assertEqual(report["revision"], str(revision.identity))
+            self.assertEqual(report["findings"][0]["observed"][2]["text"], "-5")
 
     def test_typed_parameters_and_helpers(self):
         with positorium.Database.memory() as database:

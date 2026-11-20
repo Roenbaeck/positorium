@@ -796,6 +796,24 @@ fn resolve_parameter(
     resolved_now: &Time,
 ) -> Result<ResolvedParameter, DatabaseError> {
     match parameter {
+        ExecutionParameter::Thing { ref text } | ExecutionParameter::Posit { ref text } => {
+            let kind = if matches!(parameter, ExecutionParameter::Posit { .. }) {
+                ResultCellKind::Posit
+            } else {
+                ResultCellKind::Thing
+            };
+            let (store, id) = text.split_once('/').ok_or_else(|| {
+                DatabaseError::Parameter("expected a store-qualified UUID/identity".into())
+            })?;
+            let id = id
+                .parse()
+                .map_err(|_| DatabaseError::Parameter("invalid identity number".into()))?;
+            Ok(ResolvedParameter::Identity {
+                kind,
+                store: store.into(),
+                id,
+            })
+        }
         ExecutionParameter::Literal { text } => {
             if text.trim() != text {
                 return Err(DatabaseError::Parameter(
@@ -938,9 +956,11 @@ struct TraqulaParser;
 
 mod append;
 mod budget;
+mod constraint;
 mod query;
 
 pub use budget::QueryLimits;
+pub use constraint::CONSTRAINT_VERSION;
 
 pub use query::plan::{
     PlanAccess, PlanBinding, PlanCutoff, PlanDomain, PlanNode, PlanOperator, PlanOrder,
@@ -974,7 +994,10 @@ fn fallback_clause<'i>(search: &Pair<'i, Rule>) -> Option<Pair<'i, Rule>> {
 }
 
 fn search_has_return(search: &Pair<'_, Rule>) -> bool {
-    if search.as_rule() == Rule::explain {
+    if matches!(
+        search.as_rule(),
+        Rule::explain | Rule::add_constraint | Rule::check_constraint
+    ) {
         return true;
     }
     search
@@ -1001,7 +1024,7 @@ pub(crate) fn script_counts(traqula: &str) -> Result<(usize, usize), DatabaseErr
         if pair.as_rule() != Rule::EOI {
             commands += 1;
         }
-        if matches!(pair.as_rule(), Rule::search | Rule::explain) && search_has_return(&pair) {
+        if search_has_return(&pair) {
             searches += 1;
         }
     }
@@ -1120,6 +1143,10 @@ pub enum ExecutionParameter {
     Literal { text: String },
     /// Traqula time token or constant, such as `'2024-05'` or `@NOW`.
     Time { text: String },
+    /// Store-qualified Thing reference, formatted as UUID/decimal-identity.
+    Thing { text: String },
+    /// Store-qualified Posit reference, formatted as UUID/decimal-identity.
+    Posit { text: String },
 }
 
 /// Options that affect one complete Traqula script execution.
@@ -1173,7 +1200,10 @@ pub struct ExecutionMetadata {
     pub warnings: Vec<ExecutionWarning>,
 }
 
+#[derive(Clone)]
 struct ExecutionContext {
+    validating_definition: bool,
+    trace: Option<std::rc::Rc<std::cell::RefCell<constraint::ReadTrace>>>,
     metadata: ExecutionMetadata,
     deadline: Option<Instant>,
     cancellation: CancellationToken,
@@ -1185,26 +1215,37 @@ struct ExecutionContext {
 #[derive(Debug, Clone)]
 enum ResolvedParameter {
     Literal(LiteralValue),
-    Time { time: Time, literal: LiteralValue },
+    Time {
+        time: Time,
+        literal: LiteralValue,
+    },
+    Identity {
+        kind: ResultCellKind,
+        store: String,
+        id: Thing,
+    },
 }
 
 impl ResolvedParameter {
-    fn literal(&self) -> LiteralValue {
+    fn literal(&self) -> Result<LiteralValue, DatabaseError> {
         match self {
-            Self::Literal(literal) | Self::Time { literal, .. } => literal.clone(),
+            Self::Literal(literal) | Self::Time { literal, .. } => Ok(literal.clone()),
+            Self::Identity { .. } => Err(DatabaseError::Parameter(
+                "an identity cannot be used as a literal".into(),
+            )),
         }
     }
 
     fn time(&self) -> Option<Time> {
         match self {
-            Self::Literal(_) => None,
+            Self::Literal(_) | Self::Identity { .. } => None,
             Self::Time { time, .. } => Some(time.clone()),
         }
     }
 }
 
 impl ExecutionOptions {
-    fn resolve(self, _source: &str) -> Result<ExecutionContext, DatabaseError> {
+    fn resolve(self, store_id: &str) -> Result<ExecutionContext, DatabaseError> {
         let deadline = self
             .timeout
             .map(|timeout| {
@@ -1222,7 +1263,18 @@ impl ExecutionOptions {
                 resolve_parameter(parameter, &resolved_now).map(|parameter| (name, parameter))
             })
             .collect::<Result<HashMap<_, _>, DatabaseError>>()?;
+        for (name, parameter) in &parameters {
+            if let ResolvedParameter::Identity { store, .. } = parameter
+                && store != store_id
+            {
+                return Err(DatabaseError::Parameter(format!(
+                    "'${name}' belongs to another store"
+                )));
+            }
+        }
         Ok(ExecutionContext {
+            validating_definition: false,
+            trace: None,
             metadata: ExecutionMetadata {
                 traqula_version: TRAQULA_VERSION,
                 resolved_now,
@@ -1240,6 +1292,9 @@ impl ExecutionOptions {
 impl ExecutionContext {
     fn work(&self, units: u64) -> Result<(), DatabaseError> {
         self.check()?;
+        if let Some(trace) = &self.trace {
+            trace.borrow_mut().work(units);
+        }
         self.budget.work(units)
     }
 
@@ -1302,7 +1357,7 @@ impl<'en> Engine<'en> {
         traqula: &str,
         options: ExecutionOptions,
     ) -> Result<QueryPlan, DatabaseError> {
-        let execution = options.resolve(traqula)?;
+        let execution = options.resolve(self.database.store_id())?;
         execution.check()?;
         let commands = parse_script(traqula)?
             .filter(|command| command.as_rule() != Rule::EOI)
@@ -1397,6 +1452,9 @@ impl<'en> Engine<'en> {
             && top_level.next().is_none();
         let writes = commands.clone().any(|command| match command.as_rule() {
             Rule::search => !standalone_search && fallback_clause(&command).is_some(),
+            Rule::check_constraint => command
+                .into_inner()
+                .any(|p| p.as_rule() == Rule::audit_clause),
             Rule::explain | Rule::EOI => false,
             _ => true,
         });
@@ -1425,7 +1483,7 @@ impl<'en> Engine<'en> {
         sink: &mut S,
         options: ExecutionOptions,
     ) -> Result<(Vec<String>, bool, usize), crate::error::DatabaseError> {
-        let execution = options.resolve(traqula)?;
+        let execution = options.resolve(self.database.store_id())?;
         execution.check()?;
         let pairs = parse_script(traqula)?;
         let mut view = self.script_view(&pairs, &execution)?;
@@ -1437,10 +1495,7 @@ impl<'en> Engine<'en> {
         }
         let mut variables: Variables = Variables::default();
 
-        let search_count = pairs
-            .clone()
-            .filter(|p| matches!(p.as_rule(), Rule::search | Rule::explain) && search_has_return(p))
-            .count();
+        let search_count = pairs.clone().filter(|p| search_has_return(p)).count();
         if search_count != 1 {
             return Err(crate::error::DatabaseError::Execution(format!(
                 "execute_stream_single expects exactly one search, found {}",
@@ -1457,7 +1512,7 @@ impl<'en> Engine<'en> {
                 Rule::add_posit => {
                     self.add_posit(view.write()?, command, &mut variables, &execution)?
                 }
-                Rule::search | Rule::explain => {
+                Rule::search | Rule::explain | Rule::add_constraint | Rule::check_constraint => {
                     let limit = search_limit(&command)?;
                     struct CountingSink<'a, T: RowSink> {
                         inner: &'a mut T,
@@ -1491,7 +1546,7 @@ impl<'en> Engine<'en> {
                         count: 0,
                         limited: false,
                     };
-                    self.execute_search_command(
+                    let outcome = self.execute_search_command(
                         &mut view,
                         command,
                         &mut variables,
@@ -1499,8 +1554,10 @@ impl<'en> Engine<'en> {
                         &mut return_columns,
                         &execution,
                     )?;
-                    total_rows = wrapper.count;
-                    limited = wrapper.limited;
+                    if outcome.has_return {
+                        total_rows = wrapper.count;
+                        limited = wrapper.limited;
+                    }
                 }
                 Rule::EOI => (),
                 _ => (),
@@ -1641,7 +1698,7 @@ impl<'en> Engine<'en> {
                             Rule::appearing_value => {
                                 for value_type in component.into_inner() {
                                     value = Some(if value_type.as_rule() == Rule::parameter {
-                                        execution.parameter(value_type.as_str())?.literal()
+                                        execution.parameter(value_type.as_str())?.literal()?
                                     } else {
                                         parse_lossless_literal(
                                             value_type.as_rule(),
@@ -1813,7 +1870,7 @@ impl<'en> Engine<'en> {
                                     DatabaseError::Invariant("assertion certainty is empty".into())
                                 })?;
                                 certainty = Some(if value.as_rule() == Rule::parameter {
-                                    execution.parameter(value.as_str())?.literal()
+                                    execution.parameter(value.as_str())?.literal()?
                                 } else {
                                     parse_lossless_literal(
                                         value.as_rule(),
@@ -1948,6 +2005,19 @@ impl<'en> Engine<'en> {
         return_columns: &mut Option<Vec<String>>,
         execution: &ExecutionContext,
     ) -> Result<query::SearchOutcome, DatabaseError> {
+        if matches!(
+            command.as_rule(),
+            Rule::add_constraint | Rule::check_constraint
+        ) {
+            return self.constraint_command(
+                view,
+                command,
+                variables,
+                sink,
+                return_columns,
+                execution,
+            );
+        }
         if command.as_rule() == Rule::explain {
             let plan = Self::explain_command(view.read(), command, execution)?;
             let json = serde_json::to_string(&plan)
@@ -3468,7 +3538,7 @@ impl<'en> Engine<'en> {
         traqula: &str,
         options: ExecutionOptions,
     ) -> Result<CollectedResult, DatabaseError> {
-        let execution = options.resolve(traqula)?;
+        let execution = options.resolve(self.database.store_id())?;
         execution.check()?;
         let pairs = parse_script(traqula)?;
         if self.execute_appends(&pairs, &execution)? {
@@ -3487,12 +3557,13 @@ impl<'en> Engine<'en> {
         struct CollectSink {
             rows: Vec<Vec<ResultCell>>,
             limit: Option<usize>,
+            start: usize,
             limited: bool,
         }
         impl RowSink for CollectSink {
             fn push(&mut self, row: Vec<ResultCell>) -> SinkFlow {
                 if let Some(l) = self.limit
-                    && self.rows.len() >= l
+                    && self.rows.len() - self.start >= l
                 {
                     self.limited = true;
                     return SinkFlow::Stop;
@@ -3504,6 +3575,7 @@ impl<'en> Engine<'en> {
         let mut collector = CollectSink {
             rows: Vec::new(),
             limit: None,
+            start: 0,
             limited: false,
         };
         let mut return_columns: Option<Vec<String>> = None;
@@ -3516,8 +3588,9 @@ impl<'en> Engine<'en> {
                 Rule::add_posit => {
                     self.add_posit(view.write()?, command, &mut variables, &execution)?;
                 }
-                Rule::search | Rule::explain => {
+                Rule::search | Rule::explain | Rule::add_constraint | Rule::check_constraint => {
                     let limit = search_limit(&command)?;
+                    collector.start = collector.rows.len();
                     collector.limit = execution.effective_limit(limit);
                     let outcome = self.execute_search_command(
                         &mut view,
@@ -3562,7 +3635,7 @@ impl<'en> Engine<'en> {
         traqula: &str,
         options: ExecutionOptions,
     ) -> Result<Vec<CollectedResultSet>, DatabaseError> {
-        let execution = options.resolve(traqula)?;
+        let execution = options.resolve(self.database.store_id())?;
         execution.check()?;
         let pairs = parse_script(traqula)?;
         if self.execute_appends(&pairs, &execution)? {
@@ -3581,7 +3654,7 @@ impl<'en> Engine<'en> {
                 Rule::add_posit => {
                     self.add_posit(view.write()?, command, &mut variables, &execution)?;
                 }
-                Rule::search | Rule::explain => {
+                Rule::search | Rule::explain | Rule::add_constraint | Rule::check_constraint => {
                     struct LocalSink {
                         rows: Vec<Vec<ResultCell>>,
                         limit: Option<usize>,
@@ -3656,7 +3729,7 @@ impl<'en> Engine<'en> {
         callbacks: &mut C,
         options: ExecutionOptions,
     ) -> Result<(), DatabaseError> {
-        let execution = options.resolve(traqula)?;
+        let execution = options.resolve(self.database.store_id())?;
         execution.check()?;
         let pairs = parse_script(traqula)?;
         for warning in &execution.metadata.warnings {
@@ -3677,7 +3750,7 @@ impl<'en> Engine<'en> {
                 Rule::add_posit => {
                     self.add_posit(view.write()?, command, &mut variables, &execution)?;
                 }
-                Rule::search | Rule::explain => {
+                Rule::search | Rule::explain | Rule::add_constraint | Rule::check_constraint => {
                     // Extract limit for this search
                     let search_text_full = command.as_str().trim().to_string();
                     let limit = search_limit(&command)?;

@@ -861,6 +861,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn saved_revisions_round_trip_through_http_and_sse() {
+        let db = Arc::new(Database::new(PersistenceMode::InMemory).unwrap());
+        let state = ServerState {
+            interface: Arc::new(QueryInterface::new(db)),
+            config: ServerConfig::default(),
+        };
+        let request = |script: &str, stream, parameters| QueryRequest {
+            traqula_version: TRAQULA_VERSION,
+            script: script.into(),
+            stream,
+            parameters,
+            timeout_ms: None,
+            query_limits: Default::default(),
+        };
+        let saved = query(
+            State(state.clone()),
+            Ok(Json(request(
+                r#"add constraint "orders" at @BOT { search ?p=[{(*,quantity)},*,*] return ?p; };"#,
+                false,
+                Default::default(),
+            ))),
+        )
+        .await;
+        assert_eq!(saved.status(), StatusCode::OK);
+        let body = json_body(saved).await;
+        let row = &body["rows"][0];
+        let store: String = serde_json::from_str(row[2]["text"].as_str().unwrap()).unwrap();
+        let pin = format!("{}/{}", store, row[1]["text"].as_str().unwrap());
+        for stream in [false, true] {
+            let parameters = [(
+                "pin".into(),
+                ExecutionParameter::Posit { text: pin.clone() },
+            )]
+            .into();
+            let response = query(
+                State(state.clone()),
+                Ok(Json(request("check constraint $pin;", stream, parameters))),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let body = String::from_utf8(bytes.to_vec()).unwrap();
+            assert!(body.contains("indeterminate"), "{body}");
+            assert!(!body.contains(r#""event":"error""#), "{body}");
+        }
+    }
+
+    #[tokio::test]
     async fn explain_returns_a_plan_through_http_and_sse_without_mutating() {
         let database = Arc::new(Database::new(PersistenceMode::InMemory).unwrap());
         let engine = crate::traqula::Engine::new(&database);

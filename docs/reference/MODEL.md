@@ -33,6 +33,11 @@ binary `{subclass, class}` patterns, but must choose its value, source,
 certainty, temporal, and inheritance policies explicitly. Ordinary queries may
 match their literal fields without producing a membership verdict.
 
+When modeling a relationship shared by several classes, reuse its Role
+identity. A constraint and a person can both have a `name`. Direct
+classification lets a query select either class when needed.
+[Role naming anti-pattern](../guides/COOKBOOK.md#anti-pattern-of-class-qualified-role-names)
+
 An **Appearance** is the ordered pair `(Role, Thing)`. Its logical identity,
 equality, hashing, and ordering use that pair.
 

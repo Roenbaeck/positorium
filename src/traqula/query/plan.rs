@@ -184,6 +184,7 @@ pub(super) struct PlannedPattern {
 }
 
 pub(super) struct PlannedBranch {
+    pub filters: Vec<Predicate>,
     pub patterns: Vec<PlannedPattern>,
     domains: HashMap<String, Domain>,
     scope: String,
@@ -221,14 +222,16 @@ pub(super) fn compile(
         )?);
     }
     let mut not_exists = Vec::new();
-    for (index, patterns) in query.not_exists.into_iter().enumerate() {
-        not_exists.push(compile_branch(
+    for (index, block) in query.not_exists.into_iter().enumerate() {
+        let mut plan = compile_branch(
             view,
-            patterns,
+            block.patterns,
             domains.clone(),
             format!("not_exists_{}", index + 1),
             execution,
-        )?);
+        )?;
+        plan.filters = block.predicates;
+        not_exists.push(plan);
     }
     if materialization_reason.is_none() {
         for branch in &mut branches {
@@ -239,8 +242,11 @@ pub(super) fn compile(
             for pattern in &mut branch.patterns {
                 available.extend(pattern.pattern.introduced());
                 remaining.retain(|predicate| {
-                    let ready = available.contains(predicate.left.as_str())
-                        && match &predicate.right {
+                    let Predicate::Comparison { left, right, .. } = predicate else {
+                        unreachable!("calendar operations are validated across all matches")
+                    };
+                    let ready = available.contains(left.as_str())
+                        && match right {
                             Operand::Variable(name) => available.contains(name.as_str()),
                             _ => true,
                         };
@@ -270,10 +276,12 @@ pub(super) fn compile(
 fn materialization_reason(query: &Query, domains: &HashMap<String, Domain>) -> Option<String> {
     let reason = if query.has_fallback {
         "search_or_add_requires_complete_identity_bindings"
+    } else if query.not_exists.iter().any(|b| !b.predicates.is_empty()) {
+        "absence_predicates_require_complete_validation"
     } else if query
         .branches
         .iter()
-        .chain(&query.not_exists)
+        .chain(query.not_exists.iter().map(|b| &b.patterns))
         .flatten()
         .any(|p| p.effect.is_some())
     {
@@ -281,13 +289,15 @@ fn materialization_reason(query: &Query, domains: &HashMap<String, Domain>) -> O
     } else if query
         .branches
         .iter()
-        .chain(&query.not_exists)
+        .chain(query.not_exists.iter().map(|b| &b.patterns))
         .flatten()
         .any(|p| matches!(p.value, ValueSlot::Literal(_)))
-        || query
-            .predicates
-            .iter()
-            .any(|p| domains[&p.left] == Domain::Literal && p.operator != "===")
+        || query.predicates.iter().any(|p| match p {
+            Predicate::Calendar(_) => true,
+            Predicate::Comparison { left, operator, .. } => {
+                domains[left] == Domain::Literal && operator != "==="
+            }
+        })
     {
         "literal_comparisons_require_complete_validation"
     } else {
@@ -343,6 +353,7 @@ fn compile_branch(
         register_pattern(pattern, &mut domains)?;
     }
     Ok(PlannedBranch {
+        filters: Vec::new(),
         patterns: planned,
         domains,
         scope,
@@ -573,13 +584,18 @@ impl PlanNode {
 
 impl PlannedBranch {
     fn describe(&self) -> PlanNode {
-        PlanNode {
+        let join = PlanNode {
             operation: PlanOperator::NestedLoopJoin {
                 scope: self.scope.clone(),
                 pattern_order: self.patterns.iter().map(|p| p.source_pattern).collect(),
             },
             bindings: schema(&self.domains),
             inputs: self.patterns.iter().map(PlannedPattern::describe).collect(),
+        };
+        if self.filters.is_empty() {
+            join
+        } else {
+            join.wrap(filter_operator(&self.filters))
         }
     }
 }
@@ -609,6 +625,13 @@ impl PhysicalQuery {
                 .filter(|name| self.domains.contains_key(*name))
                 .map(str::to_string)
                 .collect();
+            for predicate in &block.filters {
+                for name in predicate.variables() {
+                    if self.domains.contains_key(name) {
+                        correlated.push(name.to_owned());
+                    }
+                }
+            }
             correlated.sort();
             correlated.dedup();
             root = PlanNode {
@@ -680,12 +703,22 @@ fn filter_operator(predicates: &[Predicate]) -> PlanOperator {
         predicates: predicates
             .iter()
             .map(|p| {
-                let right = match &p.right {
+                let (left, operator, right) = match p {
+                    Predicate::Calendar(test) => return test.source.clone(),
+                    Predicate::Comparison {
+                        left,
+                        operator,
+                        right,
+                    } => (left, operator, right),
+                };
+                let right = match right {
                     Operand::Variable(name) => format!("?{name}"),
+                    Operand::Parameter(name) => name.clone(),
+                    Operand::Identity(value) => value.result_cell().text,
                     Operand::Literal(value) => value.token().to_string(),
                     Operand::Time(time) => format!("'{time}'"),
                 };
-                format!("?{} {} {right}", p.left, p.operator)
+                format!("?{left} {operator} {right}")
             })
             .collect(),
     }

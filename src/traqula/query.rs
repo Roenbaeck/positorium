@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use unicode_normalization::UnicodeNormalization;
 
+mod calendar;
 mod pipeline;
 pub(super) mod plan;
 
@@ -226,13 +227,33 @@ enum Operand {
     Variable(String),
     Literal(LiteralValue),
     Time(Time),
+    Parameter(String),
+    Identity(BoundValue),
 }
 
 #[derive(Debug, Clone)]
-struct Predicate {
-    left: String,
-    operator: String,
-    right: Operand,
+enum Predicate {
+    Comparison {
+        left: String,
+        operator: String,
+        right: Operand,
+    },
+    Calendar(calendar::Test),
+}
+
+impl Predicate {
+    fn variables(&self) -> Vec<&str> {
+        match self {
+            Self::Comparison { left, right, .. } => {
+                let mut vars = vec![left.as_str()];
+                if let Operand::Variable(name) = right {
+                    vars.push(name);
+                }
+                vars
+            }
+            Self::Calendar(test) => test.variables.iter().map(String::as_str).collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -242,9 +263,15 @@ pub(super) struct OrderItem {
 }
 
 #[derive(Debug)]
+struct Absence {
+    patterns: Vec<PositPattern>,
+    predicates: Vec<Predicate>,
+}
+
+#[derive(Debug)]
 struct Query {
     branches: Vec<Vec<PositPattern>>,
-    not_exists: Vec<Vec<PositPattern>>,
+    not_exists: Vec<Absence>,
     predicates: Vec<Predicate>,
     returns: Vec<String>,
     distinct: bool,
@@ -260,6 +287,18 @@ pub(super) struct PreparedQuery {
 }
 
 impl PreparedQuery {
+    /// Include local variables while validating a correlated absence filter.
+    pub(super) fn absence_domains(
+        &self,
+        index: usize,
+    ) -> Result<HashMap<String, Domain>, DatabaseError> {
+        let mut domains = self.domains.clone();
+        for pattern in &self.query.not_exists[index].patterns {
+            register_pattern(pattern, &mut domains)?;
+        }
+        Ok(domains)
+    }
+
     pub(super) fn domains(&self) -> &HashMap<String, Domain> {
         &self.domains
     }
@@ -442,7 +481,7 @@ fn execute_materialized(
         for binding in bindings {
             execution.work(1)?;
             let _working = execution.workspace(|| binding.heap_bytes().saturating_add(128))?;
-            if evaluate_predicate(predicate, &binding)? {
+            if evaluate_predicate(predicate, &binding, execution)? {
                 selected.push(binding)?;
             }
         }
@@ -608,10 +647,19 @@ fn parse_query(
                 branches.push(branch);
             }
             Rule::not_exists_clause => {
-                let mut block = Vec::new();
-                for pattern in clause.into_inner() {
-                    if pattern.as_rule() == Rule::posit_search {
-                        block.push(parse_pattern(pattern, execution)?);
+                let mut block = Absence {
+                    patterns: Vec::new(),
+                    predicates: Vec::new(),
+                };
+                for part in clause.into_inner() {
+                    if part.as_rule() == Rule::where_clause {
+                        for condition in part.into_inner() {
+                            block
+                                .predicates
+                                .push(parse_predicate(condition, execution)?);
+                        }
+                    } else {
+                        block.patterns.push(parse_pattern(part, execution)?);
                     }
                 }
                 not_exists.push(block);
@@ -978,7 +1026,7 @@ fn parse_value_slot(
         Rule::query_variable => Ok(ValueSlot::Variable(variable_name(&value))),
         Rule::insert | Rule::recall => Ok(ValueSlot::LegacyVariable(variable_name(&value))),
         Rule::parameter => Ok(ValueSlot::Literal(
-            execution.parameter(value.as_str())?.literal(),
+            execution.parameter(value.as_str())?.literal()?,
         )),
         rule => parse_lossless_literal(rule, value.as_str(), &execution.metadata.resolved_now)
             .map(ValueSlot::Literal),
@@ -1028,13 +1076,16 @@ fn parse_predicate(
     let left = parts
         .next()
         .ok_or_else(|| DatabaseError::Invariant("predicate has no left operand".into()))?;
+    if left.as_rule() == Rule::calendar_test {
+        return calendar::Test::parse(left, execution).map(Predicate::Calendar);
+    }
     let operator = parts
         .next()
         .ok_or_else(|| DatabaseError::Invariant("predicate has no operator".into()))?;
     let right = parts
         .next()
         .ok_or_else(|| DatabaseError::Invariant("predicate has no right operand".into()))?;
-    Ok(Predicate {
+    Ok(Predicate::Comparison {
         left: variable_name(&left),
         operator: operator.as_str().to_string(),
         right: parse_operand(right, execution)?,
@@ -1061,7 +1112,17 @@ fn parse_operand(
         Rule::query_variable | Rule::recall | Rule::insert => {
             Ok(Operand::Variable(variable_name(&operand)))
         }
+        Rule::parameter if execution.validating_definition => {
+            Ok(Operand::Parameter(operand.as_str().to_owned()))
+        }
         Rule::parameter => match execution.parameter(operand.as_str())? {
+            ResolvedParameter::Identity { kind, id, .. } => {
+                Ok(Operand::Identity(if *kind == ResultCellKind::Posit {
+                    BoundValue::Posit(*id)
+                } else {
+                    BoundValue::Thing(*id)
+                }))
+            }
             ResolvedParameter::Literal(literal) => Ok(Operand::Literal(literal.clone())),
             ResolvedParameter::Time { time, .. } => Ok(Operand::Time(time.clone())),
         },
@@ -1151,7 +1212,7 @@ fn validate_domains(query: &Query) -> Result<HashMap<String, Domain>, DatabaseEr
     let available: HashSet<_> = domains.keys().map(String::as_str).collect();
     for block in &query.not_exists {
         let mut local_domains = domains.clone();
-        for pattern in block {
+        for pattern in &block.patterns {
             for name in pattern.introduced().union(&pattern.dependencies()) {
                 if all_variables.contains(*name) && !domains.contains_key(*name) {
                     return Err(DatabaseError::InvalidRecall(format!(
@@ -1161,13 +1222,12 @@ fn validate_domains(query: &Query) -> Result<HashMap<String, Domain>, DatabaseEr
             }
             register_pattern(pattern, &mut local_domains)?;
         }
-        validate_pattern_dependencies(block, &local_domains, &available)?;
+        validate_pattern_dependencies(&block.patterns, &local_domains, &available)?;
+        for predicate in &block.predicates {
+            validate_predicate_domains(predicate, &local_domains)?;
+        }
     }
     for predicate in &query.predicates {
-        require_variable(&domains, &predicate.left)?;
-        if let Operand::Variable(name) = &predicate.right {
-            require_variable(&domains, name)?;
-        }
         validate_predicate_domains(predicate, &domains)?;
     }
     for returned in &query.returns {
@@ -1189,15 +1249,29 @@ fn validate_predicate_domains(
     predicate: &Predicate,
     domains: &HashMap<String, Domain>,
 ) -> Result<(), DatabaseError> {
-    let left = domains[&predicate.left];
-    let right = match &predicate.right {
-        Operand::Variable(name) => domains[name],
+    let (left, operator, right) = match predicate {
+        Predicate::Calendar(test) => return test.validate(domains),
+        Predicate::Comparison {
+            left,
+            operator,
+            right,
+        } => (left, operator, right),
+    };
+    require_variable(domains, left)?;
+    let left = domains[left];
+    let right = match right {
+        Operand::Variable(name) => {
+            require_variable(domains, name)?;
+            domains[name]
+        }
+        Operand::Parameter(_) => left,
+        Operand::Identity(value) => value.domain(),
         Operand::Literal(_) => Domain::Literal,
         Operand::Time(_) => Domain::Time,
     };
     let identities = matches!(left, Domain::Thing | Domain::Posit)
         && matches!(right, Domain::Thing | Domain::Posit);
-    let equality = matches!(predicate.operator.as_str(), "=" | "===" | "?=");
+    let equality = matches!(operator.as_str(), "=" | "===" | "?=");
     if (left == right || identities) && (equality || matches!(left, Domain::Literal | Domain::Time))
     {
         Ok(())
@@ -1205,7 +1279,7 @@ fn validate_predicate_domains(
         Err(DatabaseError::Comparison(format!(
             "{} {} {} is unsupported",
             left.label(),
-            predicate.operator,
+            operator,
             right.label()
         )))
     }
@@ -1639,6 +1713,7 @@ fn evaluate_effect_pattern(
             crate::effect::EffectLimits::default(),
             |units| execution.work(units),
             |bytes| memory.resize(bytes),
+            |id| execution.trace_read(id),
         )?);
         memory.resize(
             (resolved.assertions().len() as u64)
@@ -1728,6 +1803,7 @@ fn candidate_posits(
     let mut posits = BudgetVec::new(&execution.budget);
     for identity in identities {
         execution.work(1)?;
+        execution.trace_read(identity)?;
         let posit = view.posit(identity).ok_or_else(|| {
             DatabaseError::Invariant(format!(
                 "posit index contains identity {identity} without a literal posit"
@@ -1883,17 +1959,17 @@ fn indexed_candidate_identities(
     for member in &pattern.appearances.members {
         execution.work(1)?;
         let (role_is_constrained, role) = indexed_role(view, &member.role, input)?;
-        if role_is_constrained {
-            let Some(role) = role.as_ref() else {
-                return Ok(Some(clone_posting(None, execution)?));
-            };
-            postings.push(clone_posting(view.role_posting(role.role()), execution)?)?;
+        if role_is_constrained && role.is_none() {
+            return Ok(Some(clone_posting(None, execution)?));
         }
-
         if let Some(things) = indexed_things(&member.thing, input)? {
             let _things = execution.workspace(|| things.len() as u64 * 8)?;
+            // This posting already requires the bound Thing to play the role.
+            // Copying the whole role bitmap for each correlated row is redundant.
             let posting = posit_posting_for_things(view, &things, role.as_ref(), execution)?;
             postings.push(posting)?;
+        } else if let Some(role) = role {
+            postings.push(clone_posting(view.role_posting(role.role()), execution)?)?;
         }
     }
     execution.work(sort_work(postings.len(), 1))?;
@@ -2246,6 +2322,19 @@ fn block_has_match(
             return Ok(false);
         }
     }
+    if plan.filters.is_empty() {
+        return Ok(!bindings.is_empty());
+    }
+    for predicate in &plan.filters {
+        let mut kept = BudgetVec::new(&execution.budget);
+        for binding in bindings {
+            execution.work(1)?;
+            if evaluate_predicate(predicate, &binding, execution)? {
+                kept.push(binding)?;
+            }
+        }
+        bindings = kept;
+    }
     Ok(!bindings.is_empty())
 }
 
@@ -2326,15 +2415,35 @@ fn order_value(left: &BoundValue, right: &BoundValue) -> std::cmp::Ordering {
     }
 }
 
-fn evaluate_predicate(predicate: &Predicate, binding: &Binding) -> Result<bool, DatabaseError> {
+fn evaluate_predicate(
+    predicate: &Predicate,
+    binding: &Binding,
+    execution: &ExecutionContext,
+) -> Result<bool, DatabaseError> {
+    let (left, operator, right) = match predicate {
+        Predicate::Calendar(test) => {
+            return test.evaluate(binding, &execution.metadata.resolved_now);
+        }
+        Predicate::Comparison {
+            left,
+            operator,
+            right,
+        } => (left, operator, right),
+    };
     let left = binding
-        .get(&predicate.left)
-        .ok_or_else(|| DatabaseError::UnknownVariable(predicate.left.clone()))?;
+        .get(left)
+        .ok_or_else(|| DatabaseError::UnknownVariable(left.clone()))?;
     let owned_right;
-    let right = match &predicate.right {
+    let right = match right {
         Operand::Variable(name) => binding
             .get(name)
             .ok_or_else(|| DatabaseError::UnknownVariable(name.clone()))?,
+        Operand::Identity(value) => value,
+        Operand::Parameter(name) => {
+            return Err(DatabaseError::Parameter(format!(
+                "unbound parameter {name}"
+            )));
+        }
         Operand::Literal(literal) => {
             owned_right = BoundValue::Literal(literal.clone());
             &owned_right
@@ -2344,7 +2453,7 @@ fn evaluate_predicate(predicate: &Predicate, binding: &Binding) -> Result<bool, 
             &owned_right
         }
     };
-    compare(left, &predicate.operator, right)
+    compare(left, operator, right)
 }
 
 fn compare(left: &BoundValue, operator: &str, right: &BoundValue) -> Result<bool, DatabaseError> {

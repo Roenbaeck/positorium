@@ -47,6 +47,14 @@ pub(crate) enum SetPosting {
 }
 
 impl SetPosting {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = Thing> + '_ {
+        let (one, many) = match self {
+            Self::One(id) => (Some(*id), None),
+            Self::Many(ids) => (None, Some(ids)),
+        };
+        one.into_iter().chain(many.into_iter().flatten())
+    }
+
     fn insert(&mut self, identity: Thing) {
         match self {
             Self::One(first) => *self = Self::Many([*first, identity].into_iter().collect()),

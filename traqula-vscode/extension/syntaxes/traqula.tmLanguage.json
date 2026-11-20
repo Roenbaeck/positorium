@@ -55,6 +55,14 @@
         {
           "name": "keyword.control.traqula",
           "match": "\\bexplain\\b"
+        },
+        {
+          "name": "keyword.control.traqula",
+          "match": "\\b(check|constraint|readiness|record|violations|unresolved|evidence|permits|forbids)\\b"
+        },
+        {
+          "name": "support.function.traqula",
+          "match": "\\b(overlaps|disjoint|contains|within|definitely_before|definitely_after|possibly_before|possibly_after|add_days|subtract_days|min_days_between|max_days_between)\\b(?=\\s*\\()"
         }
       ]
     },
