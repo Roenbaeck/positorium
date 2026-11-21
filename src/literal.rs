@@ -7,6 +7,9 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 
+mod json_pointer;
+pub(crate) use json_pointer::JsonPointer;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
 pub enum LiteralFamily {
@@ -247,6 +250,19 @@ fn validate_integer(token: &str) -> Result<(), String> {
 }
 
 fn validate_decimal(token: &str) -> Result<(), String> {
+    // A number extracted from JSON can use exponent notation.
+    if token.contains(['e', 'E']) {
+        let mut parser = JsonParser {
+            source: token,
+            cursor: 0,
+        };
+        parser.number()?;
+        return if parser.cursor == token.len() {
+            Ok(())
+        } else {
+            Err(format!("invalid decimal literal '{token}'"))
+        };
+    }
     let unsigned = token.strip_prefix(['+', '-']).unwrap_or(token);
     let Some((whole, fraction)) = unsigned.split_once('.') else {
         return Err(format!("invalid decimal literal '{token}'"));

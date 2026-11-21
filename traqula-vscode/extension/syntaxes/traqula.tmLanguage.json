@@ -62,7 +62,7 @@
         },
         {
           "name": "support.function.traqula",
-          "match": "\\b(overlaps|disjoint|contains|within|definitely_before|definitely_after|possibly_before|possibly_after|add_days|subtract_days|min_days_between|max_days_between)\\b(?=\\s*\\()"
+          "match": "\\b(overlaps|disjoint|contains|within|definitely_before|definitely_after|possibly_before|possibly_after|add_days|subtract_days|min_days_between|max_days_between|json_at|json_exists)\\b(?=\\s*\\()"
         }
       ]
     },

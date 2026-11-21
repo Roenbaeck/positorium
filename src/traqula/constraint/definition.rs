@@ -27,6 +27,8 @@ enum ParameterType {
     Integer,
     DateLiteral,
     OtherLiteral,
+    Json,
+    String,
     Time,
     Thing,
     Posit,
@@ -39,7 +41,21 @@ fn parameter_use(signature: &mut Signature, name: &str, types: &[ParameterType])
     let allowed = signature
         .entry(name.into())
         .or_insert_with(|| types.iter().copied().collect());
-    allowed.retain(|t| types.contains(t));
+    // Keep the broad OtherLiteral spelling in existing stored signatures.
+    // JSON documents and pointer strings refine it when one of these is used.
+    if allowed.contains(&ParameterType::OtherLiteral) {
+        allowed.extend(
+            types
+                .iter()
+                .copied()
+                .filter(|t| matches!(t, ParameterType::Json | ParameterType::String)),
+        );
+    }
+    allowed.retain(|t| {
+        types.contains(t)
+            || (matches!(t, ParameterType::Json | ParameterType::String)
+                && types.contains(&ParameterType::OtherLiteral))
+    });
     if allowed.is_empty() {
         return Err(DatabaseError::Parameter(format!(
             "incompatible uses of ${name} in constraint"
@@ -82,6 +98,11 @@ fn parameter_types(
                 Rule::appearance_search => &[Thing, Posit],
                 Rule::day_count => &[Integer],
                 Rule::date_operand => &[DateLiteral, Time],
+                Rule::json_document => &[Json],
+                Rule::json_pointer => &[String],
+                // Ordinary comparisons handled above infer this from the left
+                // variable. JSON field comparisons take a literal on either side.
+                Rule::rhs_value => &[Integer, DateLiteral, OtherLiteral],
                 _ => {
                     return Err(DatabaseError::Invariant(format!(
                         "unexpected parameter position {rule:?}"
@@ -186,7 +207,7 @@ impl<'a> Definition<'a> {
                 let prepared = query::prepare(q.search.clone(), execution)?;
                 let subject = &prepared.returns()[0];
                 if !matches!(
-                    prepared.domains()[subject],
+                    prepared.return_domain(subject),
                     query::Domain::Thing | query::Domain::Posit
                 ) {
                     return Err(invalid(
@@ -226,7 +247,7 @@ impl<'a> Definition<'a> {
                 let columns: Vec<_> = query
                     .returns()
                     .iter()
-                    .map(|name| (name, query.domains()[name].label()))
+                    .map(|name| (name, query.return_domain(name).label()))
                     .collect();
                 json!({"columns": columns, "expected": spec.expected, "kind": spec.kind})
             })
