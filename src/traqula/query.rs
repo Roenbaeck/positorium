@@ -9,6 +9,7 @@ use std::sync::Arc;
 use unicode_normalization::UnicodeNormalization;
 
 mod calendar;
+mod json;
 mod pipeline;
 pub(super) mod plan;
 
@@ -261,6 +262,7 @@ enum Predicate {
         right: Operand,
     },
     Calendar(calendar::Test),
+    Json(json::Test),
 }
 
 impl Predicate {
@@ -274,6 +276,7 @@ impl Predicate {
                 vars
             }
             Self::Calendar(test) => test.variables.iter().map(String::as_str).collect(),
+            Self::Json(test) => test.variables(),
         }
     }
 }
@@ -296,6 +299,7 @@ struct Query {
     not_exists: Vec<Absence>,
     predicates: Vec<Predicate>,
     returns: Vec<String>,
+    json_projections: Vec<(String, json::Call)>,
     distinct: bool,
     order: Vec<OrderItem>,
     limit: Option<usize>,
@@ -327,6 +331,11 @@ impl PreparedQuery {
 
     pub(super) fn returns(&self) -> &[String] {
         &self.query.returns
+    }
+
+    pub(super) fn return_domain(&self, name: &str) -> Domain {
+        // Computed JSON columns are the only projections without a pattern binding.
+        self.domains.get(name).copied().unwrap_or(Domain::Literal)
     }
 
     pub(super) fn distinct(&self) -> bool {
@@ -577,9 +586,10 @@ fn execute_materialized(
     }
 
     let mut projected = BudgetVec::new(&execution.budget);
-    for binding in bindings {
+    for mut binding in bindings {
         execution.work(1)?;
         let _working = execution.workspace(|| binding.heap_bytes().saturating_add(128))?;
+        let _computed = json::bind_projections(&mut binding, &query.json_projections, execution)?;
         let _row = execution.workspace(|| projection_bytes(&binding, &query.returns))?;
         let row = query
             .returns
@@ -654,6 +664,7 @@ fn parse_query(
     let mut not_exists = Vec::new();
     let mut predicates = Vec::new();
     let mut returns = Vec::new();
+    let mut json_projections = Vec::new();
     let mut distinct = false;
     let mut order = Vec::new();
     let mut has_fallback = false;
@@ -697,6 +708,16 @@ fn parse_query(
                 for variable in clause.into_inner() {
                     match variable.as_rule() {
                         Rule::distinct => distinct = true,
+                        Rule::json_projection => {
+                            let mut parts = variable.into_inner();
+                            let call = json::Call::parse(parts.next().unwrap(), execution)?;
+                            let name = parts
+                                .next()
+                                .map(|p| variable_name(&p))
+                                .unwrap_or_else(|| call.source.clone());
+                            returns.push(name.clone());
+                            json_projections.push((name, call));
+                        }
                         Rule::variable_reference
                         | Rule::query_variable
                         | Rule::recall
@@ -759,6 +780,7 @@ fn parse_query(
         not_exists,
         predicates,
         returns,
+        json_projections,
         distinct,
         order,
         limit,
@@ -1115,6 +1137,9 @@ fn parse_predicate(
     if left.as_rule() == Rule::calendar_test {
         return calendar::Test::parse(left, execution).map(Predicate::Calendar);
     }
+    if left.as_rule() == Rule::json_test {
+        return json::Test::parse(left, execution).map(Predicate::Json);
+    }
     let operator = parts
         .next()
         .ok_or_else(|| DatabaseError::Invariant("predicate has no operator".into()))?;
@@ -1266,11 +1291,24 @@ fn validate_domains(query: &Query) -> Result<HashMap<String, Domain>, DatabaseEr
     for predicate in &query.predicates {
         validate_predicate_domains(predicate, &domains)?;
     }
+    let mut computed = HashSet::new();
+    for (name, call) in &query.json_projections {
+        call.validate(&domains)?;
+        if all_variables.contains(name) || !computed.insert(name) {
+            return Err(DatabaseError::InvalidRecall(format!(
+                "JSON projection name '{name}' is already in use"
+            )));
+        }
+    }
     for returned in &query.returns {
-        require_variable(&domains, returned)?;
+        if !computed.contains(returned) {
+            require_variable(&domains, returned)?;
+        }
     }
     for item in &query.order {
-        require_variable(&domains, &item.variable)?;
+        if !computed.contains(&item.variable) {
+            require_variable(&domains, &item.variable)?;
+        }
         if !query.returns.contains(&item.variable) {
             return Err(DatabaseError::InvalidRecall(format!(
                 "ORDER BY variable '{}' must be projected",
@@ -1287,6 +1325,7 @@ fn validate_predicate_domains(
 ) -> Result<(), DatabaseError> {
     let (left, operator, right) = match predicate {
         Predicate::Calendar(test) => return test.validate(domains),
+        Predicate::Json(test) => return test.validate(domains),
         Predicate::Comparison {
             left,
             operator,
@@ -2570,6 +2609,7 @@ fn evaluate_predicate(
     execution: &ExecutionContext,
 ) -> Result<bool, DatabaseError> {
     let (left, operator, right) = match predicate {
+        Predicate::Json(test) => return test.evaluate(binding, execution),
         Predicate::Calendar(test) => {
             return test.evaluate(binding, &execution.metadata.resolved_now);
         }
@@ -2608,26 +2648,7 @@ fn evaluate_predicate(
 fn compare(left: &BoundValue, operator: &str, right: &BoundValue) -> Result<bool, DatabaseError> {
     match (left, right) {
         (BoundValue::Literal(left), BoundValue::Literal(right)) => {
-            let result = match operator {
-                "===" => Ok(left.exactly_equals(right)),
-                "=" => left.nominally_equals(right),
-                "?=" => left.possibly_equals(right),
-                "<" | "<=" | ">" | ">=" => left
-                    .semantic_cmp(right)
-                    .map(|ordering| ordering_matches(ordering, operator))
-                    .map_err(|error| {
-                        let guidance = if left.family() == LiteralFamily::Certainty
-                            || right.family() == LiteralFamily::Certainty
-                        {
-                            "; certainty comparisons require a percent sign (%) on both sides"
-                        } else {
-                            ""
-                        };
-                        format!("Ordering comparison not allowed: {error}{guidance}")
-                    }),
-                _ => Err(format!("unknown operator '{operator}'")),
-            };
-            result.map_err(DatabaseError::Comparison)
+            compare_literals(left, operator, right)
         }
         (BoundValue::Time(left), BoundValue::Time(right)) => Ok(match operator {
             "===" | "=" => left == right,
@@ -2661,6 +2682,33 @@ fn compare(left: &BoundValue, operator: &str, right: &BoundValue) -> Result<bool
             right.domain().label()
         ))),
     }
+}
+
+fn compare_literals(
+    left: &LiteralValue,
+    operator: &str,
+    right: &LiteralValue,
+) -> Result<bool, DatabaseError> {
+    let result = match operator {
+        "===" => Ok(left.exactly_equals(right)),
+        "=" => left.nominally_equals(right),
+        "?=" => left.possibly_equals(right),
+        "<" | "<=" | ">" | ">=" => left
+            .semantic_cmp(right)
+            .map(|ordering| ordering_matches(ordering, operator))
+            .map_err(|error| {
+                let guidance = if left.family() == LiteralFamily::Certainty
+                    || right.family() == LiteralFamily::Certainty
+                {
+                    "; certainty comparisons require a percent sign (%) on both sides"
+                } else {
+                    ""
+                };
+                format!("Ordering comparison not allowed: {error}{guidance}")
+            }),
+        _ => Err(format!("unknown operator '{operator}'")),
+    };
+    result.map_err(DatabaseError::Comparison)
 }
 
 fn identity_comparison(left: Thing, operator: &str, right: Thing) -> Result<bool, DatabaseError> {

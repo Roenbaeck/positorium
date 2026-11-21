@@ -57,6 +57,7 @@ pub(super) fn execute(
         if !has_return {
             return Ok(SinkFlow::Continue);
         }
+        let _computed = json::bind_projections(&mut binding, &query.json_projections, execution)?;
         let _projection = execution.workspace(|| projection_bytes(&binding, &query.returns))?;
         let row = query
             .returns

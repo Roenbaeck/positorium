@@ -266,6 +266,48 @@ key order, spacing, and numeric spelling.
 
 Ordering operators are `<`, `<=`, `>`, and `>=`.
 
+### JSON Pointer
+
+`json_at(document, pointer)` reads one value from a JSON document.
+`json_exists(document, pointer)` tests whether that location exists, including
+when its value is `null`. Both functions work in searches and saved constraints.
+
+```traqula
+search ?record = [{(?order, document)}, ?doc, *]
+where json_at(?doc, "/shipping/country") = "SE"
+  and json_exists(?doc, "/items/0/quantity")
+return ?order, ?record, json_at(?doc, "/items/0/quantity") as ?quantity
+order by ?quantity;
+```
+
+The document can be a bound appearing value, a JSON literal (object, array,
+boolean, or null), or a JSON literal parameter. The pointer can be a
+double-quoted string or a string literal parameter such as `$path`.
+The empty string selects the whole document.
+`/` selects an object member with an empty name. Use `~1` for a slash in a
+member name and `~0` for a tilde. Array indexes start at zero and use unsigned
+decimal digits without leading zeros. A malformed pointer, such as `"/a~2b"`,
+raises a query error even when the search has no rows. [JSON Pointer string syntax](https://www.rfc-editor.org/rfc/rfc6901#section-3)
+
+A missing member, an out-of-range array index, or a non-JSON appearing value
+makes `json_exists` false and makes a `json_at` comparison match no row.
+`where not json_exists(?doc, "/orderDate")` finds documents missing that field.
+`where json_at(?doc, "/orderDate") = null` finds documents that explicitly
+contain a null there. A constraint about a field in one document can return
+the document's posit as its witness.
+
+Use `json_at` on either side of a comparison. Strings, numbers, booleans,
+nulls, arrays, and objects retain their JSON types. For example, `1.00e2`
+equals `100` and is distinct from `"100"`. Numeric ordering uses exact
+arithmetic. The `===` operator and returned cells preserve the selected
+token's spelling, including string escapes and spacing inside a container.
+
+In `return`, `as ?name` gives the column a fresh name that can also be used in
+`order by`. Without an alias the function call supplies the column name.
+Returning `json_at` requires a value on every selected row. If a field is
+optional, guard the projection with `where json_exists(...)` or return
+`json_exists` to see presence or absence for each row.
+
 ## Saved constraints
 
 A constraint is a named policy Thing. Its read-only Traqula source is the

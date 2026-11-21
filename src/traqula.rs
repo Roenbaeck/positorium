@@ -630,11 +630,7 @@ fn prepare_fallback(
                 "or-add fallback cannot supply returned variable '?{column}'; bind '+{column}' in the add branch or omit return"
             )));
         };
-        let search_domain = prepared.domains().get(column).ok_or_else(|| {
-            DatabaseError::Invariant(format!(
-                "validated return variable '{column}' has no search domain"
-            ))
-        })?;
+        let search_domain = prepared.return_domain(column);
         let fallback_label = identity_domain_label(*fallback_domain);
         if search_domain.label() != fallback_label {
             return Err(DatabaseError::VariableDomain {
@@ -794,9 +790,9 @@ fn parse_lossless_literal(
     let (token, family) = match rule {
         Rule::string => (token.to_string(), LiteralFamily::String),
         Rule::int => (token.to_string(), LiteralFamily::Integer),
-        Rule::decimal => (token.to_string(), LiteralFamily::Decimal),
+        Rule::decimal | Rule::json_exponent => (token.to_string(), LiteralFamily::Decimal),
         Rule::certainty => (token.to_string(), LiteralFamily::Certainty),
-        Rule::json => (token.to_string(), LiteralFamily::Json),
+        Rule::json | Rule::json_extra_literal => (token.to_string(), LiteralFamily::Json),
         Rule::time => (token.to_string(), LiteralFamily::Time),
         Rule::constant => {
             let resolved = match token.trim() {
@@ -871,7 +867,9 @@ fn resolve_parameter(
             }
             let family = if text.starts_with('"') {
                 LiteralFamily::String
-            } else if text.starts_with('{') {
+            } else if text.starts_with(['{', '['])
+                || matches!(text.as_str(), "true" | "false" | "null")
+            {
                 LiteralFamily::Json
             } else if text.starts_with('\'') || text.starts_with('@') {
                 if parse_time_with_now(&text, resolved_now).is_none() {
@@ -882,7 +880,7 @@ fn resolve_parameter(
                 LiteralFamily::Time
             } else if text.ends_with('%') {
                 LiteralFamily::Certainty
-            } else if text.contains('.') {
+            } else if text.contains(['.', 'e', 'E']) {
                 LiteralFamily::Decimal
             } else {
                 LiteralFamily::Integer

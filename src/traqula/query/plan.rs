@@ -197,6 +197,7 @@ pub(super) struct PhysicalQuery {
     pub not_exists: Vec<PlannedBranch>,
     pub predicates: Vec<Predicate>,
     pub returns: Vec<String>,
+    pub(super) json_projections: Vec<(String, json::Call)>,
     pub distinct: bool,
     pub order: Vec<OrderItem>,
     pub domains: HashMap<String, Domain>,
@@ -281,18 +282,15 @@ pub(super) fn compile(
             // Predicates are total in this mode. Apply each as soon as both
             // operands exist, always after any temporal reduction in a pattern.
             let mut available = HashSet::new();
-            let mut remaining: Vec<_> = query.predicates.iter().collect();
+            let mut remaining: Vec<_> = query
+                .predicates
+                .iter()
+                .map(|predicate| (predicate, predicate.variables()))
+                .collect();
             for pattern in &mut branch.patterns {
                 available.extend(pattern.pattern.introduced());
-                remaining.retain(|predicate| {
-                    let Predicate::Comparison { left, right, .. } = predicate else {
-                        unreachable!("calendar operations are validated across all matches")
-                    };
-                    let ready = available.contains(left.as_str())
-                        && match right {
-                            Operand::Variable(name) => available.contains(name.as_str()),
-                            _ => true,
-                        };
+                remaining.retain(|(predicate, variables)| {
+                    let ready = variables.iter().all(|name| available.contains(*name));
                     if ready {
                         pattern.predicates.push((*predicate).clone());
                     }
@@ -309,6 +307,7 @@ pub(super) fn compile(
         domains,
         predicates: query.predicates,
         returns: query.returns,
+        json_projections: query.json_projections,
         distinct: query.distinct,
         order: query.order,
         limit: execution.effective_limit(query.limit),
@@ -319,6 +318,12 @@ pub(super) fn compile(
 fn materialization_reason(query: &Query, domains: &HashMap<String, Domain>) -> Option<String> {
     let reason = if query.has_fallback {
         "search_or_add_requires_complete_identity_bindings"
+    } else if query
+        .json_projections
+        .iter()
+        .any(|(_, call)| !call.existence)
+    {
+        "json_projection_requires_present_value"
     } else if query.not_exists.iter().any(|b| !b.predicates.is_empty()) {
         "absence_predicates_require_complete_validation"
     } else if query
@@ -337,6 +342,7 @@ fn materialization_reason(query: &Query, domains: &HashMap<String, Domain>) -> O
         .any(|p| matches!(p.value, ValueSlot::Literal(_)))
         || query.predicates.iter().any(|p| match p {
             Predicate::Calendar(_) => true,
+            Predicate::Json(test) => !test.is_total(),
             Predicate::Comparison { left, operator, .. } => {
                 domains[left] == Domain::Literal && operator != "==="
             }
@@ -355,6 +361,9 @@ fn predicate_is_total<'a>(
     predicate: &Predicate,
     domains: &HashMap<String, Domain>,
 ) -> bool {
+    if let Predicate::Json(test) = predicate {
+        return test.is_total();
+    }
     let Predicate::Comparison {
         left,
         operator,
@@ -796,7 +805,12 @@ impl PhysicalQuery {
                 .iter()
                 .map(|name| PlanBinding {
                     name: name.clone(),
-                    domain: self.domains[name].into(),
+                    domain: self
+                        .domains
+                        .get(name)
+                        .copied()
+                        .unwrap_or(Domain::Literal)
+                        .into(),
                 })
                 .collect();
             if self.distinct {
@@ -843,6 +857,7 @@ fn filter_operator(predicates: &[Predicate]) -> PlanOperator {
             .map(|p| {
                 let (left, operator, right) = match p {
                     Predicate::Calendar(test) => return test.source.clone(),
+                    Predicate::Json(test) => return test.source.clone(),
                     Predicate::Comparison {
                         left,
                         operator,
