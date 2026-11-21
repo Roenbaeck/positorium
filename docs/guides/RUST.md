@@ -3,11 +3,11 @@
 Add Positorium to an existing Cargo project using stable Rust.
 
 ```sh
-cargo add positorium@=0.3.3-beta.8 --no-default-features --features persistence
+cargo add positorium@=0.3.4-beta.9 --no-default-features --features persistence
 ```
 
 For an in-memory application, omit `--features persistence`. To develop against
-a local checkout, replace `positorium@=0.3.3-beta.8` with
+a local checkout, replace `positorium@=0.3.4-beta.9` with
 `--path ../positorium`. The default features also build the CLI and HTTP service.
 
 ## Open a database and execute a script
@@ -66,7 +66,7 @@ revision after a newer definition is saved.
 For concurrent callers, share an `Arc<Database>` across threads. Read-only
 scripts use one snapshot. For larger results, borrow the same database with
 `Engine::new(&db)` and stream rows through `execute_stream_multi_with_options`.
-The engine also exposes query plans through `explain`. [Rust API](https://docs.rs/positorium/0.3.3-beta.8/positorium/) · [Traqula reference](../reference/TRAQULA.md)
+The engine also exposes query plans through `explain`. [Rust API](https://docs.rs/positorium/0.3.4-beta.9/positorium/) · [Traqula reference](../reference/TRAQULA.md)
 
 Run the standalone example from the Positorium checkout with
 
